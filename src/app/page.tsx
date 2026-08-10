@@ -20,6 +20,9 @@ import type {
 } from "@/lib/signal-aggregator"
 import type { BacktestResult, ConsensusLevel as BtLevel } from "@/lib/backtest-runner"
 
+// Type-only re-export so we can import CandleConsensus in components below.
+import type { CandleConsensus } from "@/lib/signal-aggregator"
+
 const POLL_INTERVAL_MS = 5_000 // poll /api/snapshot every 5s (background poller refreshes cache every 5s)
 
 // ---- helpers --------------------------------------------------------------
@@ -309,6 +312,14 @@ export default function Home() {
     return () => clearInterval(t);
   }, []);
 
+  // Per-second wall clock — shown in the header so the user sees a ticking
+  // HH:MM:SS even between data updates. Updates every 1s.
+  const [nowSec, setNowSec] = useState<number>(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowSec(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
   const filteredPairs = useMemo(() => {
     if (!data) return []
     return data.pairs.filter((p) => {
@@ -365,7 +376,14 @@ export default function Home() {
             </div>
             <div className="flex items-center gap-1.5 text-xs text-slate-400 mr-1">
               <Clock className="h-3.5 w-3.5" />
-              <span className="tabular-nums">{lastUpdated ? fmtClock(lastUpdated) : "--:--:--"}</span>
+              <span className="tabular-nums text-slate-200 font-semibold">
+                {fmtClock(nowSec)}
+              </span>
+              {lastUpdated > 0 && (
+                <span className="text-slate-500 ml-1" title="Last data update">
+                  ·data {fmtClock(lastUpdated)}
+                </span>
+              )}
             </div>
             <div className="h-4 w-px bg-slate-700" />
             <Button
@@ -1090,6 +1108,7 @@ function PairRow({ pair }: { pair: PairConsensus }) {
   const [expanded, setExpanded] = useState(false)
   const c = pair.consensus
   const meta = CONSENSUS_META[c.level]
+  const lc = pair.latestCandle
 
   const getSignal = (id: AppId): SourceSignal | undefined =>
     pair.signals.find((s) => s.source === id)
@@ -1106,9 +1125,24 @@ function PairRow({ pair }: { pair: PairConsensus }) {
         onClick={() => setExpanded((v) => !v)}
       >
         <td className="px-4 py-2.5">
-          <div className="font-medium text-slate-100">{pair.displayPair}</div>
-          <div className="text-[10px] text-slate-500 uppercase tracking-wide">
-            {pair.category}
+          <div className="flex items-center gap-2">
+            <div>
+              <div className="font-medium text-slate-100">{pair.displayPair}</div>
+              <div className="text-[10px] text-slate-500 uppercase tracking-wide">
+                {pair.category}
+              </div>
+            </div>
+            {lc && (
+              <div className="ml-auto text-right">
+                <div className="text-[10px] text-slate-500 uppercase tracking-wide leading-none">Candle</div>
+                <div
+                  className="text-[12px] font-semibold tabular-nums text-cyan-300 leading-tight"
+                  title={`Candle time (UTC, minute-floored)\nThis is the candle that the signals below are predicting.`}
+                >
+                  {fmtSigTime(lc.candleTime)}
+                </div>
+              </div>
+            )}
           </div>
         </td>
         {(["app1", "app2", "app3"] as AppId[]).map((id) => {
@@ -1123,7 +1157,7 @@ function PairRow({ pair }: { pair: PairConsensus }) {
                       "text-[10px] tabular-nums leading-tight",
                       sig.fresh ? "text-slate-400" : "text-slate-600"
                     )}
-                    title={`Signal time (UTC): ${fmtSigTime(sig.timestamp)}\nAge: ${fmtAgo(sig.ageSec)}`}
+                    title={`Signal timestamp (UTC): ${fmtSigTime(sig.timestamp)}\nCandle: ${fmtSigTime(sig.candleTime)}\nAge: ${fmtAgo(sig.ageSec)}`}
                   >
                     {fmtSigTime(sig.timestamp)}
                   </span>
@@ -1153,19 +1187,6 @@ function PairRow({ pair }: { pair: PairConsensus }) {
               <span className="text-[11px] text-slate-500">
                 {c.agreeingApps.length}/{c.agreeingApps.length + c.disagreeingApps.length}
               </span>
-              <span
-                className="text-[10px] text-slate-500 tabular-nums"
-                title="Latest agreeing signal time (UTC)"
-              >
-                {fmtSigTime(
-                  Math.max(
-                    ...pair.signals
-                      .filter((s) => c.agreeingApps.includes(s.source))
-                      .map((s) => s.timestamp)
-                      .concat([0])
-                  )
-                )}
-              </span>
             </div>
           ) : (
             <span className="text-xs text-slate-500">—</span>
@@ -1175,7 +1196,8 @@ function PairRow({ pair }: { pair: PairConsensus }) {
       {expanded && (
         <tr className="bg-slate-900/40 border-b border-slate-800/60">
           <td colSpan={6} className="px-4 py-3">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            {/* Per-app detail for the latest candle */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
               {(["app1", "app2", "app3"] as AppId[]).map((id) => {
                 const sig = getSignal(id)
                 const m = APP_META[id]
@@ -1194,6 +1216,14 @@ function PairRow({ pair }: { pair: PairConsensus }) {
                     </div>
                     {sig ? (
                       <div className="space-y-1 text-[11px] text-slate-400">
+                        <div className="flex justify-between">
+                          <span>Candle</span>
+                          <span className="text-cyan-300 tabular-nums">{fmtSigTime(sig.candleTime)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Signal at</span>
+                          <span className="text-slate-300 tabular-nums">{fmtSigTime(sig.timestamp)}</span>
+                        </div>
                         <div className="flex justify-between">
                           <span>Age</span>
                           <span className="text-slate-300 tabular-nums">
@@ -1242,13 +1272,82 @@ function PairRow({ pair }: { pair: PairConsensus }) {
                       </div>
                     ) : (
                       <div className="text-[11px] text-slate-600">
-                        No signal from this app for this pair.
+                        No signal from this app for this candle.
                       </div>
                     )}
                   </div>
                 )
               })}
             </div>
+
+            {/* Historical candles table — shows candle-aligned consensus over time */}
+            {pair.candles.length > 1 && (
+              <div>
+                <div className="text-[11px] font-semibold text-slate-400 mb-1.5 flex items-center gap-1.5">
+                  <Clock className="h-3 w-3" />
+                  Candle-aligned history ({pair.candles.length} candles, newest first)
+                </div>
+                <div className="rounded-md border border-slate-800 overflow-hidden max-h-48 overflow-y-auto">
+                  <table className="w-full text-[11px]">
+                    <thead className="sticky top-0">
+                      <tr className="bg-slate-900/95 border-b border-slate-800">
+                        <th className="text-left font-medium text-slate-400 px-2 py-1">Candle</th>
+                        <th className="text-center font-medium text-slate-400 px-1 py-1">A1</th>
+                        <th className="text-center font-medium text-slate-400 px-1 py-1">A2</th>
+                        <th className="text-center font-medium text-slate-400 px-1 py-1">A3</th>
+                        <th className="text-center font-medium text-slate-400 px-2 py-1">Consensus</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pair.candles.slice(0, 20).map((cnd: CandleConsensus) => (
+                        <tr key={cnd.candleTime} className="border-b border-slate-800/40 last:border-0">
+                          <td className="px-2 py-1 text-cyan-300 tabular-nums">
+                            {fmtSigTime(cnd.candleTime)}
+                          </td>
+                          {(["app1", "app2", "app3"] as AppId[]).map((id) => {
+                            const s = cnd.signals.find((x) => x.source === id);
+                            return (
+                              <td key={id} className="px-1 py-1 text-center">
+                                {s ? (
+                                  <span className={cn(
+                                    "font-bold text-[10px]",
+                                    s.direction === "CALL" ? "text-emerald-400" :
+                                    s.direction === "PUT" ? "text-rose-400" : "text-slate-500"
+                                  )}>
+                                    {s.direction === "CALL" ? "▲" : s.direction === "PUT" ? "▼" : "—"}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-700">·</span>
+                                )}
+                              </td>
+                            );
+                          })}
+                          <td className="px-2 py-1 text-center">
+                            <span className={cn(
+                              "text-[10px] font-bold",
+                              cnd.consensus.level === "3-agree" ? "text-emerald-300" :
+                              cnd.consensus.level === "2-agree" ? "text-amber-300" :
+                              cnd.consensus.level === "conflict" ? "text-rose-300" :
+                              "text-slate-500"
+                            )}>
+                              {cnd.consensus.level === "3-agree" ? "3A" :
+                               cnd.consensus.level === "2-agree" ? "2A" :
+                               cnd.consensus.level === "conflict" ? "✗" :
+                               cnd.consensus.level === "1-only" ? "1" : "—"}
+                              {cnd.consensus.direction && cnd.consensus.direction !== "NEUTRAL" && (
+                                <span className="ml-0.5">
+                                  {cnd.consensus.direction === "CALL" ? "▲" : "▼"}
+                                </span>
+                              )}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </td>
         </tr>
       )}
