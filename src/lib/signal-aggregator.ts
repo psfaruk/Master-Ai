@@ -62,9 +62,20 @@ export interface AppStatus {
   lastChecked: number; // unix ms
   signalCount: number;
   freshSignalCount: number;
-  health: "ok" | "token_expired" | "down" | "unknown";
+  health: "ok" | "token_expired" | "disconnected" | "down" | "unknown";
+  /** Human-readable health detail shown on the dashboard. */
   detail?: string;
+  /** Whether the upstream Quotex WebSocket is live (signals are flowing). */
+  live?: boolean;
+  /** Whether the upstream token is expired / rejected. */
+  tokenExpired?: boolean;
+  /** HTTP latency of the signals call, in ms. */
   latencyMs?: number;
+  /** Server-reported uptime in seconds, if available. */
+  uptimeSec?: number;
+  /** Number of active pair streams (App2 only). */
+  activeStreams?: number;
+  /** Last error message from the fetch, if any. */
   error?: string;
 }
 
@@ -141,8 +152,132 @@ interface NormalizeResult {
   signals: SourceSignal[];
   health: AppStatus["health"];
   detail?: string;
+  live?: boolean;
+  tokenExpired?: boolean;
+  uptimeSec?: number;
+  activeStreams?: number;
   rawCount: number;
+  latencyMs?: number;
   error?: string;
+}
+
+// ---- Health endpoint callers ---------------------------------------------
+// These hit each source app's dedicated health/status endpoint to derive
+// authoritative online state + token state.
+
+async function fetchApp1Health(): Promise<Partial<NormalizeResult>> {
+  try {
+    const d = await fetchJsonWithTimeout(
+      "https://minimum-pair-production.up.railway.app/api/health",
+      6000
+    );
+    if (!d) return { error: "empty_health" };
+    const st = d?.status ?? {};
+    const tokenExpired = st?.tokenExpired === true || st?.state === "token_expired";
+    const live = st?.live === true;
+    let health: AppStatus["health"];
+    if (tokenExpired) health = "token_expired";
+    else if (!live) health = "disconnected";
+    else health = "ok";
+    return {
+      health,
+      live,
+      tokenExpired,
+      detail: st?.detail,
+      uptimeSec: typeof st?.uptimeSec === "number" ? st.uptimeSec : undefined,
+    };
+  } catch {
+    return { error: "health_fetch_failed" };
+  }
+}
+
+async function fetchApp2Health(): Promise<Partial<NormalizeResult>> {
+  try {
+    const d = await fetchJsonWithTimeout(
+      "https://binary-signals-app-production.up.railway.app/api/status",
+      6000
+    );
+    if (!d) return { error: "empty_health" };
+    const connected = d?.connected === true;
+    const streams: any[] = Array.isArray(d?.streams?.active) ? d.streams.active : [];
+    let health: AppStatus["health"];
+    if (!connected) health = "disconnected";
+    else health = "ok";
+    return {
+      health,
+      live: connected,
+      tokenExpired: false, // App2 doesn't expose token state directly
+      activeStreams: streams.length,
+      detail: connected ? `connected · ${streams.length} streams` : "disconnected",
+    };
+  } catch {
+    return { error: "health_fetch_failed" };
+  }
+}
+
+async function fetchApp3Health(): Promise<Partial<NormalizeResult>> {
+  try {
+    const d = await fetchJsonWithTimeout(
+      "https://otc-live-trading-production.up.railway.app/api/token-status",
+      6000
+    );
+    if (!d) return { error: "empty_health" };
+    const connected = d?.connected === true;
+    const hasToken = d?.has_env_token === true || d?.has_user_token === true;
+    let health: AppStatus["health"];
+    if (!hasToken) health = "token_expired";
+    else if (!connected) health = "disconnected";
+    else health = "ok";
+    return {
+      health,
+      live: connected,
+      tokenExpired: !hasToken,
+      detail: d?.token_source ? `token_source=${d.token_source}${connected ? " · connected" : " · disconnected"}` : undefined,
+    };
+  } catch {
+    return { error: "health_fetch_failed" };
+  }
+}
+
+const HEALTH_FETCHERS: Record<AppId, () => Promise<Partial<NormalizeResult>>> = {
+  app1: fetchApp1Health,
+  app2: fetchApp2Health,
+  app3: fetchApp3Health,
+};
+
+/**
+ * Merge health-endpoint data into the signals-fetcher result.
+ * Health data wins for online/token state because it's authoritative.
+ * If the signals fetch failed but health succeeded, we still report the app as online.
+ * If health fetch also failed, we fall back to inferring from signals fetch state.
+ */
+function mergeHealth(
+  sigResult: NormalizeResult,
+  healthResult: Partial<NormalizeResult> | undefined
+): Partial<NormalizeResult> {
+  // If signals fetch returned "down" (network error), but health succeeded,
+  // trust health. If both failed, mark down.
+  if (!healthResult || healthResult.error) {
+    // Health fetch failed. If signals also failed, mark down.
+    if (sigResult.health === "down") {
+      return { health: "down" };
+    }
+    // Signals succeeded but health fetch failed — keep sigResult.health.
+    return {
+      detail: sigResult.detail ?? "health check failed (signals OK)",
+      live: sigResult.health === "ok",
+      tokenExpired: sigResult.health === "token_expired",
+    };
+  }
+  // Health succeeded — use its authoritative state.
+  return {
+    health: healthResult.health ?? sigResult.health,
+    detail: healthResult.detail ?? sigResult.detail,
+    live: healthResult.live,
+    tokenExpired: healthResult.tokenExpired,
+    uptimeSec: healthResult.uptimeSec,
+    activeStreams: healthResult.activeStreams,
+  };
 }
 
 /** App1 (Minimum Pair): /api/signals -> { signals: [...] } */
@@ -317,24 +452,31 @@ export async function aggregateSignals(
   const nowSec = Math.floor(Date.now() / 1000);
   const timestampMs = Date.now();
 
-  // Fan out all 3 in parallel
-  const [r1, r2, r3] = await Promise.all([
+  // Fan out all 3 signals-fetchers AND all 3 health-fetchers in parallel.
+  // Health calls are independent of signals calls, so we can run them
+  // concurrently to minimize total latency.
+  const [r1, r2, r3, h1, h2, h3] = await Promise.all([
     fetchApp1(freshnessWindowSec, nowSec),
     fetchApp2(freshnessWindowSec, nowSec),
     fetchApp3(freshnessWindowSec, nowSec),
+    HEALTH_FETCHERS.app1(),
+    HEALTH_FETCHERS.app2(),
+    HEALTH_FETCHERS.app3(),
   ]);
 
+  // Merge health data into the per-app results.
+  // Health-endpoint data is authoritative for the online/token state.
   const results: Record<AppId, NormalizeResult> = {
-    app1: r1,
-    app2: r2,
-    app3: r3,
+    app1: { ...r1, ...mergeHealth(r1, h1) },
+    app2: { ...r2, ...mergeHealth(r2, h2) },
+    app3: { ...r3, ...mergeHealth(r3, h3) },
   };
 
-  // Build app status objects (we don't separately hit /health to save time;
-  // we infer online from whether the signals call succeeded)
+  // Build app status objects using authoritative health data.
   const apps: AppStatus[] = SOURCES.map((src) => {
     const r = results[src.id];
-    const online = !(r.health === "down");
+    // Online if signals call succeeded AND health didn't say "down".
+    const online = r.health !== "down" && r.health !== "unknown";
     const freshCount = r.signals.filter((s) => s.fresh).length;
     return {
       id: src.id,
@@ -346,6 +488,11 @@ export async function aggregateSignals(
       freshSignalCount: freshCount,
       health: r.health,
       detail: r.detail,
+      live: r.live,
+      tokenExpired: r.tokenExpired,
+      uptimeSec: r.uptimeSec,
+      activeStreams: r.activeStreams,
+      latencyMs: r.latencyMs,
       error: r.error,
     };
   });

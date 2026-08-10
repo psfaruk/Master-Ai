@@ -1,0 +1,12 @@
+{
+  "name": "signal-pusher",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bash run.sh"
+  },
+  "dependencies": {
+    "socket.io": "^4.7.5"
+  }
+}

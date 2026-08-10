@@ -1,11 +1,12 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { io, Socket } from "socket.io-client"
 import {
   Activity, ArrowDownCircle, ArrowUpCircle, Bot, Clock, Filter, Github,
   MinusCircle, Pause, Play, Radio, RefreshCw, TrendingDown, TrendingUp,
   Wifi, WifiOff, AlertTriangle, CheckCircle2, XCircle, Layers,
-  Beaker, BarChart3, Trophy, Target,
+  Beaker, BarChart3, Trophy, Target, Zap,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -19,7 +20,7 @@ import type {
 } from "@/lib/signal-aggregator"
 import type { BacktestResult, ConsensusLevel as BtLevel } from "@/lib/backtest-runner"
 
-const POLL_INTERVAL_MS = 15_000
+const POLL_INTERVAL_MS = 5_000 // poll /api/snapshot every 5s (background poller refreshes cache every 5s)
 
 // ---- helpers --------------------------------------------------------------
 
@@ -32,6 +33,12 @@ function fmtAgo(sec: number): string {
 function fmtClock(ms: number): string {
   if (!ms) return "--:--:--"
   return new Date(ms).toLocaleTimeString("en-GB", { hour12: false })
+}
+
+/** Format a unix-seconds timestamp as HH:MM:SS (UTC) — small, for table cells. */
+function fmtSigTime(tsSec: number): string {
+  if (!tsSec) return "--:--:--"
+  return new Date(tsSec * 1000).toLocaleTimeString("en-GB", { hour12: false, timeZone: "UTC" })
 }
 
 const CONSENSUS_META: Record<
@@ -128,6 +135,19 @@ export default function Home() {
   const [lastUpdated, setLastUpdated] = useState<number>(0)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const socketRef = useRef<Socket | null>(null)
+
+  // WebSocket connection state
+  const [wsConnected, setWsConnected] = useState(false)
+  // Tracks whether we've ever received data via WS — used to know whether
+  // to fall back to polling if WS doesn't deliver.
+  const wsReceivedRef = useRef(false)
+  // Last time we received any data (WS or REST) — used to show "LIVE" if
+  // data is flowing, even if WS itself dropped (Caddy/proxy can be flaky).
+  const [lastDataAt, setLastDataAt] = useState<number>(0)
+  // Tracks whether we're using the fast 5s poller (Next.js /api/snapshot)
+  // or the slower 15s /api/aggregated fallback.
+  const [fastPoller, setFastPoller] = useState(false)
 
   // Backtest state
   const [backtest, setBacktest] = useState<BacktestResult | null>(null)
@@ -152,33 +172,142 @@ export default function Home() {
   const fetchData = useCallback(async (silent = false) => {
     if (!silent) setIsRefreshing(true)
     try {
-      const res = await fetch("/api/aggregated", { cache: "no-store" })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json: AggregatedResponse = await res.json()
-      setData(json)
-      setLastUpdated(Date.now())
-      setError(null)
+      // Try the fast snapshot endpoint first (backed by a 5s background poller).
+      let res: Response;
+      try {
+        res = await fetch("/api/snapshot", { cache: "no-store" });
+        if (res.ok) {
+          const json: AggregatedResponse = await res.json();
+          setData(json);
+          setLastUpdated(Date.now());
+          setLastDataAt(Date.now());
+          setFastPoller(true);
+          setError(null);
+          return;
+        }
+      } catch {
+        // fall through to /api/aggregated
+      }
+      // Fallback: slow aggregated endpoint (no background poller).
+      res = await fetch("/api/aggregated", { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json: AggregatedResponse = await res.json();
+      setData(json);
+      setLastUpdated(Date.now());
+      setLastDataAt(Date.now());
+      setFastPoller(false);
+      setError(null);
     } catch (e: any) {
-      setError(e?.message ?? "Failed to fetch aggregated signals")
+      setError(e?.message ?? "Failed to fetch aggregated signals");
     } finally {
-      setLoading(false)
-      setIsRefreshing(false)
+      setLoading(false);
+      setIsRefreshing(false);
     }
   }, [])
 
+  // WebSocket connection — real-time updates every 5s from mini-service
   useEffect(() => {
-    fetchData()
-  }, [fetchData])
+    // Connect to the signal-pusher mini-service on port 3003 via Caddy.
+    // Caddy routes /socket.io/?...&XTransformPort=3003 to localhost:3003.
+    // We put "polling" first because some proxies (Caddy reverse_proxy
+    // with query-based port routing) don't reliably upgrade WebSocket.
+    // Socket.IO will still try to upgrade to websocket after the first
+    // successful polling handshake, and silently fall back if it fails.
+    const sock = io("/?XTransformPort=3003", {
+      transports: ["polling", "websocket"],
+      forceNew: true,
+      reconnection: true,
+      reconnectionAttempts: 20,
+      reconnectionDelay: 1500,
+      reconnectionDelayMax: 8000,
+      timeout: 15000,
+    });
+    socketRef.current = sock;
 
-  useEffect(() => {
-    if (timerRef.current) clearInterval(timerRef.current)
-    if (autoRefresh) {
-      timerRef.current = setInterval(() => fetchData(true), POLL_INTERVAL_MS)
-    }
+    sock.on("connect", () => {
+      setWsConnected(true);
+      console.log("[ws] connected to signal-pusher");
+    });
+    sock.on("disconnect", () => {
+      setWsConnected(false);
+      console.log("[ws] disconnected");
+    });
+    sock.on("connect_error", (err: any) => {
+      setWsConnected(false);
+      console.warn("[ws] connect_error:", err?.message);
+    });
+    sock.on("snapshot", (snap: AggregatedResponse) => {
+      wsReceivedRef.current = true;
+      setData(snap);
+      setLastUpdated(Date.now());
+      setLastDataAt(Date.now());
+      setLoading(false);
+      setError(null);
+    });
+    sock.on("health", (apps: AppStatus[]) => {
+      // Health-only update — we just merge into the existing snapshot
+      // to avoid a full re-render. The next snapshot will overwrite.
+      setData((prev) => prev ? { ...prev, apps } : prev);
+    });
+
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current)
+      sock.disconnect();
+      socketRef.current = null;
+    };
+  }, []);
+
+  // Polling loop — polls /api/snapshot every 5s.
+  // This is our primary data source (the background poller inside Next.js
+  // refreshes the cache every 5s). WebSocket is a bonus optimization that
+  // we still try to use, but polling alone is sufficient.
+  useEffect(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (!autoRefresh) return;
+    // Initial fetch
+    fetchData(true);
+    timerRef.current = setInterval(() => fetchData(true), POLL_INTERVAL_MS);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [autoRefresh, fetchData]);
+
+  // Manual refresh — forces an immediate re-poll via /api/snapshot?refresh=1
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      const res = await fetch("/api/snapshot?refresh=1", { cache: "no-store" });
+      if (res.ok) {
+        const json: AggregatedResponse = await res.json();
+        setData(json);
+        setLastUpdated(Date.now());
+        setLastDataAt(Date.now());
+        setFastPoller(true);
+        setError(null);
+      } else {
+        // Fall back to normal fetch
+        await fetchData();
+      }
+    } catch {
+      await fetchData();
+    } finally {
+      setIsRefreshing(false);
     }
-  }, [autoRefresh, fetchData])
+  }, [fetchData]);
+
+  // Live state: data has arrived within the last 12s.
+  // We show "LIVE" whenever fresh data is flowing, whether it came via
+  // WebSocket push or HTTP polling. The 12s threshold is 2x our 5s poll
+  // interval, so a single missed poll won't flip us to "POLL".
+  const isLive = wsConnected || (lastDataAt > 0 && Date.now() - lastDataAt < 12000);
+
+  // Force a re-render every 5s so the "LIVE" badge correctly falls back to
+  // "POLL" if no data has arrived within 12s. Without this, the badge would
+  // stay stuck on "LIVE" until the next user interaction.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((v) => v + 1), 5000);
+    return () => clearInterval(t);
+  }, []);
 
   const filteredPairs = useMemo(() => {
     if (!data) return []
@@ -212,6 +341,28 @@ export default function Home() {
           </div>
 
           <div className="ml-auto flex items-center gap-2 flex-wrap">
+            {/* WebSocket connection indicator */}
+            <div
+              className={cn(
+                "flex items-center gap-1.5 px-2 h-8 rounded-md border text-xs",
+                isLive
+                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                  : "border-amber-500/40 bg-amber-500/10 text-amber-300"
+              )}
+              title={isLive
+                ? (wsConnected
+                    ? "Real-time WebSocket connected (5s push)"
+                    : fastPoller
+                    ? "Live data via 5s background poller"
+                    : "Receiving live data via polling")
+                : "No recent data — check connection"}
+            >
+              {isLive ? (
+                <><Zap className="h-3 w-3" /> LIVE</>
+              ) : (
+                <><RefreshCw className="h-3 w-3 animate-pulse" /> POLL</>
+              )}
+            </div>
             <div className="flex items-center gap-1.5 text-xs text-slate-400 mr-1">
               <Clock className="h-3.5 w-3.5" />
               <span className="tabular-nums">{lastUpdated ? fmtClock(lastUpdated) : "--:--:--"}</span>
@@ -220,7 +371,7 @@ export default function Home() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => fetchData()}
+              onClick={handleRefresh}
               disabled={isRefreshing}
               className="h-8 border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-200"
             >
@@ -517,23 +668,65 @@ function AppStatusCard({ app }: { app: AppStatus }) {
   const meta = APP_META[app.id]
   const isOnline = app.online
   const tokenIssue = app.health === "token_expired"
-  const accentColor =
-    app.id === "app1" ? "amber" : app.id === "app2" ? "violet" : "emerald"
+  const disconnected = app.health === "disconnected"
+  const down = app.health === "down"
+
+  // Determine status badge content + color
+  let statusLabel: string
+  let statusColor: string
+  let statusBg: string
+  let statusBorder: string
+  let StatusIcon: typeof Wifi | typeof WifiOff | typeof AlertTriangle
+
+  if (down) {
+    statusLabel = "OFFLINE"
+    statusColor = "text-rose-300"
+    statusBg = "bg-rose-500/15"
+    statusBorder = "border-rose-500/40"
+    StatusIcon = WifiOff
+  } else if (tokenIssue) {
+    statusLabel = "TOKEN EXPIRED"
+    statusColor = "text-amber-300"
+    statusBg = "bg-amber-500/15"
+    statusBorder = "border-amber-500/40"
+    StatusIcon = AlertTriangle
+  } else if (disconnected) {
+    statusLabel = "DISCONNECTED"
+    statusColor = "text-amber-300"
+    statusBg = "bg-amber-500/15"
+    statusBorder = "border-amber-500/40"
+    StatusIcon = WifiOff
+  } else if (app.live) {
+    statusLabel = "LIVE"
+    statusColor = "text-emerald-300"
+    statusBg = "bg-emerald-500/15"
+    statusBorder = "border-emerald-500/40"
+    StatusIcon = Wifi
+  } else {
+    statusLabel = "ONLINE"
+    statusColor = "text-emerald-300"
+    statusBg = "bg-emerald-500/15"
+    statusBorder = "border-emerald-500/40"
+    StatusIcon = Wifi
+  }
+
+  const cardBorder = down || tokenIssue || disconnected ? "border-rose-500/30" : "border-slate-800"
 
   return (
     <Card
       className={cn(
         "p-4 border bg-slate-900/60 relative overflow-hidden",
-        isOnline ? "border-slate-800" : "border-rose-500/30"
+        cardBorder
       )}
     >
       <div
         className={cn(
           "absolute top-0 left-0 right-0 h-0.5",
-          app.id === "app1" && "bg-amber-500",
-          app.id === "app2" && "bg-violet-500",
-          app.id === "app3" && "bg-emerald-500",
-          !isOnline && "bg-rose-500"
+          down ? "bg-rose-500" :
+          tokenIssue ? "bg-amber-500" :
+          disconnected ? "bg-amber-500" :
+          app.id === "app1" ? "bg-amber-500" :
+          app.id === "app2" ? "bg-violet-500" : "bg-emerald-500"
         )}
       />
       <div className="flex items-start justify-between gap-2">
@@ -541,10 +734,12 @@ function AppStatusCard({ app }: { app: AppStatus }) {
           <div
             className={cn(
               "h-9 w-9 rounded-lg flex items-center justify-center flex-shrink-0",
-              app.id === "app1" && "bg-amber-500/15 text-amber-400",
-              app.id === "app2" && "bg-violet-500/15 text-violet-400",
-              app.id === "app3" && "bg-emerald-500/15 text-emerald-400",
-              !isOnline && "bg-rose-500/15 text-rose-400"
+              down ? "bg-rose-500/15 text-rose-400" :
+              tokenIssue ? "bg-amber-500/15 text-amber-400" :
+              disconnected ? "bg-amber-500/15 text-amber-400" :
+              app.id === "app1" ? "bg-amber-500/15 text-amber-400" :
+              app.id === "app2" ? "bg-violet-500/15 text-violet-400" :
+              "bg-emerald-500/15 text-emerald-400"
             )}
           >
             <Bot className="h-5 w-5" />
@@ -558,21 +753,32 @@ function AppStatusCard({ app }: { app: AppStatus }) {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-1 flex-shrink-0">
-          {isOnline && !tokenIssue ? (
-            <Wifi className="h-4 w-4 text-emerald-400" />
-          ) : (
-            <WifiOff className="h-4 w-4 text-rose-400" />
+        <div
+          className={cn(
+            "flex items-center gap-1 px-1.5 py-0.5 rounded border flex-shrink-0",
+            statusBg, statusBorder, statusColor
           )}
-          <span
-            className={cn(
-              "text-[10px] font-medium",
-              isOnline && !tokenIssue ? "text-emerald-400" : "text-rose-400"
-            )}
-          >
-            {isOnline ? (tokenIssue ? "TOKEN" : "ONLINE") : "OFFLINE"}
-          </span>
+          title={app.detail ?? statusLabel}
+        >
+          <StatusIcon className="h-3 w-3" />
+          <span className="text-[9px] font-bold tracking-wider">{statusLabel}</span>
         </div>
+      </div>
+
+      {/* Status detail line — always visible so user can see exactly why */}
+      <div className="mt-2.5 text-[11px] leading-snug">
+        {app.detail && (
+          <div className={cn("flex items-start gap-1", statusColor)}>
+            <span className="text-slate-500 font-medium flex-shrink-0">Status:</span>
+            <span className="text-slate-300 break-all">{app.detail}</span>
+          </div>
+        )}
+        {!app.detail && down && (
+          <div className="text-rose-300 flex items-center gap-1">
+            <span className="text-slate-500 font-medium">Status:</span>
+            <span>Source app not responding — fetch failed</span>
+          </div>
+        )}
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
@@ -584,20 +790,35 @@ function AppStatusCard({ app }: { app: AppStatus }) {
         </div>
         <div className="rounded-md bg-slate-800/50 px-2 py-1.5">
           <div className="text-[10px] text-slate-500 uppercase tracking-wide">Fresh</div>
-          <div className="text-slate-200 font-semibold tabular-nums">
+          <div className={cn(
+            "font-semibold tabular-nums",
+            app.freshSignalCount > 0 ? "text-emerald-300" : "text-slate-500"
+          )}>
             {app.freshSignalCount}
           </div>
         </div>
       </div>
 
+      {/* Extra health metadata */}
+      <div className="mt-2 flex items-center gap-3 flex-wrap text-[10px] text-slate-500">
+        {typeof app.uptimeSec === "number" && (
+          <span title="Upstream uptime">
+            up {app.uptimeSec >= 3600 ? `${Math.floor(app.uptimeSec / 3600)}h` :
+                app.uptimeSec >= 60 ? `${Math.floor(app.uptimeSec / 60)}m` :
+                `${app.uptimeSec}s`}
+          </span>
+        )}
+        {typeof app.activeStreams === "number" && (
+          <span title="Active pair streams">{app.activeStreams} streams</span>
+        )}
+        {typeof app.latencyMs === "number" && (
+          <span title="Last fetch latency">{app.latencyMs}ms</span>
+        )}
+      </div>
+
       {app.error && (
         <div className="mt-2 text-[10px] text-rose-300/80 truncate" title={app.error}>
           Error: {app.error}
-        </div>
-      )}
-      {tokenIssue && (
-        <div className="mt-2 text-[10px] text-amber-300/80 flex items-center gap-1">
-          <AlertTriangle className="h-3 w-3" /> Token expired on source app
         </div>
       )}
       <a
@@ -893,8 +1114,21 @@ function PairRow({ pair }: { pair: PairConsensus }) {
         {(["app1", "app2", "app3"] as AppId[]).map((id) => {
           const sig = getSignal(id)
           return (
-            <td key={id} className="px-2 py-2.5 text-center">
-              {sig ? <DirectionPill dir={sig.direction} size="sm" /> : (
+            <td key={id} className="px-2 py-2.5 text-center align-middle">
+              {sig ? (
+                <div className="flex flex-col items-center gap-0.5">
+                  <DirectionPill dir={sig.direction} size="sm" />
+                  <span
+                    className={cn(
+                      "text-[10px] tabular-nums leading-tight",
+                      sig.fresh ? "text-slate-400" : "text-slate-600"
+                    )}
+                    title={`Signal time (UTC): ${fmtSigTime(sig.timestamp)}\nAge: ${fmtAgo(sig.ageSec)}`}
+                  >
+                    {fmtSigTime(sig.timestamp)}
+                  </span>
+                </div>
+              ) : (
                 <span className="inline-flex items-center justify-center h-6 px-2 text-[11px] text-slate-600 rounded-md border border-slate-800 bg-slate-900/40">
                   —
                 </span>
@@ -918,6 +1152,19 @@ function PairRow({ pair }: { pair: PairConsensus }) {
               <DirectionPill dir={c.direction} />
               <span className="text-[11px] text-slate-500">
                 {c.agreeingApps.length}/{c.agreeingApps.length + c.disagreeingApps.length}
+              </span>
+              <span
+                className="text-[10px] text-slate-500 tabular-nums"
+                title="Latest agreeing signal time (UTC)"
+              >
+                {fmtSigTime(
+                  Math.max(
+                    ...pair.signals
+                      .filter((s) => c.agreeingApps.includes(s.source))
+                      .map((s) => s.timestamp)
+                      .concat([0])
+                  )
+                )}
               </span>
             </div>
           ) : (
