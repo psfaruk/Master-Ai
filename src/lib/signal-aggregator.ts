@@ -9,6 +9,8 @@
  * so the browser cannot call them directly. We fan out server-side.
  */
 
+import { fetchJsonWithTimeout } from "./backtest-fetcher";
+
 export type Direction = "CALL" | "PUT" | "NEUTRAL";
 export type AppId = "app1" | "app2" | "app3";
 export type ConsensusLevel =
@@ -129,34 +131,9 @@ function classifyPair(asset: string): "otc" | "real" {
   return asset.endsWith("_otc") ? "otc" : "real";
 }
 
-const FETCH_TIMEOUT_MS = 8000;
+const FETCH_TIMEOUT_MS = 10000;
 
-async function fetchJsonWithTimeout(url: string): Promise<{ ok: boolean; status: number; data: any; latencyMs: number; error?: string }> {
-  const start = Date.now();
-  try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
-    const res = await fetch(url, {
-      signal: ctrl.signal,
-      headers: { Accept: "application/json", "User-Agent": "qx-aggregator/1.0" },
-      cache: "no-store",
-    });
-    clearTimeout(t);
-    const latencyMs = Date.now() - start;
-    const text = await res.text();
-    let data: any = null;
-    try { data = text ? JSON.parse(text) : null; } catch { /* non-JSON body */ }
-    return { ok: res.ok, status: res.status, data, latencyMs };
-  } catch (e: any) {
-    return {
-      ok: false,
-      status: 0,
-      data: null,
-      latencyMs: Date.now() - start,
-      error: e?.name === "AbortError" ? "timeout" : (e?.message ?? "fetch_failed"),
-    };
-  }
-}
+// fetchJsonWithTimeout is imported from ./backtest-fetcher
 
 // ---- Per-source fetch + normalize ---------------------------------------
 
@@ -171,12 +148,17 @@ interface NormalizeResult {
 /** App1 (Minimum Pair): /api/signals -> { signals: [...] } */
 async function fetchApp1(freshnessWindowSec: number, nowSec: number): Promise<NormalizeResult> {
   const src = SOURCES[0];
-  const r = await fetchJsonWithTimeout(`${src.baseUrl}${src.signalsPath}`);
-  if (!r.ok || !r.data) {
-    return { signals: [], health: "down", rawCount: 0, error: r.error ?? `status_${r.status}` };
+  let data: any;
+  try {
+    data = await fetchJsonWithTimeout(`${src.baseUrl}${src.signalsPath}`, FETCH_TIMEOUT_MS);
+  } catch {
+    return { signals: [], health: "down", rawCount: 0, error: "fetch_failed" };
   }
-  const arr: any[] = Array.isArray(r.data?.signals) ? r.data.signals : [];
-  const health = r.data?.status?.state === "token_expired" || r.data?.status?.tokenExpired
+  if (!data) {
+    return { signals: [], health: "down", rawCount: 0, error: "empty_response" };
+  }
+  const arr: any[] = Array.isArray(data?.signals) ? data.signals : [];
+  const health = data?.status?.state === "token_expired" || data?.status?.tokenExpired
     ? "token_expired"
     : "ok";
 
@@ -222,12 +204,17 @@ async function fetchApp1(freshnessWindowSec: number, nowSec: number): Promise<No
 /** App2 (Binary Signal Terminal): /api/agent/decisions?limit=N -> { decisions: [...] } */
 async function fetchApp2(freshnessWindowSec: number, nowSec: number): Promise<NormalizeResult> {
   const src = SOURCES[1];
-  const r = await fetchJsonWithTimeout(`${src.baseUrl}${src.signalsPath}`);
-  if (!r.ok || !r.data) {
-    return { signals: [], health: "down", rawCount: 0, error: r.error ?? `status_${r.status}` };
+  let data: any;
+  try {
+    data = await fetchJsonWithTimeout(`${src.baseUrl}${src.signalsPath}`, FETCH_TIMEOUT_MS);
+  } catch {
+    return { signals: [], health: "down", rawCount: 0, error: "fetch_failed" };
   }
-  const arr: any[] = Array.isArray(r.data?.decisions) ? r.data.decisions : [];
-  const health = r.data?.connected === false ? "down" : "ok";
+  if (!data) {
+    return { signals: [], health: "down", rawCount: 0, error: "empty_response" };
+  }
+  const arr: any[] = Array.isArray(data?.decisions) ? data.decisions : [];
+  const health = data?.connected === false ? "down" : "ok";
 
   // Group by asset -> pick latest by ts
   const byAsset = new Map<string, any>();
@@ -272,12 +259,17 @@ async function fetchApp2(freshnessWindowSec: number, nowSec: number): Promise<No
 /** App3 (OTC Live Trading): /api/signals?limit=N -> [...] */
 async function fetchApp3(freshnessWindowSec: number, nowSec: number): Promise<NormalizeResult> {
   const src = SOURCES[2];
-  const r = await fetchJsonWithTimeout(`${src.baseUrl}${src.signalsPath}`);
-  if (!r.ok || !r.data) {
-    return { signals: [], health: "down", rawCount: 0, error: r.error ?? `status_${r.status}` };
+  let data: any;
+  try {
+    data = await fetchJsonWithTimeout(`${src.baseUrl}${src.signalsPath}`, FETCH_TIMEOUT_MS);
+  } catch {
+    return { signals: [], health: "down", rawCount: 0, error: "fetch_failed" };
   }
-  const arr: any[] = Array.isArray(r.data) ? r.data : (Array.isArray(r.data?.signals) ? r.data.signals : []);
-  const health = r.data?.connected === false ? "down" : "ok";
+  if (!data) {
+    return { signals: [], health: "down", rawCount: 0, error: "empty_response" };
+  }
+  const arr: any[] = Array.isArray(data) ? data : (Array.isArray(data?.signals) ? data.signals : []);
+  const health = data?.connected === false ? "down" : "ok";
 
   // Group by asset -> pick latest by ctime
   const byAsset = new Map<string, any>();

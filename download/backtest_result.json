@@ -1,0 +1,74 @@
+{
+  "total_signals": 800,
+  "total_clusters": 691,
+  "levels": {
+    "1-only": {
+      "total": 621,
+      "win": 247,
+      "loss": 277,
+      "unknown": 97,
+      "call": 319,
+      "put": 302,
+      "call_win": 130,
+      "call_loss": 139,
+      "put_win": 117,
+      "put_loss": 138
+    },
+    "conflict": {
+      "total": 26,
+      "win": 0,
+      "loss": 0,
+      "unknown": 26,
+      "call": 0,
+      "put": 0,
+      "call_win": 0,
+      "call_loss": 0,
+      "put_win": 0,
+      "put_loss": 0
+    },
+    "2-agree": {
+      "total": 44,
+      "win": 25,
+      "loss": 18,
+      "unknown": 1,
+      "call": 27,
+      "put": 17,
+      "call_win": 16,
+      "call_loss": 11,
+      "put_win": 9,
+      "put_loss": 7
+    },
+    "3-agree": {
+      "total": 0,
+      "win": 0,
+      "loss": 0,
+      "unknown": 0,
+      "call": 0,
+      "put": 0,
+      "call_win": 0,
+      "call_loss": 0,
+      "put_win": 0,
+      "put_loss": 0
+    }
+  },
+  "sources": {
+    "app1": {
+      "total": 200,
+      "win": 79,
+      "loss": 96,
+      "unknown": 25
+    },
+    "app2": {
+      "total": 100,
+      "win": 0,
+      "loss": 0,
+      "unknown": 100
+    },
+    "app3": {
+      "total": 500,
+      "win": 246,
+      "loss": 237,
+      "unknown": 17
+    }
+  }
+}

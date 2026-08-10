@@ -17,7 +17,7 @@ export const revalidate = 0;
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const raw = url.searchParams.get("freshness");
-  let freshness = 600; // 10 minutes default
+  let freshness = 1800; // 30 minutes default — accounts for App1's stale token
   if (raw) {
     const n = Number(raw);
     if (Number.isFinite(n) && n > 0 && n < 86400) freshness = n;
