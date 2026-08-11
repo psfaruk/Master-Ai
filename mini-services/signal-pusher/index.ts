@@ -36,6 +36,8 @@ interface SourceSignal {
   confidence: number | null;
   strength?: string | null;
   timestamp: number;
+  /** Candle time (unix seconds, minute-floored) — used to align signals across apps. */
+  candleTime: number;
   ageSec: number;
   outcome?: "WIN" | "LOSS" | "DRAW" | "CORRECT" | "WRONG" | null;
   strategy?: string | null;
@@ -43,11 +45,32 @@ interface SourceSignal {
   fresh: boolean;
 }
 
+interface CandleConsensus {
+  pair: string;
+  displayPair: string;
+  category: "otc" | "real";
+  candleTime: number;
+  signals: SourceSignal[];
+  freshCount: number;
+  callCount: number;
+  putCount: number;
+  neutralCount: number;
+  consensus: {
+    level: ConsensusLevel;
+    direction: Direction | null;
+    agreeingApps: AppId[];
+    disagreeingApps: AppId[];
+    missingApps: AppId[];
+  };
+}
+
 interface PairConsensus {
   pair: string;
   displayPair: string;
   category: "otc" | "real";
   signals: SourceSignal[];
+  candles: CandleConsensus[];
+  latestCandle: CandleConsensus | null;
   freshCount: number;
   callCount: number;
   putCount: number;
@@ -110,7 +133,7 @@ const SOURCES = [
     id: "app2" as const,
     name: "Binary Signal Terminal",
     baseUrl: "https://binary-signals-app-production.up.railway.app",
-    signalsPath: "/api/agent/decisions?limit=300",
+    signalsPath: "/api/share-signals",
     healthPath: "/api/status",
   },
   {
@@ -236,20 +259,19 @@ async function fetchApp1Signals(nowSec: number): Promise<{ signals: SourceSignal
   }
   if (!data) return { signals: [], rawCount: 0, error: "empty" };
   const arr: any[] = Array.isArray(data?.signals) ? data.signals : [];
-  const bySymbol = new Map<string, any>();
+  // Keep ALL signals (no latest-only grouping) so the aggregator can align
+  // them by candle-time across apps.
+  const out: SourceSignal[] = [];
   for (const s of arr) {
     const sym = s?.symbol;
     if (!sym) continue;
-    const t = Number(s.entryTime ?? s.signalAt ?? 0);
-    const cur = bySymbol.get(sym);
-    if (!cur || t > Number(cur.entryTime ?? cur.signalAt ?? 0)) bySymbol.set(sym, s);
-  }
-  const out: SourceSignal[] = [];
-  bySymbol.forEach((s, sym) => {
     const tsMs = Number(s.signalAt ?? s.entryTime ?? 0);
     const ts = tsMs > 1e12 ? Math.floor(tsMs / 1000) : Math.floor(tsMs);
     const dir = String(s.direction ?? "").toUpperCase() as Direction;
-    if (dir !== "CALL" && dir !== "PUT") return;
+    if (dir !== "CALL" && dir !== "PUT") continue;
+    const entryMs = Number(s.entryTime ?? 0);
+    const entrySec = entryMs > 1e12 ? Math.floor(entryMs / 1000) : Math.floor(entryMs);
+    const candleTime = entrySec > 0 ? Math.floor(entrySec / 60) * 60 : Math.floor(ts / 60) * 60;
     const ageSec = Math.max(0, nowSec - ts);
     out.push({
       source: "app1",
@@ -260,13 +282,14 @@ async function fetchApp1Signals(nowSec: number): Promise<{ signals: SourceSignal
       confidence: typeof s.confidence === "number" ? s.confidence : null,
       strength: typeof s.quality === "number" ? (s.quality >= 0.7 ? "STRONG" : s.quality >= 0.45 ? "MEDIUM" : "WEAK") : null,
       timestamp: ts,
+      candleTime,
       ageSec,
       outcome: s.status ? (s.status as SourceSignal["outcome"]) : null,
       strategy: s.primaryPattern ?? null,
       reasons: Array.isArray(s.reasons) ? s.reasons : null,
       fresh: ageSec <= FRESHNESS_WINDOW_SEC,
     });
-  });
+  }
   return { signals: out, rawCount: arr.length };
 }
 
@@ -279,38 +302,60 @@ async function fetchApp2Signals(nowSec: number): Promise<{ signals: SourceSignal
     return { signals: [], rawCount: 0, error: "fetch_failed" };
   }
   if (!data) return { signals: [], rawCount: 0, error: "empty" };
-  const arr: any[] = Array.isArray(data?.decisions) ? data.decisions : [];
-  const byAsset = new Map<string, any>();
-  for (const d of arr) {
-    const a = d?.asset;
-    if (!a) continue;
-    const t = Number(d.ts ?? 0);
-    const cur = byAsset.get(a);
-    if (!cur || t > Number(cur.ts ?? 0)) byAsset.set(a, d);
-  }
+  const arr: any[] = Array.isArray(data?.rows) ? data.rows : [];
+  const serverTs = Number(data?.timestamp ?? 0);
+  const serverSec = serverTs > 1e12 ? Math.floor(serverTs / 1000) : Math.floor(serverTs);
+
   const out: SourceSignal[] = [];
-  byAsset.forEach((d, asset) => {
-    const ts = Math.floor(Number(d.ts ?? 0));
-    const dir = String(d.signal ?? "").toUpperCase() as Direction;
-    if (dir !== "CALL" && dir !== "PUT") return;
+  for (const r of arr) {
+    const pair = r?.pair;
+    if (!pair) continue;
+    const rawSignal = String(r?.signal ?? "").toUpperCase().trim();
+    if (rawSignal !== "CALL" && rawSignal !== "PUT") continue;
+    const dir = rawSignal as Direction;
+
+    // Parse "HH:MM" into unix-seconds candleTime for today (UTC).
+    const timeStr = String(r?.time ?? "");
+    let candleTime = serverSec > 0 ? Math.floor(serverSec / 60) * 60 : nowSec;
+    const m = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+    if (m) {
+      const hh = parseInt(m[1], 10);
+      const mm = parseInt(m[2], 10);
+      if (hh >= 0 && hh < 24 && mm >= 0 && mm < 60) {
+        const now = new Date(nowSec * 1000);
+        const dt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hh, mm, 0) / 1000;
+        let ts = dt;
+        if (ts - nowSec > 12 * 3600) ts -= 24 * 3600;
+        candleTime = Math.floor(ts / 60) * 60;
+      }
+    }
+
+    const conf100 = typeof r?.confidence === "number" ? r.confidence : 0;
+    const confidence = conf100 > 0 ? conf100 / 100 : null;
+    const lastUpdate = Number(r?.last_update ?? 0);
+    const ts = lastUpdate > 0 ? Math.floor(lastUpdate) : candleTime;
     const ageSec = Math.max(0, nowSec - ts);
-    const pWin = typeof d.p_win === "number" ? d.p_win : null;
+    const strengthStr = typeof r?.strength === "string" ? r.strength.toUpperCase() : null;
+
     out.push({
       source: "app2",
       sourceName: src.name,
-      pair: asset,
-      displayPair: displayPairFromAsset(asset),
+      pair,
+      displayPair: displayPairFromAsset(pair),
       direction: dir,
-      confidence: pWin,
-      strength: pWin === null ? null : pWin >= 0.65 ? "STRONG" : pWin >= 0.55 ? "MEDIUM" : "WEAK",
+      confidence,
+      strength: strengthStr,
       timestamp: ts,
+      candleTime,
       ageSec,
-      outcome: d.accuracy === "correct" ? "CORRECT" : d.accuracy === "wrong" ? "WRONG" : null,
-      strategy: d.verdict ? `verdict=${d.verdict}` : null,
-      reasons: d.reason ? [String(d.reason).slice(0, 200)] : null,
+      outcome: null,
+      strategy: r?.buyer_pct != null && r?.seller_pct != null
+        ? `buyers=${r.buyer_pct}% sellers=${r.seller_pct}%`
+        : null,
+      reasons: null,
       fresh: ageSec <= FRESHNESS_WINDOW_SEC,
     });
-  });
+  }
   return { signals: out, rawCount: arr.length };
 }
 
@@ -324,19 +369,16 @@ async function fetchApp3Signals(nowSec: number): Promise<{ signals: SourceSignal
   }
   if (!data) return { signals: [], rawCount: 0, error: "empty" };
   const arr: any[] = Array.isArray(data) ? data : Array.isArray(data?.signals) ? data.signals : [];
-  const byAsset = new Map<string, any>();
-  for (const s of arr) {
-    const a = s?.asset;
-    if (!a) continue;
-    const t = Number(s.ctime ?? 0);
-    const cur = byAsset.get(a);
-    if (!cur || t > Number(cur.ctime ?? 0)) byAsset.set(a, s);
-  }
+  // Keep ALL signals (no latest-only grouping) so the aggregator can align
+  // them by candle-time across apps.
   const out: SourceSignal[] = [];
-  byAsset.forEach((s, asset) => {
+  for (const s of arr) {
+    const asset = s?.asset;
+    if (!asset) continue;
     const ts = Math.floor(Number(s.ctime ?? 0));
     const dir = String(s.signal ?? "").toUpperCase() as Direction;
-    if (dir !== "CALL" && dir !== "PUT") return;
+    if (dir !== "CALL" && dir !== "PUT") continue;
+    const candleTime = Math.floor(ts / 60) * 60;
     const ageSec = Math.max(0, nowSec - ts);
     out.push({
       source: "app3",
@@ -347,13 +389,14 @@ async function fetchApp3Signals(nowSec: number): Promise<{ signals: SourceSignal
       confidence: typeof s.confidence === "number" ? s.confidence : null,
       strength: typeof s.strength === "string" ? s.strength : null,
       timestamp: ts,
+      candleTime,
       ageSec,
       outcome: s.result === "correct" ? "CORRECT" : s.result === "wrong" ? "WRONG" : s.result === "draw" ? "DRAW" : null,
       strategy: typeof s.codes === "string" && s.codes ? s.codes : null,
       reasons: null,
       fresh: ageSec <= FRESHNESS_WINDOW_SEC,
     });
-  });
+  }
   return { signals: out, rawCount: arr.length };
 }
 
@@ -432,85 +475,123 @@ async function aggregate(): Promise<AggregatedResponse> {
     };
   });
 
-  // Build pair map
-  const pairMap = new Map<string, { otc: boolean; signals: Partial<Record<AppId, SourceSignal>> }>();
+  // ---- Build candle-aligned consensus ----
+  // For each pair, group ALL signals by candle-time (minute-floored).
+  // For each (pair, candle) we have at most one signal per app (latest wins).
+  // Consensus is computed per-candle — only signals for the SAME candle
+  // are compared.
+  const pairMap = new Map<string, {
+    otc: boolean;
+    candles: Map<number, Partial<Record<AppId, SourceSignal>>>;
+  }>();
+
   (["app1", "app2", "app3"] as AppId[]).forEach((id) => {
     for (const sig of sigResults[id].signals) {
       let entry = pairMap.get(sig.pair);
       if (!entry) {
-        entry = { otc: classifyPair(sig.pair) === "otc", signals: {} };
+        entry = { otc: classifyPair(sig.pair) === "otc", candles: new Map() };
         pairMap.set(sig.pair, entry);
       }
-      const cur = entry.signals[id];
+      let candle = entry.candles.get(sig.candleTime);
+      if (!candle) {
+        candle = {};
+        entry.candles.set(sig.candleTime, candle);
+      }
+      const cur = candle[id];
       if (!cur || sig.timestamp > cur.timestamp) {
-        entry.signals[id] = sig;
+        candle[id] = sig;
       }
     }
   });
 
   const pairs: PairConsensus[] = [];
   pairMap.forEach((entry, pair) => {
-    const sigs: SourceSignal[] = [];
-    let callCount = 0, putCount = 0, neutralCount = 0, freshCount = 0;
-    const agreeing: AppId[] = [];
-    const disagreeing: AppId[] = [];
-    const missing: AppId[] = [];
+    const candleEntries: any[] = [];
+    entry.candles.forEach((appsMap, candleTime) => {
+      const sigs: SourceSignal[] = [];
+      let callCount = 0, putCount = 0, neutralCount = 0, freshCount = 0;
+      const agreeing: AppId[] = [];
+      const disagreeing: AppId[] = [];
+      const missing: AppId[] = [];
 
-    (["app1", "app2", "app3"] as AppId[]).forEach((id) => {
-      const s = entry.signals[id];
-      if (!s || !s.fresh) {
-        missing.push(id);
-        return;
+      (["app1", "app2", "app3"] as AppId[]).forEach((id) => {
+        const s = appsMap[id];
+        if (!s || !s.fresh) { missing.push(id); return; }
+        sigs.push(s);
+        freshCount++;
+        if (s.direction === "CALL") callCount++;
+        else if (s.direction === "PUT") putCount++;
+        else neutralCount++;
+      });
+
+      let level: ConsensusLevel;
+      let direction: Direction | null = null;
+      if (freshCount === 0) {
+        level = "none";
+      } else if (freshCount === 1) {
+        level = "1-only";
+        direction = sigs[0].direction;
+        agreeing.push(sigs[0].source);
+      } else {
+        const dominant: Direction = callCount >= putCount ? "CALL" : "PUT";
+        const dominantCount = dominant === "CALL" ? callCount : putCount;
+        if (dominantCount === freshCount) {
+          level = freshCount === 3 ? "3-agree" : "2-agree";
+          direction = dominant;
+          sigs.forEach((s) => {
+            if (s.direction === dominant) agreeing.push(s.source);
+            else disagreeing.push(s.source);
+          });
+        } else {
+          level = "conflict";
+          sigs.forEach((s) => {
+            if (s.direction === dominant) agreeing.push(s.source);
+            else disagreeing.push(s.source);
+          });
+        }
       }
-      sigs.push(s);
-      freshCount++;
-      if (s.direction === "CALL") callCount++;
-      else if (s.direction === "PUT") putCount++;
-      else neutralCount++;
+
+      candleEntries.push({
+        pair,
+        displayPair: displayPairFromAsset(pair),
+        category: entry.otc ? "otc" : "real",
+        candleTime,
+        signals: sigs.sort((a, b) => (a.source > b.source ? 1 : -1)),
+        freshCount, callCount, putCount, neutralCount,
+        consensus: {
+          level, direction,
+          agreeingApps: agreeing, disagreeingApps: disagreeing, missingApps: missing,
+        },
+      });
     });
 
-    let level: ConsensusLevel;
-    let direction: Direction | null = null;
-    if (freshCount === 0) {
-      level = "none";
-    } else if (freshCount === 1) {
-      level = "1-only";
-      direction = sigs[0].direction;
-      agreeing.push(sigs[0].source);
-    } else {
-      const dominant: Direction = callCount >= putCount ? "CALL" : "PUT";
-      const dominantCount = dominant === "CALL" ? callCount : putCount;
-      if (dominantCount === freshCount) {
-        level = freshCount === 3 ? "3-agree" : "2-agree";
-        direction = dominant;
-        sigs.forEach((s) => {
-          if (s.direction === dominant) agreeing.push(s.source);
-          else disagreeing.push(s.source);
-        });
-      } else {
-        level = "conflict";
-        sigs.forEach((s) => {
-          if (s.direction === dominant) agreeing.push(s.source);
-          else disagreeing.push(s.source);
-        });
-      }
+    candleEntries.sort((a, b) => b.candleTime - a.candleTime);
+    let latestCandle: any = null;
+    if (candleEntries.length > 0) {
+      latestCandle =
+        candleEntries.find((c: any) => c.consensus.level === "3-agree") ??
+        candleEntries.find((c: any) => c.consensus.level === "2-agree") ??
+        candleEntries[0];
     }
+
+    const signals = latestCandle ? latestCandle.signals : [];
+    const freshCount = latestCandle ? latestCandle.freshCount : 0;
+    const callCount = latestCandle ? latestCandle.callCount : 0;
+    const putCount = latestCandle ? latestCandle.putCount : 0;
+    const neutralCount = latestCandle ? latestCandle.neutralCount : 0;
 
     pairs.push({
       pair,
       displayPair: displayPairFromAsset(pair),
       category: entry.otc ? "otc" : "real",
-      signals: sigs.sort((a, b) => (a.source > b.source ? 1 : -1)),
-      freshCount,
-      callCount,
-      putCount,
-      neutralCount,
-      consensus: {
-        level,
-        direction,
-        agreeingApps: agreeing,
-        disagreeingApps: disagreeing,
-        missingApps: missing,
+      signals,
+      candles: candleEntries,
+      latestCandle,
+      freshCount, callCount, putCount, neutralCount,
+      consensus: latestCandle ? latestCandle.consensus : {
+        level: "none" as ConsensusLevel, direction: null,
+        agreeingApps: [], disagreeingApps: [],
+        missingApps: ["app1", "app2", "app3"] as AppId[],
       },
     });
   });

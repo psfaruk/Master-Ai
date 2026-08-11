@@ -141,7 +141,7 @@ const SOURCES = [
     name: "Binary Signal Terminal",
     shortName: "App 2",
     baseUrl: "https://binary-signals-app-production.up.railway.app",
-    signalsPath: "/api/agent/decisions?limit=300",
+    signalsPath: "/api/share-signals",
     healthPath: "/api/status",
     accent: "violet",
   },
@@ -367,7 +367,19 @@ async function fetchApp1(freshnessWindowSec: number, nowSec: number): Promise<No
   return { signals: out, health, rawCount: arr.length };
 }
 
-/** App2 (Binary Signal Terminal): /api/agent/decisions?limit=N -> { decisions: [...] } */
+/**
+ * App2 (Binary Signal Terminal): /api/share-signals -> { rows: [...] }
+ *
+ * This endpoint returns a SNAPSHOT of all 15 pairs with their current
+ * signal. Each row has: pair, type, time (HH:MM string), signal (CALL/PUT/NEUTRAL/—),
+ * confidence (0-100 integer), strength, last_update, live.
+ *
+ * The `time` field is the candle time in HH:MM format (UTC, minute-floored).
+ * We convert it to a unix-seconds timestamp using today's UTC date.
+ *
+ * Live updates also flow through WebSocket /ws, but for our use case polling
+ * /api/share-signals every 5s is sufficient and simpler.
+ */
 async function fetchApp2(freshnessWindowSec: number, nowSec: number): Promise<NormalizeResult> {
   const src = SOURCES[1];
   let data: any;
@@ -379,44 +391,71 @@ async function fetchApp2(freshnessWindowSec: number, nowSec: number): Promise<No
   if (!data) {
     return { signals: [], health: "down", rawCount: 0, error: "empty_response" };
   }
-  const arr: any[] = Array.isArray(data?.decisions) ? data.decisions : [];
+  const arr: any[] = Array.isArray(data?.rows) ? data.rows : [];
   const health = data?.connected === false ? "down" : "ok";
 
-  // IMPORTANT: We no longer group-by-asset-to-latest here. We keep ALL
-  // signals so the aggregator can align them by candle-time across apps.
+  // The endpoint also gives a server timestamp (unix seconds, float).
+  const serverTs = Number(data?.timestamp ?? 0);
+  const serverSec = serverTs > 1e12 ? Math.floor(serverTs / 1000) : Math.floor(serverTs);
+
   const out: SourceSignal[] = [];
-  for (const d of arr) {
-    const a = d?.asset;
-    if (!a) continue;
-    const tsF = Number(d.ts ?? 0);
-    const ts = Math.floor(tsF);
-    const dir = String(d.signal ?? "").toUpperCase() as Direction;
-    if (dir !== "CALL" && dir !== "PUT") continue;
-    // App2 doesn't expose explicit candle time. Its ts is the decision time
-    // (e.g. 16:08:01.5 for the 16:09:00 candle). For 1m candles, decisions
-    // made during candle N predict candle N+1, so candleTime = ts floored
-    // to the minute + 60. But to be safe and align with the other apps
-    // (which use the candle the signal is FOR), we use ts floored to minute.
-    // If App2 actually means "this minute's candle", the +60 would be wrong.
-    // Empirical check: App2's ts at 16:08:00 matches App1's entryTime 16:08:00,
-    // so we use the simple minute-floor here.
-    const candleTime = Math.floor(ts / 60) * 60;
+  for (const r of arr) {
+    const pair = r?.pair;
+    if (!pair) continue;
+    const rawSignal = String(r?.signal ?? "").toUpperCase().trim();
+    // App2 uses "—" for "no signal this candle". Treat it as NEUTRAL / skip.
+    if (rawSignal !== "CALL" && rawSignal !== "PUT") continue;
+    const dir = rawSignal as Direction;
+
+    // Parse the "HH:MM" time string into a unix-seconds timestamp for today.
+    // If parsing fails, fall back to the server timestamp.
+    const timeStr = String(r?.time ?? "");
+    let candleTime = serverSec > 0 ? Math.floor(serverSec / 60) * 60 : nowSec;
+    const m = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+    if (m) {
+      const hh = parseInt(m[1], 10);
+      const mm = parseInt(m[2], 10);
+      if (hh >= 0 && hh < 24 && mm >= 0 && mm < 60) {
+        const now = new Date(nowSec * 1000);
+        const utcY = now.getUTCFullYear();
+        const utcM = now.getUTCMonth();
+        const utcD = now.getUTCDate();
+        const dt = Date.UTC(utcY, utcM, utcD, hh, mm, 0) / 1000;
+        // If the parsed time is more than 12h in the future, it's probably
+        // yesterday's candle (e.g. now is 23:50 and time says 00:10).
+        let ts = dt;
+        if (ts - nowSec > 12 * 3600) ts -= 24 * 3600;
+        candleTime = Math.floor(ts / 60) * 60;
+      }
+    }
+
+    // confidence comes as 0-100 integer; normalize to 0-1 for our schema.
+    const conf100 = typeof r?.confidence === "number" ? r.confidence : 0;
+    const confidence = conf100 > 0 ? conf100 / 100 : null;
+
+    // last_update is a float (seconds) — used as the actual signal timestamp.
+    const lastUpdate = Number(r?.last_update ?? 0);
+    const ts = lastUpdate > 0 ? Math.floor(lastUpdate) : candleTime;
     const ageSec = Math.max(0, nowSec - ts);
-    const pWin = typeof d.p_win === "number" ? d.p_win : null;
+
+    const strengthStr = typeof r?.strength === "string" ? r.strength.toUpperCase() : null;
+
     out.push({
       source: "app2",
       sourceName: src.name,
-      pair: a,
-      displayPair: displayPairFromAsset(a),
+      pair,
+      displayPair: displayPairFromAsset(pair),
       direction: dir,
-      confidence: pWin,
-      strength: pWin === null ? null : pWin >= 0.65 ? "STRONG" : pWin >= 0.55 ? "MEDIUM" : "WEAK",
+      confidence,
+      strength: strengthStr,
       timestamp: ts,
       candleTime,
       ageSec,
-      outcome: d.accuracy === "correct" ? "CORRECT" : d.accuracy === "wrong" ? "WRONG" : null,
-      strategy: d.verdict ? `verdict=${d.verdict}` : null,
-      reasons: d.reason ? [String(d.reason).slice(0, 200)] : null,
+      outcome: null,
+      strategy: r?.buyer_pct != null && r?.seller_pct != null
+        ? `buyers=${r.buyer_pct}% sellers=${r.seller_pct}%`
+        : null,
+      reasons: null,
       fresh: ageSec <= freshnessWindowSec,
     });
   }
