@@ -35,6 +35,9 @@ function fmtAgo(sec: number): string {
 
 function fmtClock(ms: number): string {
   if (!ms) return "--:--:--"
+  // Use the user's local timezone (no timeZone option). To avoid SSR/CSR
+  // hydration mismatch, callers must ensure this is only invoked with
+  // a real value on the client (e.g. via useState(0) + useEffect).
   return new Date(ms).toLocaleTimeString("en-GB", { hour12: false })
 }
 
@@ -314,8 +317,12 @@ export default function Home() {
 
   // Per-second wall clock — shown in the header so the user sees a ticking
   // HH:MM:SS even between data updates. Updates every 1s.
-  const [nowSec, setNowSec] = useState<number>(Date.now());
+  // Initialize to 0 so SSR renders "--:--:--" (placeholder). The actual
+  // time is set in useEffect after mount, which avoids hydration mismatch
+  // (server time vs client time / timezone would otherwise differ).
+  const [nowSec, setNowSec] = useState<number>(0);
   useEffect(() => {
+    setNowSec(Date.now());
     const t = setInterval(() => setNowSec(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
