@@ -1113,12 +1113,24 @@ function BacktestContent({ result }: { result: BacktestResult }) {
 
 function PairRow({ pair }: { pair: PairConsensus }) {
   const [expanded, setExpanded] = useState(false)
-  const c = pair.consensus
-  const meta = CONSENSUS_META[c.level]
-  const lc = pair.latestCandle
+  // Defensive: any of these fields may be missing if the snapshot came from
+  // an older cached version (e.g. mini-service hasn't been updated yet, or
+  // browser received a stale WS payload). Fall back to safe defaults so the
+  // table never crashes the page.
+  const c = pair.consensus ?? {
+    level: "none" as ConsensusLevel,
+    direction: null,
+    agreeingApps: [],
+    disagreeingApps: [],
+    missingApps: [],
+  }
+  const meta = CONSENSUS_META[c.level] ?? CONSENSUS_META.none
+  const lc = pair.latestCandle ?? null
+  const candles = Array.isArray(pair.candles) ? pair.candles : []
+  const signals = Array.isArray(pair.signals) ? pair.signals : []
 
   const getSignal = (id: AppId): SourceSignal | undefined =>
-    pair.signals.find((s) => s.source === id)
+    signals.find((s) => s.source === id)
 
   return (
     <>
@@ -1288,11 +1300,11 @@ function PairRow({ pair }: { pair: PairConsensus }) {
             </div>
 
             {/* Historical candles table — shows candle-aligned consensus over time */}
-            {pair.candles.length > 1 && (
+            {candles.length > 1 && (
               <div>
                 <div className="text-[11px] font-semibold text-slate-400 mb-1.5 flex items-center gap-1.5">
                   <Clock className="h-3 w-3" />
-                  Candle-aligned history ({pair.candles.length} candles, newest first)
+                  Candle-aligned history ({candles.length} candles, newest first)
                 </div>
                 <div className="rounded-md border border-slate-800 overflow-hidden max-h-48 overflow-y-auto">
                   <table className="w-full text-[11px]">
@@ -1306,7 +1318,7 @@ function PairRow({ pair }: { pair: PairConsensus }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {pair.candles.slice(0, 20).map((cnd: CandleConsensus) => (
+                      {candles.slice(0, 20).map((cnd: CandleConsensus) => (
                         <tr key={cnd.candleTime} className="border-b border-slate-800/40 last:border-0">
                           <td className="px-2 py-1 text-cyan-300 tabular-nums">
                             {fmtSigTime(cnd.candleTime)}
