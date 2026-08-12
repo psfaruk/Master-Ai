@@ -9,6 +9,7 @@
  */
 
 import { aggregateSignals, type AggregatedResponse } from "./signal-aggregator";
+import { startApp2CachePoller } from "./app2-cache";
 
 const POLL_INTERVAL_MS = 5000;
 const FRESHNESS_WINDOW_SEC = 1800;
@@ -39,6 +40,8 @@ async function pollOnce(): Promise<void> {
 export function startPoller(): void {
   if (started) return;
   started = true;
+  // Start the App 2 historical-signal cache poller too (it runs in parallel).
+  startApp2CachePoller();
   // Kick off the first poll immediately (async, don't block).
   pollOnce();
   pollTimer = setInterval(pollOnce, POLL_INTERVAL_MS);

@@ -10,6 +10,7 @@
  */
 
 import { fetchJsonWithTimeout } from "./backtest-fetcher";
+import { getApp2CachedSignalsForPair, getAllCachedApp2Signals, getAllCachedApp2Pairs, startApp2CachePoller } from "./app2-cache";
 
 export type Direction = "CALL" | "PUT" | "NEUTRAL";
 export type AppId = "app1" | "app2" | "app3";
@@ -374,41 +375,54 @@ async function fetchApp1(freshnessWindowSec: number, nowSec: number): Promise<No
  * signal. Each row has: pair, type, time (HH:MM string), signal (CALL/PUT/NEUTRAL/—),
  * confidence (0-100 integer), strength, last_update, live.
  *
- * The `time` field is the candle time in HH:MM format (UTC, minute-floored).
- * We convert it to a unix-seconds timestamp using today's UTC date.
+ * IMPORTANT: The snapshot only contains the CURRENT candle's signal. Once a
+ * new candle starts, the previous signal is gone. To build a proper candle-
+ * aligned consensus with App 1 and App 3 (which keep historical data), we
+ * also pull from our own App 2 historical cache (see app2-cache.ts) which
+ * polls /api/share-signals every 5s and remembers each candle's signal.
  *
- * Live updates also flow through WebSocket /ws, but for our use case polling
- * /api/share-signals every 5s is sufficient and simpler.
+ * The aggregator will then have App 2 signals for many historical candles,
+ * not just the current one.
  */
 async function fetchApp2(freshnessWindowSec: number, nowSec: number): Promise<NormalizeResult> {
+  // Ensure the App 2 cache poller is running (idempotent).
+  startApp2CachePoller();
+
   const src = SOURCES[1];
   let data: any;
   try {
     data = await fetchJsonWithTimeout(`${src.baseUrl}${src.signalsPath}`, FETCH_TIMEOUT_MS);
   } catch {
-    return { signals: [], health: "down", rawCount: 0, error: "fetch_failed" };
+    // Even if the live snapshot fails, we can still serve from cache.
+    return { signals: getApp2CachedSignalsAllPairs(nowSec, freshnessWindowSec, src.name), health: "down", rawCount: 0, error: "fetch_failed" };
   }
-  if (!data) {
-    return { signals: [], health: "down", rawCount: 0, error: "empty_response" };
-  }
+
   const arr: any[] = Array.isArray(data?.rows) ? data.rows : [];
   const health = data?.connected === false ? "down" : "ok";
-
-  // The endpoint also gives a server timestamp (unix seconds, float).
   const serverTs = Number(data?.timestamp ?? 0);
   const serverSec = serverTs > 1e12 ? Math.floor(serverTs / 1000) : Math.floor(serverTs);
 
+  // Build a set of all pairs we know about: from the snapshot AND from our
+  // App 2 historical cache. This way even if a pair is currently NEUTRAL in
+  // the snapshot, we still pull its historical cached signals.
+  const allPairs = new Set<string>();
+  for (const r of arr) {
+    if (r?.pair) allPairs.add(r.pair);
+  }
+  for (const p of getAllCachedApp2Pairs()) allPairs.add(p);
+
   const out: SourceSignal[] = [];
+  // Map of (pair|candleTime) -> SourceSignal for dedup
+  const seenCandles = new Set<string>();
+
+  // First: current snapshot signals (only non-NEUTRAL ones)
   for (const r of arr) {
     const pair = r?.pair;
     if (!pair) continue;
     const rawSignal = String(r?.signal ?? "").toUpperCase().trim();
-    // App2 uses "—" for "no signal this candle". Treat it as NEUTRAL / skip.
     if (rawSignal !== "CALL" && rawSignal !== "PUT") continue;
     const dir = rawSignal as Direction;
 
-    // Parse the "HH:MM" time string into a unix-seconds timestamp for today.
-    // If parsing fails, fall back to the server timestamp.
     const timeStr = String(r?.time ?? "");
     let candleTime = serverSec > 0 ? Math.floor(serverSec / 60) * 60 : nowSec;
     const m = timeStr.match(/^(\d{1,2}):(\d{2})$/);
@@ -417,29 +431,21 @@ async function fetchApp2(freshnessWindowSec: number, nowSec: number): Promise<No
       const mm = parseInt(m[2], 10);
       if (hh >= 0 && hh < 24 && mm >= 0 && mm < 60) {
         const now = new Date(nowSec * 1000);
-        const utcY = now.getUTCFullYear();
-        const utcM = now.getUTCMonth();
-        const utcD = now.getUTCDate();
-        const dt = Date.UTC(utcY, utcM, utcD, hh, mm, 0) / 1000;
-        // If the parsed time is more than 12h in the future, it's probably
-        // yesterday's candle (e.g. now is 23:50 and time says 00:10).
+        const dt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hh, mm, 0) / 1000;
         let ts = dt;
         if (ts - nowSec > 12 * 3600) ts -= 24 * 3600;
         candleTime = Math.floor(ts / 60) * 60;
       }
     }
 
-    // confidence comes as 0-100 integer; normalize to 0-1 for our schema.
     const conf100 = typeof r?.confidence === "number" ? r.confidence : 0;
     const confidence = conf100 > 0 ? conf100 / 100 : null;
-
-    // last_update is a float (seconds) — used as the actual signal timestamp.
     const lastUpdate = Number(r?.last_update ?? 0);
     const ts = lastUpdate > 0 ? Math.floor(lastUpdate) : candleTime;
     const ageSec = Math.max(0, nowSec - ts);
-
     const strengthStr = typeof r?.strength === "string" ? r.strength.toUpperCase() : null;
 
+    seenCandles.add(`${pair}|${candleTime}`);
     out.push({
       source: "app2",
       sourceName: src.name,
@@ -460,7 +466,71 @@ async function fetchApp2(freshnessWindowSec: number, nowSec: number): Promise<No
     });
   }
 
-  return { signals: out, health, rawCount: arr.length };
+  // Then: pull historical signals from our App 2 cache for ALL known pairs.
+  // These are signals from previous candles that the snapshot no longer shows.
+  // We dedupe by (pair, candleTime) — current snapshot wins.
+  const cachedSignals: SourceSignal[] = [];
+  for (const pair of allPairs) {
+    const cached = getApp2CachedSignalsForPair(pair);
+    for (const c of cached) {
+      const key = `${c.pair}|${c.candleTime}`;
+      if (seenCandles.has(key)) continue;
+      seenCandles.add(key);
+      const ageSec = Math.max(0, nowSec - c.candleTime);
+      cachedSignals.push({
+        source: "app2",
+        sourceName: src.name,
+        pair: c.pair,
+        displayPair: displayPairFromAsset(c.pair),
+        direction: c.signal,
+        confidence: c.confidence,
+        strength: c.strength,
+        timestamp: c.candleTime,
+        candleTime: c.candleTime,
+        ageSec,
+        outcome: null,
+        strategy: c.buyerPct != null && c.sellerPct != null
+          ? `buyers=${c.buyerPct}% sellers=${c.sellerPct}%`
+          : null,
+        reasons: null,
+        fresh: ageSec <= freshnessWindowSec,
+      });
+    }
+  }
+
+  return { signals: [...out, ...cachedSignals], health, rawCount: arr.length };
+}
+
+/**
+ * Helper: get all cached App 2 signals as SourceSignal[]. Used when the live
+ * snapshot fetch fails entirely (so we still have *some* App 2 data from
+ * our own historical cache).
+ */
+function getApp2CachedSignalsAllPairs(nowSec: number, freshnessWindowSec: number, srcName: string): SourceSignal[] {
+  const out: SourceSignal[] = [];
+  const cached = getAllCachedApp2Signals();
+  for (const c of cached) {
+    const ageSec = Math.max(0, nowSec - c.candleTime);
+    out.push({
+      source: "app2",
+      sourceName: srcName,
+      pair: c.pair,
+      displayPair: displayPairFromAsset(c.pair),
+      direction: c.signal,
+      confidence: c.confidence,
+      strength: c.strength,
+      timestamp: c.candleTime,
+      candleTime: c.candleTime,
+      ageSec,
+      outcome: null,
+      strategy: c.buyerPct != null && c.sellerPct != null
+        ? `buyers=${c.buyerPct}% sellers=${c.sellerPct}%`
+        : null,
+      reasons: null,
+      fresh: ageSec <= freshnessWindowSec,
+    });
+  }
+  return out;
 }
 
 /** App3 (OTC Live Trading): /api/signals?limit=N -> [...] */
@@ -670,15 +740,14 @@ export async function aggregateSignals(
     // Sort candles newest first
     candleEntries.sort((a, b) => b.candleTime - a.candleTime);
 
-    // Pick the "latest candle" for display:
-    // Prefer the newest candle with 2+ agreeing apps; fall back to the newest
-    // candle overall; if no candles, null.
+    // Pick the "latest candle" for display. We always show the NEWEST candle
+    // (candleEntries[0], since sorted newest-first). The user explicitly wants
+    // "if any candle data is missing, signal should be closed/none" — so we
+    // don't skip back to find an agreeing candle. The newest candle's
+    // consensus IS the pair's current consensus.
     let latestCandle: CandleConsensus | null = null;
     if (candleEntries.length > 0) {
-      latestCandle =
-        candleEntries.find((c) => c.consensus.level === "3-agree") ??
-        candleEntries.find((c) => c.consensus.level === "2-agree") ??
-        candleEntries[0];
+      latestCandle = candleEntries[0];
     }
 
     // The pair's overall consensus = the latest candle's consensus.

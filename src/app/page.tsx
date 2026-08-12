@@ -175,6 +175,17 @@ export default function Home() {
     }
   }, [])
 
+  // Auto-run backtest on mount (after 5s to let the snapshot load first)
+  // and then every 2 minutes so the win-rate panel stays current.
+  useEffect(() => {
+    const initialTimer = setTimeout(() => { runBacktest(); }, 5000);
+    const intervalTimer = setInterval(() => { runBacktest(); }, 120000);
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(intervalTimer);
+    };
+  }, [runBacktest]);
+
   const fetchData = useCallback(async (silent = false) => {
     if (!silent) setIsRefreshing(true)
     try {
@@ -1306,7 +1317,7 @@ function PairRow({ pair }: { pair: PairConsensus }) {
                   <Clock className="h-3 w-3" />
                   Candle-aligned history ({candles.length} candles, newest first)
                 </div>
-                <div className="rounded-md border border-slate-800 overflow-hidden max-h-48 overflow-y-auto">
+                <div className="rounded-md border border-slate-800 overflow-hidden max-h-64 overflow-y-auto">
                   <table className="w-full text-[11px]">
                     <thead className="sticky top-0">
                       <tr className="bg-slate-900/95 border-b border-slate-800">
@@ -1315,10 +1326,40 @@ function PairRow({ pair }: { pair: PairConsensus }) {
                         <th className="text-center font-medium text-slate-400 px-1 py-1">A2</th>
                         <th className="text-center font-medium text-slate-400 px-1 py-1">A3</th>
                         <th className="text-center font-medium text-slate-400 px-2 py-1">Consensus</th>
+                        <th className="text-center font-medium text-slate-400 px-1 py-1">Outcome</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {candles.slice(0, 20).map((cnd: CandleConsensus) => (
+                      {candles.slice(0, 30).map((cnd: CandleConsensus) => {
+                        // Compute the consensus outcome from the agreeing apps' outcomes.
+                        // If any agreeing app's outcome is WIN/CORRECT → win.
+                        // If any is LOSS/WRONG → loss. Else unknown.
+                        const agreeing = cnd.signals.filter((s) =>
+                          cnd.consensus.agreeingApps.includes(s.source)
+                        );
+                        const outcomes = agreeing
+                          .map((s) => s.outcome)
+                          .filter((o): o is NonNullable<typeof o> => o != null);
+                        let outcomeLabel: string = "—";
+                        let outcomeColor: string = "text-slate-500";
+                        if (outcomes.length > 0) {
+                          const hasWin = outcomes.some((o) => o === "WIN" || o === "CORRECT");
+                          const hasLoss = outcomes.some((o) => o === "LOSS" || o === "WRONG");
+                          if (hasWin && !hasLoss) {
+                            outcomeLabel = "WIN";
+                            outcomeColor = "text-emerald-400";
+                          } else if (hasLoss && !hasWin) {
+                            outcomeLabel = "LOSS";
+                            outcomeColor = "text-rose-400";
+                          } else if (hasWin && hasLoss) {
+                            outcomeLabel = "MIXED";
+                            outcomeColor = "text-amber-400";
+                          } else {
+                            outcomeLabel = "DRAW";
+                            outcomeColor = "text-slate-400";
+                          }
+                        }
+                        return (
                         <tr key={cnd.candleTime} className="border-b border-slate-800/40 last:border-0">
                           <td className="px-2 py-1 text-cyan-300 tabular-nums">
                             {fmtSigTime(cnd.candleTime)}
@@ -1360,8 +1401,12 @@ function PairRow({ pair }: { pair: PairConsensus }) {
                               )}
                             </span>
                           </td>
+                          <td className={cn("px-1 py-1 text-center text-[10px] font-bold", outcomeColor)}>
+                            {outcomeLabel}
+                          </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
