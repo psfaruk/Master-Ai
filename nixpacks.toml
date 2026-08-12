@@ -1,0 +1,30 @@
+# Nixpacks configuration for Railway
+# Builds the Next.js app with standalone output and runs it.
+
+[phases.setup]
+nixPkgs = ["nodejs_20", "bun"]
+
+[phases.install]
+cmds = [
+  "echo 'Installing dependencies with bun...'",
+  "bun install --frozen-lockfile"
+]
+
+[phases.build]
+cmds = [
+  "echo 'Building Next.js app...'",
+  # Next.js build with standalone output — produces .next/standalone/server.js
+  "bun run build",
+  # Copy the static + public assets into the standalone bundle so the
+  # server can serve them in production.
+  "cp -r .next/static .next/standalone/.next/",
+  "cp -r public .next/standalone/ 2>/dev/null || true"
+]
+
+[start]
+cmd = "node .next/standalone/server.js"
+
+[variables]
+NODE_ENV = "production"
+PORT = "{{ PORT }}"
+HOSTNAME = "0.0.0.0"

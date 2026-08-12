@@ -52,3 +52,20 @@ prompt
 server.log
 # Skills directory
 /skills/
+# Railway / build artifacts
+.railway/
+railway.log
+
+# Mini-service logs
+/mini-services/signal-pusher/log.txt
+/mini-services/signal-pusher/watchdog.log
+
+# Z scripts internal
+/.zscripts/
+
+# Download / upload temp
+/download/
+/upload/
+
+# Backtest output
+backtest_result.json
