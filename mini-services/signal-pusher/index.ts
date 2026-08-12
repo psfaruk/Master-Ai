@@ -140,7 +140,9 @@ const SOURCES = [
     id: "app3" as const,
     name: "OTC Live Trading",
     baseUrl: "https://otc-live-trading-production.up.railway.app",
-    signalsPath: "/api/signals?limit=300",
+    // share-signals = current candle live; historical = resolved signals
+    signalsPath: "/api/share-signals",
+    historicalPath: "/api/signals?limit=300",
     healthPath: "/api/token-status",
   },
 ] as const;
@@ -361,43 +363,78 @@ async function fetchApp2Signals(nowSec: number): Promise<{ signals: SourceSignal
 
 async function fetchApp3Signals(nowSec: number): Promise<{ signals: SourceSignal[]; rawCount: number; error?: string }> {
   const src = SOURCES[2];
-  let data: any;
-  try {
-    data = await fetchJsonWithTimeout(`${src.baseUrl}${src.signalsPath}`);
-  } catch {
-    return { signals: [], rawCount: 0, error: "fetch_failed" };
-  }
-  if (!data) return { signals: [], rawCount: 0, error: "empty" };
-  const arr: any[] = Array.isArray(data) ? data : Array.isArray(data?.signals) ? data.signals : [];
-  // Keep ALL signals (no latest-only grouping) so the aggregator can align
-  // them by candle-time across apps.
   const out: SourceSignal[] = [];
-  for (const s of arr) {
-    const asset = s?.asset;
-    if (!asset) continue;
-    const ts = Math.floor(Number(s.ctime ?? 0));
-    const dir = String(s.signal ?? "").toUpperCase() as Direction;
-    if (dir !== "CALL" && dir !== "PUT") continue;
-    const candleTime = Math.floor(ts / 60) * 60;
-    const ageSec = Math.max(0, nowSec - ts);
-    out.push({
-      source: "app3",
-      sourceName: src.name,
-      pair: asset,
-      displayPair: displayPairFromAsset(asset),
-      direction: dir,
-      confidence: typeof s.confidence === "number" ? s.confidence : null,
-      strength: typeof s.strength === "string" ? s.strength : null,
-      timestamp: ts,
-      candleTime,
-      ageSec,
-      outcome: s.result === "correct" ? "CORRECT" : s.result === "wrong" ? "WRONG" : s.result === "draw" ? "DRAW" : null,
-      strategy: typeof s.codes === "string" && s.codes ? s.codes : null,
-      reasons: null,
-      fresh: ageSec <= FRESHNESS_WINDOW_SEC,
-    });
+  const seenCandles = new Set<string>();
+  let rawCount = 0;
+  let error: string | undefined;
+
+  // 1. Historical resolved signals (have WIN/LOSS outcomes)
+  const histPath = (src as any).historicalPath ?? "/api/signals?limit=300";
+  try {
+    const histData = await fetchJsonWithTimeout(`${src.baseUrl}${histPath}`);
+    if (histData) {
+      const arr: any[] = Array.isArray(histData) ? histData : (Array.isArray(histData?.signals) ? histData.signals : []);
+      rawCount = arr.length;
+      for (const s of arr) {
+        const asset = s?.asset;
+        if (!asset) continue;
+        const ts = Math.floor(Number(s.ctime ?? 0));
+        const dir = String(s.signal ?? "").toUpperCase() as Direction;
+        if (dir !== "CALL" && dir !== "PUT") continue;
+        const candleTime = Math.floor(ts / 60) * 60;
+        const ageSec = Math.max(0, nowSec - ts);
+        seenCandles.add(`${asset}|${candleTime}`);
+        out.push({
+          source: "app3", sourceName: src.name, pair: asset,
+          displayPair: displayPairFromAsset(asset),
+          direction: dir,
+          confidence: typeof s.confidence === "number" ? s.confidence : null,
+          strength: typeof s.strength === "string" ? s.strength : null,
+          timestamp: ts, candleTime, ageSec,
+          outcome: s.result === "correct" ? "CORRECT" : s.result === "wrong" ? "WRONG" : s.result === "draw" ? "DRAW" : null,
+          strategy: typeof s.codes === "string" && s.codes ? s.codes : null,
+          reasons: null,
+          fresh: ageSec <= FRESHNESS_WINDOW_SEC,
+        });
+      }
+    }
+  } catch { /* keep going for live */ }
+
+  // 2. Current live signals from /api/share-signals
+  try {
+    const liveData = await fetchJsonWithTimeout(`${src.baseUrl}${src.signalsPath}`);
+    if (liveData) {
+      const liveArr: any[] = Array.isArray(liveData?.signals) ? liveData.signals : (Array.isArray(liveData) ? liveData : []);
+      for (const r of liveArr) {
+        const asset = r?.asset;
+        if (!asset) continue;
+        const rawSignal = String(r?.signal ?? "").toUpperCase().trim();
+        if (rawSignal !== "CALL" && rawSignal !== "PUT") continue;
+        const dir = rawSignal as Direction;
+        const ts = Math.floor(Number(r?.time ?? 0));
+        const candleTime = ts > 0 ? Math.floor(ts / 60) * 60 : Math.floor(nowSec / 60) * 60;
+        const key = `${asset}|${candleTime}`;
+        if (seenCandles.has(key)) continue;
+        seenCandles.add(key);
+        const ageSec = Math.max(0, nowSec - ts);
+        out.push({
+          source: "app3", sourceName: src.name, pair: asset,
+          displayPair: displayPairFromAsset(asset),
+          direction: dir,
+          confidence: typeof r?.confidence === "number" ? r.confidence : null,
+          strength: typeof r?.strength === "string" ? r.strength : null,
+          timestamp: ts > 0 ? ts : candleTime,
+          candleTime, ageSec,
+          outcome: null, strategy: null, reasons: null,
+          fresh: ageSec <= FRESHNESS_WINDOW_SEC,
+        });
+      }
+    }
+  } catch {
+    if (out.length === 0) error = "fetch_failed";
   }
-  return { signals: out, rawCount: arr.length };
+
+  return { signals: out, rawCount, error };
 }
 
 // ---------------------------------------------------------------------------

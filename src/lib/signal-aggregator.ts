@@ -151,7 +151,11 @@ const SOURCES = [
     name: "OTC Live Trading",
     shortName: "App 3",
     baseUrl: "https://otc-live-trading-production.up.railway.app",
-    signalsPath: "/api/signals?limit=300",
+    // share-signals gives us the CURRENT candle's live signal (real-time).
+    // We also fetch /api/signals?limit=300 for historical/resolved signals
+    // inside fetchApp3() below.
+    signalsPath: "/api/share-signals",
+    historicalPath: "/api/signals?limit=300",
     healthPath: "/api/token-status",
     accent: "emerald",
   },
@@ -533,52 +537,117 @@ function getApp2CachedSignalsAllPairs(nowSec: number, freshnessWindowSec: number
   return out;
 }
 
-/** App3 (OTC Live Trading): /api/signals?limit=N -> [...] */
+/**
+ * App3 (OTC Live Trading): /api/share-signals (current) + /api/signals?limit=N (historical)
+ *
+ * App 3 has TWO relevant endpoints:
+ *   1. /api/share-signals -> { signals: [...] } — the CURRENT candle's live
+ *      signal for all 16 pairs. Each row has: asset, display, type, time
+ *      (unix seconds for the candle being predicted), signal, strength,
+ *      confidence (0-1 float), prediction_candle {open,high,low,close}.
+ *   2. /api/signals?limit=N -> [...] — RESOLVED historical signals (the
+ *      candle has closed, result is known: correct/wrong/draw).
+ *
+ * We need BOTH: the live signal for the current candle (so consensus can
+ * align with App 1 and App 2 which also predict the current candle), plus
+ * historical signals for backtest win-rate calculation.
+ *
+ * We merge them, deduping by (pair, candleTime). When both exist for the
+ * same candle, the historical one wins (it has the resolved outcome).
+ */
 async function fetchApp3(freshnessWindowSec: number, nowSec: number): Promise<NormalizeResult> {
   const src = SOURCES[2];
-  let data: any;
-  try {
-    data = await fetchJsonWithTimeout(`${src.baseUrl}${src.signalsPath}`, FETCH_TIMEOUT_MS);
-  } catch {
-    return { signals: [], health: "down", rawCount: 0, error: "fetch_failed" };
-  }
-  if (!data) {
-    return { signals: [], health: "down", rawCount: 0, error: "empty_response" };
-  }
-  const arr: any[] = Array.isArray(data) ? data : (Array.isArray(data?.signals) ? data.signals : []);
-  const health = data?.connected === false ? "down" : "ok";
-
-  // IMPORTANT: We no longer group-by-asset-to-latest here. We keep ALL
-  // signals so the aggregator can align them by candle-time across apps.
   const out: SourceSignal[] = [];
-  for (const s of arr) {
-    const a = s?.asset;
-    if (!a) continue;
-    const ts = Math.floor(Number(s.ctime ?? 0));
-    const dir = String(s.signal ?? "").toUpperCase() as Direction;
-    if (dir !== "CALL" && dir !== "PUT") continue;
-    // App3's ctime is the candle time (the minute the signal is for).
-    const candleTime = Math.floor(ts / 60) * 60;
-    const ageSec = Math.max(0, nowSec - ts);
-    out.push({
-      source: "app3",
-      sourceName: src.name,
-      pair: a,
-      displayPair: displayPairFromAsset(a),
-      direction: dir,
-      confidence: typeof s.confidence === "number" ? s.confidence : null,
-      strength: typeof s.strength === "string" ? s.strength : null,
-      timestamp: ts,
-      candleTime,
-      ageSec,
-      outcome: s.result === "correct" ? "CORRECT" : s.result === "wrong" ? "WRONG" : s.result === "draw" ? "DRAW" : null,
-      strategy: typeof s.codes === "string" && s.codes ? s.codes : null,
-      reasons: null,
-      fresh: ageSec <= freshnessWindowSec,
-    });
+  const seenCandles = new Set<string>(); // pair|candleTime
+  let health: AppStatus["health"] = "ok";
+  let rawCount = 0;
+  let fetchError: string | undefined;
+
+  // --- 1. Fetch RESOLVED historical signals (these have WIN/LOSS outcomes) ---
+  const histUrl = `${src.baseUrl}${(src as any).historicalPath ?? "/api/signals?limit=300"}`;
+  try {
+    const histData = await fetchJsonWithTimeout(histUrl, FETCH_TIMEOUT_MS);
+    if (histData) {
+      const arr: any[] = Array.isArray(histData) ? histData : (Array.isArray(histData?.signals) ? histData.signals : []);
+      rawCount = arr.length;
+      for (const s of arr) {
+        const a = s?.asset;
+        if (!a) continue;
+        const ts = Math.floor(Number(s.ctime ?? 0));
+        const dir = String(s.signal ?? "").toUpperCase() as Direction;
+        if (dir !== "CALL" && dir !== "PUT") continue;
+        const candleTime = Math.floor(ts / 60) * 60;
+        const ageSec = Math.max(0, nowSec - ts);
+        const key = `${a}|${candleTime}`;
+        seenCandles.add(key);
+        out.push({
+          source: "app3",
+          sourceName: src.name,
+          pair: a,
+          displayPair: displayPairFromAsset(a),
+          direction: dir,
+          confidence: typeof s.confidence === "number" ? s.confidence : null,
+          strength: typeof s.strength === "string" ? s.strength : null,
+          timestamp: ts,
+          candleTime,
+          ageSec,
+          outcome: s.result === "correct" ? "CORRECT" : s.result === "wrong" ? "WRONG" : s.result === "draw" ? "DRAW" : null,
+          strategy: typeof s.codes === "string" && s.codes ? s.codes : null,
+          reasons: null,
+          fresh: ageSec <= freshnessWindowSec,
+        });
+      }
+    }
+  } catch {
+    // Historical fetch failed — keep going, we still want live signals.
   }
 
-  return { signals: out, health, rawCount: arr.length };
+  // --- 2. Fetch CURRENT live signals from /api/share-signals ---
+  try {
+    const liveData = await fetchJsonWithTimeout(`${src.baseUrl}${src.signalsPath}`, FETCH_TIMEOUT_MS);
+    if (liveData) {
+      const liveArr: any[] = Array.isArray(liveData?.signals) ? liveData.signals : (Array.isArray(liveData) ? liveData : []);
+      for (const r of liveArr) {
+        const a = r?.asset;
+        if (!a) continue;
+        const rawSignal = String(r?.signal ?? "").toUpperCase().trim();
+        if (rawSignal !== "CALL" && rawSignal !== "PUT") continue;
+        const dir = rawSignal as Direction;
+        // App 3's share-signals `time` is a unix-seconds timestamp for the
+        // candle being predicted.
+        const ts = Math.floor(Number(r?.time ?? 0));
+        const candleTime = ts > 0 ? Math.floor(ts / 60) * 60 : Math.floor(nowSec / 60) * 60;
+        const key = `${a}|${candleTime}`;
+        if (seenCandles.has(key)) continue; // historical already has this candle
+        seenCandles.add(key);
+        const ageSec = Math.max(0, nowSec - ts);
+        out.push({
+          source: "app3",
+          sourceName: src.name,
+          pair: a,
+          displayPair: displayPairFromAsset(a),
+          direction: dir,
+          confidence: typeof r?.confidence === "number" ? r.confidence : null,
+          strength: typeof r?.strength === "string" ? r.strength : null,
+          timestamp: ts > 0 ? ts : candleTime,
+          candleTime,
+          ageSec,
+          outcome: null, // live signal, not yet resolved
+          strategy: null,
+          reasons: null,
+          fresh: ageSec <= freshnessWindowSec,
+        });
+      }
+    }
+  } catch {
+    if (out.length === 0) {
+      // Both fetches failed
+      health = "down";
+      fetchError = "fetch_failed";
+    }
+  }
+
+  return { signals: out, health, rawCount, error: fetchError };
 }
 
 // ---- Aggregator entrypoint ----------------------------------------------

@@ -260,13 +260,34 @@ export async function runBacktest(): Promise<BacktestResult> {
     });
   }
 
-  // App3 — historical signals with correct/wrong outcome
+  // App3 — historical resolved signals + current live signals
+  // Historical has correct/wrong outcome; live has no outcome (current candle).
   try {
     const d = await fetchJsonWithTimeout(SOURCES.app3.url);
     const arr: any[] = Array.isArray(d) ? d : Array.isArray(d?.signals) ? d.signals : [];
     for (const s of arr) {
       const n = normalizeApp3(s);
       if (n) allSignals.push(n);
+    }
+  } catch { /* ignore */ }
+  // Also fetch App 3 live signals from /api/share-signals so the current
+  // candle (which may not yet be in the historical endpoint) is included.
+  try {
+    const liveUrl = "https://otc-live-trading-production.up.railway.app/api/share-signals";
+    const d = await fetchJsonWithTimeout(liveUrl);
+    const liveArr: any[] = Array.isArray(d?.signals) ? d.signals : (Array.isArray(d) ? d : []);
+    for (const r of liveArr) {
+      const asset = r?.asset;
+      if (!asset) continue;
+      const rawSignal = String(r?.signal ?? "").toUpperCase().trim();
+      if (rawSignal !== "CALL" && rawSignal !== "PUT") continue;
+      const ts = Math.floor(Number(r?.time ?? 0));
+      const candleTime = ts > 0 ? Math.floor(ts / 60) * 60 : Math.floor(nowSec / 60) * 60;
+      allSignals.push({
+        source: "app3", pair: asset, ts, candleTime,
+        direction: rawSignal as "CALL" | "PUT",
+        outcome: null, rawStatus: null,
+      });
     }
   } catch { /* ignore */ }
 
