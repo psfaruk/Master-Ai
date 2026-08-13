@@ -135,8 +135,18 @@ they both cover.
 - `pairOverlap[].onlyIn` non-empty → the apps genuinely cover different assets
   (after canonicalization, spelling differences are no longer possible).
 - `offsets[].modalOffsetCandles ≠ 0` → the two apps label candles differently:
-  one tags the candle it analysed, the other the candle it predicts. Correct it
-  with an environment variable rather than a code change:
+  one tags the candle it analysed, the other the candle it predicts.
+
+  **App 2's known offset is already handled in code** — do not re-apply it.
+  Its `/api/share-signals` reports `candles[-1]["time"]`, the last *closed*
+  candle, while the prediction attached to that row is for the candle that is
+  now running (`feed.py` opens it at `last["time"] + period`). App 1
+  (`entryTime`) and App 3 (`time`) both label the candle they predict, so
+  `app2-cache.ts` shifts App 2 forward by one candle when parsing. Setting
+  `APP2_CANDLE_OFFSET=1` on top of that would push it one candle too far.
+
+  For any *remaining* offset, correct it with an environment variable rather
+  than a code change:
 
   ```bash
   APP1_CANDLE_OFFSET=0    # candles to shift App 1's bucket by
@@ -145,6 +155,17 @@ they both cover.
   ```
 
   `/api/diag` prints the exact variable to set in `offsets[].hint`.
+
+## Source-app quirks this code compensates for
+
+| App | Quirk | Handled by |
+|---|---|---|
+| App 2 | `time` is the **last closed** candle; the signal is for the **next** one | `+1 candle` in `normalizeApp2Row()` |
+| App 2 | `last_update` is **seconds ago**, not a unix timestamp | read as an age; emission time is taken from the candle open |
+| App 2 | keeps no history — only the current candle is exposed | `app2-cache.ts` records every candle it sees |
+| App 2 | rows for pairs with no stream carry `time: "—"` | skipped rather than bucketed by guess |
+| App 3 | `ctime` / `time` can arrive in milliseconds | `toUnixSeconds()` |
+| All | three different pair spellings for the same asset | `canonicalPair()` |
 
 ## Consensus rules
 

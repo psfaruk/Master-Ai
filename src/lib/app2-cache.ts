@@ -25,6 +25,7 @@ import {
   parseDirection,
   resolveClockToCandle,
   toUnixSeconds,
+  CANDLE_SEC,
   PAIR_KEYS,
   DIRECTION_KEYS,
 } from "./signal-normalize";
@@ -38,11 +39,16 @@ export interface CachedSignal {
   signal: "CALL" | "PUT";
   confidence: number | null; // 0-1
   strength: string | null;
-  candleTime: number; // unix seconds, minute-floored
+  /** Unix seconds, minute-floored — the candle this signal PREDICTS. */
+  candleTime: number;
   /** When we FIRST observed this candle's signal (unix seconds). */
   firstSeenSec: number;
   /** When we last observed it (unix ms) — used for TTL pruning. */
   capturedAt: number;
+  /** Seconds since App 2 last received a tick for this pair (its own metric). */
+  lastTickAgeSec: number | null;
+  /** App 2's own liveness flag for the pair's stream. */
+  live: boolean;
   buyerPct: number | null;
   sellerPct: number | null;
 }
@@ -94,14 +100,37 @@ export function normalizeApp2Row(row: any, refSec: number): CachedSignal | null 
   const signal = parseDirection(pickField(row, DIRECTION_KEYS));
   if (!signal) return null; // NEUTRAL / "—" / unknown
 
-  // App 2 reports a wall-clock "HH:MM". Resolve it against the reference
-  // clock so a non-UTC render doesn't push the signal hours out of alignment.
-  // If the row carries an absolute timestamp, prefer it outright.
+  // --- Candle ---------------------------------------------------------
+  // App 2's `time` is the close time of the LAST CLOSED candle, rendered as
+  // "HH:MM" UTC. Verified in the source app (server.py /api/share-signals):
+  //
+  //     last_candle = candles[-1]              # candles holds CLOSED candles
+  //     time_str = utc(last_candle["time"]).strftime("%H:%M")
+  //
+  // and the attached prediction comes from _run_eoc(), which runs at that
+  // candle's close and predicts the candle that is now RUNNING — i.e.
+  // candles[-1]["time"] + one period (feed.py sets
+  // candle_open_time = last["time"] + period).
+  //
+  // So App 2's row is labelled ONE CANDLE BEHIND the candle its signal is
+  // actually about, while App 1 (entryTime) and App 3 (time) both label the
+  // candle they predict. Reading `time` verbatim put App 2 in the previous
+  // bucket forever, which is why its dashboard column was always empty.
   const absolute = toUnixSeconds(
     pickField(row, ["candle_time", "candleTime", "candle_ts", "entry_time", "entryTime"])
   );
-  const timeStr = String(pickField(row, ["time", "candle", "clock"]) ?? "");
-  const candleTime = absolute > 0 ? candleFloor(absolute) : resolveClockToCandle(timeStr, refSec);
+  let candleTime: number;
+  if (absolute > 0) {
+    // An explicit candle field, if App 2 ever adds one, already means the
+    // candle itself — no shift.
+    candleTime = candleFloor(absolute);
+  } else {
+    const timeStr = String(pickField(row, ["time", "candle", "clock"]) ?? "");
+    // Rows for a pair with no stream carry time "—". Guessing a candle for
+    // those would plant a signal in the wrong bucket, so skip them instead.
+    if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(timeStr.trim())) return null;
+    candleTime = resolveClockToCandle(timeStr, refSec) + CANDLE_SEC;
+  }
   if (!(candleTime > 0)) return null;
 
   const rawConf = pickField(row, ["confidence", "conf", "score"]);
@@ -114,7 +143,17 @@ export function normalizeApp2Row(row: any, refSec: number): CachedSignal | null 
   const rawStrength = pickField(row, ["strength", "quality"]);
   const strength = typeof rawStrength === "string" ? rawStrength.toUpperCase() : null;
 
-  const lastUpdate = toUnixSeconds(pickField(row, ["last_update", "lastUpdate", "updated_at", "ts"]));
+  // --- Liveness ---------------------------------------------------------
+  // `last_update` is SECONDS AGO, not a unix timestamp:
+  //
+  //     last_update = round(now - last_tick, 0) if last_tick > 0 else None
+  //
+  // Reading it as an absolute time produced a timestamp near the epoch, so
+  // every App 2 signal looked ~56 years stale and was dropped as not fresh —
+  // the direct cause of App 2's empty column. It is an age, and only useful
+  // as one.
+  const rawAge = Number(pickField(row, ["last_update", "lastUpdate", "age_sec"]));
+  const lastTickAgeSec = Number.isFinite(rawAge) && rawAge >= 0 ? rawAge : null;
 
   const buyer = Number(pickField(row, ["buyer_pct", "buyers", "buyerPct"]));
   const seller = Number(pickField(row, ["seller_pct", "sellers", "sellerPct"]));
@@ -125,8 +164,12 @@ export function normalizeApp2Row(row: any, refSec: number): CachedSignal | null 
     confidence,
     strength,
     candleTime,
-    firstSeenSec: lastUpdate > 0 ? lastUpdate : refSec,
+    // The prediction is generated at the open of the candle it predicts, so
+    // the candle's own open time is the emission time.
+    firstSeenSec: candleTime,
     capturedAt: Date.now(),
+    lastTickAgeSec,
+    live: row?.live === true,
     buyerPct: Number.isFinite(buyer) ? buyer : null,
     sellerPct: Number.isFinite(seller) ? seller : null,
   };

@@ -429,7 +429,9 @@ function app2CachedToSignal(
       direction: c.signal,
       confidence: c.confidence,
       strength: c.strength,
-      // firstSeenSec is when App 2 actually stood behind this candle's call.
+      // App 2 generates its prediction at the open of the candle it predicts,
+      // so the candle's open time IS the emission time. (Its `last_update`
+      // field is an age in seconds, not a timestamp — see app2-cache.ts.)
       timestamp: c.firstSeenSec > 0 ? c.firstSeenSec : candleTime,
       candleTime,
       outcome: null,
@@ -437,7 +439,9 @@ function app2CachedToSignal(
         c.buyerPct != null && c.sellerPct != null
           ? `buyers=${c.buyerPct}% sellers=${c.sellerPct}%`
           : null,
-      reasons: null,
+      reasons: c.lastTickAgeSec != null && c.lastTickAgeSec > 120
+        ? [`App 2 stream stale — last tick ${Math.round(c.lastTickAgeSec)}s ago`]
+        : null,
       cached: true,
     },
     nowSec,
