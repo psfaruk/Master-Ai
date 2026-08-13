@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bash run.sh"
+    "dev": "bun index.ts"
   },
   "dependencies": {
     "socket.io": "^4.7.5"
