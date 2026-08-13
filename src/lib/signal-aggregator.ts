@@ -386,6 +386,30 @@ async function fetchApp1(freshnessWindowSec: number, nowSec: number): Promise<No
     const ts = emittedAt > 0 ? emittedAt : candleTime;
 
     const quality = Number(pickField(s, ["quality"]));
+    const confidenceRaw = typeof s?.confidence === "number" ? s.confidence : null;
+    // App 1 confidence is 0-1. A value of exactly 0 means "no confidence info"
+    // (the app emits 0 when it has none) — surface as null so the UI shows "—"
+    // instead of the misleading "0.0%".
+    const confidence = confidenceRaw !== null && confidenceRaw > 0 ? confidenceRaw : null;
+
+    // App 1 status: WIN / LOSS / DRAW / VOID / ACTIVE.
+    //   - WIN/LOSS → resolved outcome (used by backtest win-rate).
+    //   - DRAW → resolved but neither won nor lost. We surface it as DRAW so the
+    //     UI can show it, but the backtest EXCLUDES it from the graded count
+    //     (a draw is not a win and not a loss — counting it as "unknown"
+    //     used to inflate the unknown bucket and dilute the win rate).
+    //   - VOID → Quotex cancelled the trade (rare, e.g. liquidity gap). Same
+    //     treatment as DRAW: resolved-but-neutral, excluded from win/loss.
+    //   - ACTIVE → the candle is still running; outcome not yet known. Keep
+    //     outcome=null so the UI shows "pending" rather than "unknown".
+    const rawStatus = s?.status ? String(s.status) : null;
+    let outcome: SourceSignal["outcome"] = null;
+    if (rawStatus === "WIN" || rawStatus === "CORRECT") outcome = "WIN";
+    else if (rawStatus === "LOSS" || rawStatus === "WRONG") outcome = "LOSS";
+    else if (rawStatus === "DRAW") outcome = "DRAW";
+    else if (rawStatus === "VOID") outcome = "DRAW"; // group with DRAW — neither won nor lost
+    // ACTIVE / null / unknown → outcome stays null
+
     out.push(
       makeSignal(
         {
@@ -393,13 +417,13 @@ async function fetchApp1(freshnessWindowSec: number, nowSec: number): Promise<No
           sourceName: src.name,
           pair,
           direction: dir,
-          confidence: typeof s?.confidence === "number" ? s.confidence : null,
+          confidence,
           strength: Number.isFinite(quality)
             ? quality >= 0.7 ? "STRONG" : quality >= 0.45 ? "MEDIUM" : "WEAK"
             : null,
           timestamp: ts,
           candleTime,
-          outcome: s?.status ? (s.status as SourceSignal["outcome"]) : null,
+          outcome,
           strategy: s?.primaryPattern ?? null,
           reasons: Array.isArray(s?.reasons) ? s.reasons : null,
         },
@@ -435,10 +459,15 @@ function app2CachedToSignal(
       timestamp: c.firstSeenSec > 0 ? c.firstSeenSec : candleTime,
       candleTime,
       outcome: null,
+      // App 2 currently emits buyer_pct/seller_pct as null for every row.
+      // Only surface them when they are real numbers — otherwise the strategy
+      // field used to render the misleading "buyers=null% sellers=null%".
       strategy:
-        c.buyerPct != null && c.sellerPct != null
+        c.buyerPct != null && c.sellerPct != null && Number.isFinite(c.buyerPct) && Number.isFinite(c.sellerPct)
           ? `buyers=${c.buyerPct}% sellers=${c.sellerPct}%`
-          : null,
+          : c.strength != null
+            ? c.strength
+            : null,
       reasons: c.lastTickAgeSec != null && c.lastTickAgeSec > 120
         ? [`App 2 stream stale — last tick ${Math.round(c.lastTickAgeSec)}s ago`]
         : null,
@@ -580,6 +609,11 @@ async function fetchApp3(freshnessWindowSec: number, nowSec: number): Promise<No
         const ctime = toUnixSeconds(pickField(s, ["ctime", "candle_time", "time", "ts"]));
         if (!(ctime > 0)) { skipped.noCandle++; continue; }
         const candleTime = candleFloor(ctime) + offset;
+        // App 3 historical: ctime is the candle time in SECONDS.
+        // App 3 emits confidence in 0-1, but a value of exactly 0 means
+        // "no confidence info" — surface as null so the UI shows "—".
+        const histConfRaw = typeof s?.confidence === "number" ? s.confidence : null;
+        const histConf = histConfRaw !== null && histConfRaw > 0 ? histConfRaw : null;
         const result = String(pickField(s, ["result", "outcome", "status"]) ?? "").toLowerCase();
         const key = `${pair}|${candleTime}`;
         seenCandles.add(key);
@@ -590,7 +624,7 @@ async function fetchApp3(freshnessWindowSec: number, nowSec: number): Promise<No
               sourceName: src.name,
               pair,
               direction: dir,
-              confidence: typeof s?.confidence === "number" ? s.confidence : null,
+              confidence: histConf,
               strength: typeof s?.strength === "string" ? s.strength : null,
               timestamp: ctime,
               candleTime,
@@ -633,6 +667,17 @@ async function fetchApp3(freshnessWindowSec: number, nowSec: number): Promise<No
         const key = `${pair}|${candleTime}`;
         if (seenCandles.has(key)) continue; // historical already has this candle
         seenCandles.add(key);
+        // App 3 live: time is the unix-seconds timestamp of the candle being
+        // predicted. Confidence is 0-1, but 0.0 means "no info" — surface as null.
+        const liveConfRaw = typeof r?.confidence === "number" ? r.confidence : null;
+        const liveConf = liveConfRaw !== null && liveConfRaw > 0 ? liveConfRaw : null;
+        // prediction_candle (OHLC) — enrich the strategy field with the close
+        // price so the dashboard can show what the prediction was armed against.
+        const pc = r?.prediction_candle;
+        const pcClose = typeof pc?.close === "number" ? pc.close : null;
+        const strategy = pcClose != null
+          ? `entry≈${pcClose}`
+          : (typeof r?.strength === "string" ? r.strength : null);
         out.push(
           makeSignal(
             {
@@ -640,12 +685,12 @@ async function fetchApp3(freshnessWindowSec: number, nowSec: number): Promise<No
               sourceName: src.name,
               pair,
               direction: dir,
-              confidence: typeof r?.confidence === "number" ? r.confidence : null,
+              confidence: liveConf,
               strength: typeof r?.strength === "string" ? r.strength : null,
               timestamp: t > 0 ? t : candleTime,
               candleTime,
               outcome: null, // live signal, not yet resolved
-              strategy: null,
+              strategy,
               reasons: null,
             },
             nowSec,

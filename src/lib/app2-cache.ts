@@ -101,21 +101,21 @@ export function normalizeApp2Row(row: any, refSec: number): CachedSignal | null 
   if (!signal) return null; // NEUTRAL / "—" / unknown
 
   // --- Candle ---------------------------------------------------------
-  // App 2's `time` is the close time of the LAST CLOSED candle, rendered as
-  // "HH:MM" UTC. Verified in the source app (server.py /api/share-signals):
+  // App 2's `time` field is "HH:MM" UTC of the candle the signal is predicting.
   //
-  //     last_candle = candles[-1]              # candles holds CLOSED candles
-  //     time_str = utc(last_candle["time"]).strftime("%H:%M")
+  // HISTORY: This used to be the close time of the LAST CLOSED candle, and the
+  // signal predicted the NEXT (running) candle — so we added +1 candle
+  // (CANDLE_SEC) to align with App 1's entryTime and App 3's time, which both
+  // label the candle being predicted.
   //
-  // and the attached prediction comes from _run_eoc(), which runs at that
-  // candle's close and predicts the candle that is now RUNNING — i.e.
-  // candles[-1]["time"] + one period (feed.py sets
-  // candle_open_time = last["time"] + period).
+  // As of the user's recent App 2 update, `time` now IS the candle being
+  // predicted (same semantics as App 1 and App 3). The +1 shift is no longer
+  // needed — keeping it pushed App 2 one candle into the future and broke
+  // cross-app consensus entirely (modalOffset=1 in /api/diag).
   //
-  // So App 2's row is labelled ONE CANDLE BEHIND the candle its signal is
-  // actually about, while App 1 (entryTime) and App 3 (time) both label the
-  // candle they predict. Reading `time` verbatim put App 2 in the previous
-  // bucket forever, which is why its dashboard column was always empty.
+  // We keep the resolveClockToCandle() call to robustly handle the HH:MM
+  // string against the upstream server clock (in case App 2 renders in a
+  // non-UTC timezone), but NO additional shift is applied.
   const absolute = toUnixSeconds(
     pickField(row, ["candle_time", "candleTime", "candle_ts", "entry_time", "entryTime"])
   );
@@ -129,7 +129,7 @@ export function normalizeApp2Row(row: any, refSec: number): CachedSignal | null 
     // Rows for a pair with no stream carry time "—". Guessing a candle for
     // those would plant a signal in the wrong bucket, so skip them instead.
     if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(timeStr.trim())) return null;
-    candleTime = resolveClockToCandle(timeStr, refSec) + CANDLE_SEC;
+    candleTime = resolveClockToCandle(timeStr, refSec);
   }
   if (!(candleTime > 0)) return null;
 

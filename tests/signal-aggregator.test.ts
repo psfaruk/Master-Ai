@@ -6,6 +6,11 @@
  * different pair spellings, different timestamp units, and a wall-clock string
  * rendered in a non-UTC timezone.
  *
+ * As of the recent App 2 update, App 2's `time` field is the candle being
+ * PREDICTED (same semantics as App 1's entryTime and App 3's time). The old
+ * +1-candle shift in normalizeApp2Row() has been removed — keeping it pushed
+ * App 2 one candle into the future and broke cross-app consensus entirely.
+ *
  * Run with:  bun test tests/
  */
 
@@ -61,6 +66,11 @@ function baseRoutes() {
  * One signal per app for the same pair and the same candle — but each app
  * spells the pair its own way, uses its own timestamp unit, and App 2 renders
  * its clock in UTC+6.
+ *
+ * NOTE: App 2's `time` field is now the candle being PREDICTED (same semantics
+ * as App 1's entryTime and App 3's time). The previous test suite assumed the
+ * old behavior where `time` was the last CLOSED candle and the signal was for
+ * the next one — that has been fixed in App 2 itself.
  */
 function threeAppsAgreeing(direction: "CALL" | "PUT" = "CALL") {
   const r = baseRoutes();
@@ -85,9 +95,9 @@ function threeAppsAgreeing(direction: "CALL" | "PUT" = "CALL") {
         pair: "USD/COP OTC",
         signal: direction,
         type: "OTC",
-        // App 2 reports the LAST CLOSED candle; its prediction is for the
-        // candle that is now running, i.e. this + 1 minute.
-        time: clockAt(prevCandle, 0),
+        // App 2's `time` is the candle being PREDICTED — same as App 1 and App 3.
+        // No +1 shift is applied by the aggregator anymore.
+        time: clockAt(currentCandle, 0),
         confidence: 78, // 0-100 scale
         strength: "strong",
         last_update: 3, // SECONDS AGO, not a timestamp
@@ -172,7 +182,7 @@ describe("cross-app alignment", () => {
   test("App 2 in a different timezone still aligns", async () => {
     for (const tz of [-8, -3, 0, 5, 9]) {
       routes = threeAppsAgreeing("CALL");
-      (routes[`${APP2}/api/share-signals`] as any).rows[0].time = clockAt(prevCandle, tz);
+      (routes[`${APP2}/api/share-signals`] as any).rows[0].time = clockAt(currentCandle, tz);
       const res = await aggregate();
       const app2 = findPair(res, "USDCOP_otc").latestCandle!.signals.find(
         (s: any) => s.source === "app2"
@@ -205,22 +215,22 @@ describe("cross-app alignment", () => {
     expect(app2!.timestamp).toBe(currentCandle);
   });
 
-  test("App 2's `time` is the last CLOSED candle, so its signal is the next one", async () => {
+  test("App 2's `time` is the candle being predicted (no shift)", async () => {
     routes = threeAppsAgreeing("CALL");
+    // As of the user's App 2 update, `time` labels the candle being predicted,
+    // same as App 1's entryTime and App 3's time. The aggregator no longer
+    // applies a +1 shift — if it did, App 2 would land one candle ahead of
+    // App 1 / App 3 and never form a consensus.
     const row = (routes[`${APP2}/api/share-signals`] as any).rows[0];
-    // server.py takes candles[-1] (closed history); feed.py opens the running
-    // candle at last["time"] + period and predicts THAT one.
-    row.time = clockAt(prevCandle, 0);
+    row.time = clockAt(currentCandle, 0);
 
     const res = await aggregate();
     const app2 = findPair(res, "USDCOP_otc").latestCandle!.signals.find(
       (s: any) => s.source === "app2"
     )!;
 
-    // Bucketed one candle forward — the candle it actually predicts, which is
-    // the same candle App 1 and App 3 label directly.
+    // Lands on the same candle as App 1 and App 3 — no shift.
     expect(app2.candleTime).toBe(currentCandle);
-    expect(app2.candleTime).toBe(prevCandle + 60);
   });
 
   test("App 2 rows for a dead pair (time '—') are skipped, not guessed", async () => {

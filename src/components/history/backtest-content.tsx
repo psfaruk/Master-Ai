@@ -73,7 +73,7 @@ export function BacktestContent({ result }: { result: BacktestResult }) {
                 {graded > 0 ? `${wr.toFixed(1)}%` : "—"}
               </div>
               <div className="text-[11px] text-slate-400 mt-0.5 tabular-nums">
-                {s.win}W / {s.loss}L / {s.unknown}?  · {s.total} total
+                {s.win}W / {s.loss}L{s.draw > 0 ? ` / ${s.draw}D` : ""} / {s.unknown}?  · {s.total} total
               </div>
             </div>
           )
@@ -100,7 +100,7 @@ export function BacktestContent({ result }: { result: BacktestResult }) {
                     {graded > 0 ? `${wr.toFixed(1)}%` : "—"}
                   </span>
                   <span className="text-[10px] text-slate-500 tabular-nums">
-                    {s.win}W / {s.loss}L / {s.unknown}?
+                    {s.win}W / {s.loss}L{s.draw > 0 ? ` / ${s.draw}D` : ""} / {s.unknown}?
                   </span>
                 </div>
                 <div className="text-[10px] text-slate-500 mt-0.5">{s.total} total signals</div>

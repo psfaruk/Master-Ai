@@ -41,7 +41,11 @@ export interface NormalizedSignal {
   /** Candle time (unix seconds, minute-floored) — used for strict alignment. */
   candleTime: number;
   direction: Direction;
-  outcome: 0 | 1 | null; // 1=win, 0=loss, null=unknown
+  /** 1=win, 0=loss, null=unknown (incl. ACTIVE / unresolved).
+   *  DRAW is represented as `null` and tracked separately via rawStatus so
+   *  the backtest can EXCLUDE draws from the graded count (a draw is neither
+   *  a win nor a loss — counting it as "unknown" used to dilute the win rate). */
+  outcome: 0 | 1 | null;
   rawStatus?: string | null;
 }
 
@@ -60,6 +64,8 @@ export interface LevelStat {
   win: number;
   loss: number;
   unknown: number;
+  /** Resolved-but-drawn candles (excluded from win/loss/unknown). */
+  draw: number;
   call: number;
   put: number;
   callWin: number;
@@ -73,6 +79,7 @@ export interface SourceStat {
   win: number;
   loss: number;
   unknown: number;
+  draw: number;
 }
 
 export interface BacktestResult {
@@ -116,9 +123,14 @@ function normalizeApp1(d: any): NormalizedSignal | null {
 
   const status = pickField(d, ["status", "result", "outcome"]);
   const s = String(status ?? "").toUpperCase();
+  // DRAW / VOID are resolved-but-neutral outcomes. We keep outcome=null (so
+  // they do NOT count toward win/loss) and surface rawStatus so the backtest's
+  // stats loop can put them in the draw bucket instead of the unknown bucket.
+  // VOID = Quotex cancelled the trade (rare); same treatment as DRAW.
   let outcome: 0 | 1 | null = null;
   if (s === "WIN" || s === "CORRECT") outcome = 1;
   else if (s === "LOSS" || s === "WRONG") outcome = 0;
+  // DRAW, VOID, ACTIVE all leave outcome=null — DRAW/VOID tracked via rawStatus.
 
   return {
     source: "app1",
@@ -142,6 +154,8 @@ function normalizeApp3(d: any, timeKeys: string[]): NormalizedSignal | null {
   const candleTime = candleFloor(ts) + getCandleOffsetSec("app3");
 
   const result = String(pickField(d, ["result", "outcome", "status"]) ?? "").toLowerCase();
+  // DRAW: resolved but neutral. outcome stays null so it doesn't count toward
+  // win/loss; rawStatus="draw" lets the stats loop bucket it as draw, not unknown.
   let outcome: 0 | 1 | null = null;
   if (result === "correct" || result === "win") outcome = 1;
   else if (result === "wrong" || result === "loss") outcome = 0;
@@ -178,11 +192,20 @@ function classifyCluster(cluster: Cluster) {
   // no tradeable direction, so it is never graded — counting the majority side
   // of a conflict as a "win" used to inflate the conflict row's win rate.
   const gradable = level === "conflict" ? [] : signalList.filter((a) => a.direction === direction);
-  const outcomes = gradable.map((a) => a.outcome).filter((o): o is 0 | 1 => o !== null);
+  // DRAW/VOID outcomes are tracked SEPARATELY — they are resolved (so not
+  // "unknown") but neither win nor loss. Excluding them from the win/loss/unknown
+  // buckets keeps the win rate honest; counting them as "unknown" used to dilute it.
+  const isNeutral = (rs: string) => {
+    const v = rs.toLowerCase();
+    return v === "draw" || v === "void";
+  };
+  const gradableNonDraw = gradable.filter((a) => !isNeutral(String(a.rawStatus ?? "")));
+  const outcomes = gradableNonDraw.map((a) => a.outcome).filter((o): o is 0 | 1 => o !== null);
+  const drawCount = gradable.length - gradableNonDraw.length;
 
   const win = outcomes.filter((o) => o === 1).length;
   const loss = outcomes.filter((o) => o === 0).length;
-  const unknown = gradable.length - outcomes.length;
+  const unknown = gradableNonDraw.length - outcomes.length;
 
   let outcome: 0 | 1 | null = null;
   if (outcomes.length > 0) outcome = outcomes.every((o) => o === 1) ? 1 : 0;
@@ -196,6 +219,7 @@ function classifyCluster(cluster: Cluster) {
     agreeingWin: win,
     agreeingLoss: loss,
     agreeingUnknown: unknown,
+    agreeingDraw: drawCount,
     outcome,
     ts: cluster.tsAnchor,
   };
@@ -285,7 +309,8 @@ export async function runBacktest(): Promise<BacktestResult> {
   // Newest first, so the samples shown on the dashboard are the recent ones.
   allClusters.sort((a, b) => b.ts - a.ts);
 
-  // Level stats
+  // Level stats — track draw separately from win/loss/unknown so the
+  // win rate isn't diluted by resolved-but-drawn candles.
   const levels: Record<ConsensusLevel, LevelStat> = {
     "3-agree": newLevelStat(),
     "2-agree": newLevelStat(),
@@ -297,6 +322,7 @@ export async function runBacktest(): Promise<BacktestResult> {
     s.total++;
     if (c.outcome === 1) s.win++;
     else if (c.outcome === 0) s.loss++;
+    else if ((c as any).agreeingDraw > 0 && c.outcome === null) s.draw += (c as any).agreeingDraw;
     else s.unknown++;
     if (c.direction === "CALL") {
       s.call++;
@@ -309,17 +335,19 @@ export async function runBacktest(): Promise<BacktestResult> {
     }
   }
 
-  // Source stats
+  // Source stats — track draw separately too.
   const sources: Record<AppId, SourceStat> = {
-    app1: { total: 0, win: 0, loss: 0, unknown: 0 },
-    app2: { total: 0, win: 0, loss: 0, unknown: 0 },
-    app3: { total: 0, win: 0, loss: 0, unknown: 0 },
+    app1: { total: 0, win: 0, loss: 0, unknown: 0, draw: 0 },
+    app2: { total: 0, win: 0, loss: 0, unknown: 0, draw: 0 },
+    app3: { total: 0, win: 0, loss: 0, unknown: 0, draw: 0 },
   };
   for (const s of allSignals) {
     const st = sources[s.source];
     st.total++;
+    const rs = String(s.rawStatus ?? "").toLowerCase();
     if (s.outcome === 1) st.win++;
     else if (s.outcome === 0) st.loss++;
+    else if (rs === "draw" || rs === "void") st.draw++;
     else st.unknown++;
   }
 
@@ -366,7 +394,7 @@ export async function runBacktest(): Promise<BacktestResult> {
 
 function newLevelStat(): LevelStat {
   return {
-    total: 0, win: 0, loss: 0, unknown: 0,
+    total: 0, win: 0, loss: 0, unknown: 0, draw: 0,
     call: 0, put: 0, callWin: 0, callLoss: 0, putWin: 0, putLoss: 0,
   };
 }
