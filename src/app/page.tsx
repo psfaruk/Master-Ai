@@ -1134,11 +1134,16 @@ function PairRow({ pair }: { pair: PairConsensus }) {
     agreeingApps: [],
     disagreeingApps: [],
     missingApps: [],
+    invalidApps: [],
   }
   const meta = CONSENSUS_META[c.level] ?? CONSENSUS_META.none
   const lc = pair.latestCandle ?? null
   const candles = Array.isArray(pair.candles) ? pair.candles : []
   const signals = Array.isArray(pair.signals) ? pair.signals : []
+  // Apps that DID send something for this candle but too early/late for it to
+  // count. Distinguishing this from "sent nothing" is the difference between
+  // "the app is down" and "the app is running late".
+  const invalidApps: AppId[] = Array.isArray(c.invalidApps) ? c.invalidApps : []
 
   const getSignal = (id: AppId): SourceSignal | undefined =>
     signals.find((s) => s.source === id)
@@ -1187,11 +1192,19 @@ function PairRow({ pair }: { pair: PairConsensus }) {
                       "text-[10px] tabular-nums leading-tight",
                       sig.fresh ? "text-slate-400" : "text-slate-600"
                     )}
-                    title={`Signal timestamp (UTC): ${fmtSigTime(sig.timestamp)}\nCandle: ${fmtSigTime(sig.candleTime)}\nAge: ${fmtAgo(sig.ageSec)}`}
+                    title={`Signal timestamp (UTC): ${fmtSigTime(sig.timestamp)}\nCandle: ${fmtSigTime(sig.candleTime)}\nAge: ${fmtAgo(sig.ageSec)}${sig.cached ? "\nSource: App 2 history cache" : ""}`}
                   >
                     {fmtSigTime(sig.timestamp)}
+                    {sig.cached && <span className="text-violet-400/70" title="from App 2 history cache"> ·c</span>}
                   </span>
                 </div>
+              ) : invalidApps.includes(id) ? (
+                <span
+                  className="inline-flex items-center justify-center h-6 px-2 text-[11px] text-amber-500/80 rounded-md border border-amber-500/30 bg-amber-500/5"
+                  title="This app sent a signal for this candle, but outside the window in which it could count (too early, or after the candle closed)."
+                >
+                  late
+                </span>
               ) : (
                 <span className="inline-flex items-center justify-center h-6 px-2 text-[11px] text-slate-600 rounded-md border border-slate-800 bg-slate-900/40">
                   —
@@ -1300,6 +1313,13 @@ function PairRow({ pair }: { pair: PairConsensus }) {
                           </div>
                         )}
                       </div>
+                    ) : invalidApps.includes(id) ? (
+                      <div className="text-[11px] text-amber-500/80">
+                        Sent a signal for this candle, but outside the valid
+                        window — it was emitted too early, or only after the
+                        candle had closed, so it does not count toward
+                        consensus.
+                      </div>
                     ) : (
                       <div className="text-[11px] text-slate-600">
                         No signal from this app for this candle.
@@ -1311,7 +1331,7 @@ function PairRow({ pair }: { pair: PairConsensus }) {
             </div>
 
             {/* Historical candles table — shows candle-aligned consensus over time */}
-            {candles.length > 1 && (
+            {candles.length > 0 && (
               <div>
                 <div className="text-[11px] font-semibold text-slate-400 mb-1.5 flex items-center gap-1.5">
                   <Clock className="h-3 w-3" />

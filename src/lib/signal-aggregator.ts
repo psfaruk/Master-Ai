@@ -7,13 +7,46 @@
  *
  * Why a server-side aggregator: all 3 source apps lack CORS headers,
  * so the browser cannot call them directly. We fan out server-side.
+ *
+ * Alignment rules (see ./signal-normalize.ts for the primitives):
+ *   - Every pair name goes through canonicalPair() so App 1's `symbol`,
+ *     App 2's `pair` and App 3's `asset` land on the SAME map key.
+ *   - Every timestamp goes through toUnixSeconds() so a millisecond field
+ *     can't push a candle 50,000 years into the future.
+ *   - Consensus is computed per (pair, candle). A signal counts for a candle
+ *     when it was emitted in time for that candle — NOT when it happens to be
+ *     younger than N minutes relative to now.
  */
 
 import { fetchJsonWithTimeout } from "./backtest-fetcher";
-import { getApp2CachedSignalsForPair, getAllCachedApp2Signals, getAllCachedApp2Pairs, startApp2CachePoller } from "./app2-cache";
+import {
+  getApp2CachedSignalsForPair,
+  getAllCachedApp2Pairs,
+  startApp2CachePoller,
+  normalizeApp2Row,
+  recordApp2Signals,
+  type CachedSignal,
+} from "./app2-cache";
+import {
+  canonicalPair,
+  candleFloor,
+  classifyPair,
+  displayPairFromAsset,
+  getCandleOffsetSec,
+  isSignalValidForCandle,
+  parseDirection,
+  pickArray,
+  pickField,
+  toUnixSeconds,
+  CANDLE_SEC,
+  DIRECTION_KEYS,
+  PAIR_KEYS,
+  type AppId,
+} from "./signal-normalize";
 
 export type Direction = "CALL" | "PUT" | "NEUTRAL";
-export type AppId = "app1" | "app2" | "app3";
+export type { AppId };
+export { displayPairFromAsset };
 export type ConsensusLevel =
   | "3-agree"
   | "2-agree"
@@ -37,7 +70,13 @@ export interface SourceSignal {
   outcome?: "WIN" | "LOSS" | "DRAW" | "CORRECT" | "WRONG" | null;
   strategy?: string | null;
   reasons?: string[] | null;
-  fresh: boolean; // within freshness window
+  /** Emitted in time for its own candle (used for consensus). */
+  validForCandle: boolean;
+  /** Recent relative to NOW (used for "is this app currently alive"). */
+  fresh: boolean;
+  /** True when this App 2 signal came from our historical cache, not the
+   *  live snapshot — surfaced so the dashboard can explain where it came from. */
+  cached?: boolean;
 }
 
 /**
@@ -59,7 +98,10 @@ export interface CandleConsensus {
     direction: Direction | null;
     agreeingApps: AppId[];
     disagreeingApps: AppId[];
+    /** Apps with no signal at all for this candle. */
     missingApps: AppId[];
+    /** Apps that had a signal for this candle but emitted it too late/early. */
+    invalidApps: AppId[];
   };
 }
 
@@ -71,19 +113,13 @@ export interface PairConsensus {
   signals: SourceSignal[];
   /** Candle-aligned consensus entries — sorted newest first. */
   candles: CandleConsensus[];
-  /** The most recent candle where at least 2 apps agree (or the latest candle). */
+  /** The newest actionable candle (see pickLatestCandle). */
   latestCandle: CandleConsensus | null;
   freshCount: number;
   callCount: number;
   putCount: number;
   neutralCount: number;
-  consensus: {
-    level: ConsensusLevel;
-    direction: Direction | null;
-    agreeingApps: AppId[];
-    disagreeingApps: AppId[];
-    missingApps: AppId[];
-  };
+  consensus: CandleConsensus["consensus"];
 }
 
 export interface AppStatus {
@@ -107,6 +143,10 @@ export interface AppStatus {
   uptimeSec?: number;
   /** Number of active pair streams (App2 only). */
   activeStreams?: number;
+  /** Rows returned by the upstream endpoint before normalization. */
+  rawCount?: number;
+  /** Rows dropped during normalization, by reason. */
+  skipped?: { noPair: number; noDirection: number; noCandle: number };
   /** Last error message from the fetch, if any. */
   error?: string;
 }
@@ -165,22 +205,7 @@ export function getSources() {
   return SOURCES;
 }
 
-/** Convert canonical asset code into a human-readable display pair. */
-export function displayPairFromAsset(asset: string): string {
-  if (asset.endsWith("_otc")) {
-    const base = asset.replace("_otc", "");
-    return `${base.slice(0, 3)}/${base.slice(3)} OTC`;
-  }
-  return `${asset.slice(0, 3)}/${asset.slice(3)}`;
-}
-
-function classifyPair(asset: string): "otc" | "real" {
-  return asset.endsWith("_otc") ? "otc" : "real";
-}
-
 const FETCH_TIMEOUT_MS = 10000;
-
-// fetchJsonWithTimeout is imported from ./backtest-fetcher
 
 // ---- Per-source fetch + normalize ---------------------------------------
 
@@ -193,8 +218,13 @@ interface NormalizeResult {
   uptimeSec?: number;
   activeStreams?: number;
   rawCount: number;
+  skipped: { noPair: number; noDirection: number; noCandle: number };
   latencyMs?: number;
   error?: string;
+}
+
+function newSkipped() {
+  return { noPair: 0, noDirection: 0, noCandle: 0 };
 }
 
 // ---- Health endpoint callers ---------------------------------------------
@@ -203,10 +233,7 @@ interface NormalizeResult {
 
 async function fetchApp1Health(): Promise<Partial<NormalizeResult>> {
   try {
-    const d = await fetchJsonWithTimeout(
-      "https://minimum-pair-production.up.railway.app/api/health",
-      6000
-    );
+    const d = await fetchJsonWithTimeout(`${SOURCES[0].baseUrl}${SOURCES[0].healthPath}`, 6000);
     if (!d) return { error: "empty_health" };
     const st = d?.status ?? {};
     const tokenExpired = st?.tokenExpired === true || st?.state === "token_expired";
@@ -229,16 +256,11 @@ async function fetchApp1Health(): Promise<Partial<NormalizeResult>> {
 
 async function fetchApp2Health(): Promise<Partial<NormalizeResult>> {
   try {
-    const d = await fetchJsonWithTimeout(
-      "https://binary-signals-app-production.up.railway.app/api/status",
-      6000
-    );
+    const d = await fetchJsonWithTimeout(`${SOURCES[1].baseUrl}${SOURCES[1].healthPath}`, 6000);
     if (!d) return { error: "empty_health" };
     const connected = d?.connected === true;
     const streams: any[] = Array.isArray(d?.streams?.active) ? d.streams.active : [];
-    let health: AppStatus["health"];
-    if (!connected) health = "disconnected";
-    else health = "ok";
+    const health: AppStatus["health"] = connected ? "ok" : "disconnected";
     return {
       health,
       live: connected,
@@ -253,10 +275,7 @@ async function fetchApp2Health(): Promise<Partial<NormalizeResult>> {
 
 async function fetchApp3Health(): Promise<Partial<NormalizeResult>> {
   try {
-    const d = await fetchJsonWithTimeout(
-      "https://otc-live-trading-production.up.railway.app/api/token-status",
-      6000
-    );
+    const d = await fetchJsonWithTimeout(`${SOURCES[2].baseUrl}${SOURCES[2].healthPath}`, 6000);
     if (!d) return { error: "empty_health" };
     const connected = d?.connected === true;
     const hasToken = d?.has_env_token === true || d?.has_user_token === true;
@@ -268,7 +287,9 @@ async function fetchApp3Health(): Promise<Partial<NormalizeResult>> {
       health,
       live: connected,
       tokenExpired: !hasToken,
-      detail: d?.token_source ? `token_source=${d.token_source}${connected ? " · connected" : " · disconnected"}` : undefined,
+      detail: d?.token_source
+        ? `token_source=${d.token_source}${connected ? " · connected" : " · disconnected"}`
+        : undefined,
     };
   } catch {
     return { error: "health_fetch_failed" };
@@ -284,28 +305,23 @@ const HEALTH_FETCHERS: Record<AppId, () => Promise<Partial<NormalizeResult>>> = 
 /**
  * Merge health-endpoint data into the signals-fetcher result.
  * Health data wins for online/token state because it's authoritative.
- * If the signals fetch failed but health succeeded, we still report the app as online.
- * If health fetch also failed, we fall back to inferring from signals fetch state.
+ * If the signals fetch failed but health succeeded, we still report the app as
+ * online. If health also failed, we fall back to the signals fetch state.
  */
 function mergeHealth(
   sigResult: NormalizeResult,
   healthResult: Partial<NormalizeResult> | undefined
 ): Partial<NormalizeResult> {
-  // If signals fetch returned "down" (network error), but health succeeded,
-  // trust health. If both failed, mark down.
   if (!healthResult || healthResult.error) {
-    // Health fetch failed. If signals also failed, mark down.
     if (sigResult.health === "down") {
-      return { health: "down" };
+      return { health: "down", detail: sigResult.error ?? "signals + health fetch failed" };
     }
-    // Signals succeeded but health fetch failed — keep sigResult.health.
     return {
       detail: sigResult.detail ?? "health check failed (signals OK)",
       live: sigResult.health === "ok",
       tokenExpired: sigResult.health === "token_expired",
     };
   }
-  // Health succeeded — use its authoritative state.
   return {
     health: healthResult.health ?? sigResult.health,
     detail: healthResult.detail ?? sigResult.detail,
@@ -316,351 +332,454 @@ function mergeHealth(
   };
 }
 
+/** Build a SourceSignal, filling in the derived fields consistently. */
+function makeSignal(
+  base: Omit<SourceSignal, "ageSec" | "fresh" | "validForCandle" | "displayPair">,
+  nowSec: number,
+  freshnessWindowSec: number
+): SourceSignal {
+  const ageSec = Math.max(0, nowSec - base.timestamp);
+  return {
+    ...base,
+    displayPair: displayPairFromAsset(base.pair),
+    ageSec,
+    fresh: ageSec <= freshnessWindowSec,
+    validForCandle: isSignalValidForCandle(base.timestamp, base.candleTime),
+  };
+}
+
 /** App1 (Minimum Pair): /api/signals -> { signals: [...] } */
 async function fetchApp1(freshnessWindowSec: number, nowSec: number): Promise<NormalizeResult> {
   const src = SOURCES[0];
+  const skipped = newSkipped();
   let data: any;
   try {
     data = await fetchJsonWithTimeout(`${src.baseUrl}${src.signalsPath}`, FETCH_TIMEOUT_MS);
   } catch {
-    return { signals: [], health: "down", rawCount: 0, error: "fetch_failed" };
+    return { signals: [], health: "down", rawCount: 0, skipped, error: "fetch_failed" };
   }
   if (!data) {
-    return { signals: [], health: "down", rawCount: 0, error: "empty_response" };
+    return { signals: [], health: "down", rawCount: 0, skipped, error: "empty_response" };
   }
-  const arr: any[] = Array.isArray(data?.signals) ? data.signals : [];
-  const health = data?.status?.state === "token_expired" || data?.status?.tokenExpired
-    ? "token_expired"
-    : "ok";
+  const arr = pickArray(data, ["signals", "rows", "data"]);
+  const health: AppStatus["health"] =
+    data?.status?.state === "token_expired" || data?.status?.tokenExpired ? "token_expired" : "ok";
 
-  // IMPORTANT: We no longer group-by-symbol-to-latest here. We keep ALL
-  // signals so the aggregator can align them by candle-time across apps.
-  // (The dashboard / backtest will pick the relevant candle.)
+  const offset = getCandleOffsetSec("app1");
+
+  // Keep ALL signals (no latest-only grouping) so the aggregator can align
+  // them by candle-time across apps.
   const out: SourceSignal[] = [];
   for (const s of arr) {
-    const sym = s?.symbol;
-    if (!sym) continue;
-    const tsMs = Number(s.signalAt ?? s.entryTime ?? 0);
-    const ts = tsMs > 1e12 ? Math.floor(tsMs / 1000) : Math.floor(tsMs);
-    const dir = String(s.direction ?? "").toUpperCase() as Direction;
-    if (dir !== "CALL" && dir !== "PUT") continue;
-    // Candle time = the minute this signal is predicting. App1 has explicit
-    // entryTime — use that. Otherwise fall back to the signal timestamp
-    // floored to the minute.
-    const entryMs = Number(s.entryTime ?? 0);
-    const entrySec = entryMs > 1e12 ? Math.floor(entryMs / 1000) : Math.floor(entryMs);
-    const candleTime = entrySec > 0 ? Math.floor(entrySec / 60) * 60 : Math.floor(ts / 60) * 60;
-    const ageSec = Math.max(0, nowSec - ts);
-    out.push({
-      source: "app1",
-      sourceName: src.name,
-      pair: sym,
-      displayPair: s.symbolShort ? `${s.symbolShort}${sym.endsWith("_otc") ? " OTC" : ""}` : displayPairFromAsset(sym),
-      direction: dir,
-      confidence: typeof s.confidence === "number" ? s.confidence : null,
-      strength: typeof s.quality === "number" ? (s.quality >= 0.7 ? "STRONG" : s.quality >= 0.45 ? "MEDIUM" : "WEAK") : null,
-      timestamp: ts,
-      candleTime,
-      ageSec,
-      outcome: s.status ? (s.status as SourceSignal["outcome"]) : null,
-      strategy: s.primaryPattern ?? null,
-      reasons: Array.isArray(s.reasons) ? s.reasons : null,
-      fresh: ageSec <= freshnessWindowSec,
-    });
+    const pair = canonicalPair(pickField(s, PAIR_KEYS));
+    if (!pair) { skipped.noPair++; continue; }
+    const dir = parseDirection(pickField(s, DIRECTION_KEYS));
+    if (!dir) { skipped.noDirection++; continue; }
+
+    const emittedAt = toUnixSeconds(pickField(s, ["signalAt", "signal_at", "createdAt", "ts"]));
+    const entrySec = toUnixSeconds(pickField(s, ["entryTime", "entry_time", "candleTime", "ctime"]));
+    // Candle time = the minute this signal predicts. App1 has an explicit
+    // entryTime — use it; otherwise fall back to the emission time.
+    const baseCandle = entrySec > 0 ? entrySec : emittedAt;
+    if (!(baseCandle > 0)) { skipped.noCandle++; continue; }
+    const candleTime = candleFloor(baseCandle) + offset;
+    const ts = emittedAt > 0 ? emittedAt : candleTime;
+
+    const quality = Number(pickField(s, ["quality"]));
+    out.push(
+      makeSignal(
+        {
+          source: "app1",
+          sourceName: src.name,
+          pair,
+          direction: dir,
+          confidence: typeof s?.confidence === "number" ? s.confidence : null,
+          strength: Number.isFinite(quality)
+            ? quality >= 0.7 ? "STRONG" : quality >= 0.45 ? "MEDIUM" : "WEAK"
+            : null,
+          timestamp: ts,
+          candleTime,
+          outcome: s?.status ? (s.status as SourceSignal["outcome"]) : null,
+          strategy: s?.primaryPattern ?? null,
+          reasons: Array.isArray(s?.reasons) ? s.reasons : null,
+        },
+        nowSec,
+        freshnessWindowSec
+      )
+    );
   }
 
-  return { signals: out, health, rawCount: arr.length };
+  return { signals: out, health, rawCount: arr.length, skipped };
+}
+
+/** Turn an app2-cache entry into a SourceSignal. */
+function app2CachedToSignal(
+  c: CachedSignal,
+  srcName: string,
+  nowSec: number,
+  freshnessWindowSec: number,
+  offset: number
+): SourceSignal {
+  const candleTime = c.candleTime + offset;
+  return makeSignal(
+    {
+      source: "app2",
+      sourceName: srcName,
+      pair: c.pair,
+      direction: c.signal,
+      confidence: c.confidence,
+      strength: c.strength,
+      // firstSeenSec is when App 2 actually stood behind this candle's call.
+      timestamp: c.firstSeenSec > 0 ? c.firstSeenSec : candleTime,
+      candleTime,
+      outcome: null,
+      strategy:
+        c.buyerPct != null && c.sellerPct != null
+          ? `buyers=${c.buyerPct}% sellers=${c.sellerPct}%`
+          : null,
+      reasons: null,
+      cached: true,
+    },
+    nowSec,
+    freshnessWindowSec
+  );
 }
 
 /**
  * App2 (Binary Signal Terminal): /api/share-signals -> { rows: [...] }
  *
- * This endpoint returns a SNAPSHOT of all 15 pairs with their current
- * signal. Each row has: pair, type, time (HH:MM string), signal (CALL/PUT/NEUTRAL/—),
- * confidence (0-100 integer), strength, last_update, live.
+ * The endpoint returns a SNAPSHOT of all pairs with their CURRENT candle's
+ * signal only — once a new candle starts the previous one is gone. So we merge
+ * two sources: the live snapshot (authoritative for the current candle) and
+ * our own historical cache (app2-cache.ts), which has been recording each
+ * candle's signal every 5s.
  *
- * IMPORTANT: The snapshot only contains the CURRENT candle's signal. Once a
- * new candle starts, the previous signal is gone. To build a proper candle-
- * aligned consensus with App 1 and App 3 (which keep historical data), we
- * also pull from our own App 2 historical cache (see app2-cache.ts) which
- * polls /api/share-signals every 5s and remembers each candle's signal.
- *
- * The aggregator will then have App 2 signals for many historical candles,
- * not just the current one.
+ * Both paths now parse rows through the SAME normalizeApp2Row(), so a row can
+ * no longer land in one candle bucket via the snapshot and a different one via
+ * the cache — which used to make App 2 look absent from the consensus.
  */
 async function fetchApp2(freshnessWindowSec: number, nowSec: number): Promise<NormalizeResult> {
   // Ensure the App 2 cache poller is running (idempotent).
   startApp2CachePoller();
 
   const src = SOURCES[1];
+  const offset = getCandleOffsetSec("app2");
+  const skipped = newSkipped();
+
   let data: any;
+  let fetchFailed = false;
   try {
     data = await fetchJsonWithTimeout(`${src.baseUrl}${src.signalsPath}`, FETCH_TIMEOUT_MS);
+    // A null body means non-2xx / empty / non-JSON. That is a failure, not an
+    // empty signal list — reporting it as "ok" hid genuine App 2 outages.
+    if (data == null) fetchFailed = true;
   } catch {
-    // Even if the live snapshot fails, we can still serve from cache.
-    return { signals: getApp2CachedSignalsAllPairs(nowSec, freshnessWindowSec, src.name), health: "down", rawCount: 0, error: "fetch_failed" };
+    fetchFailed = true;
   }
 
-  const arr: any[] = Array.isArray(data?.rows) ? data.rows : [];
-  const health = data?.connected === false ? "down" : "ok";
-  const serverTs = Number(data?.timestamp ?? 0);
-  const serverSec = serverTs > 1e12 ? Math.floor(serverTs / 1000) : Math.floor(serverTs);
+  const arr = fetchFailed ? [] : pickArray(data, ["rows", "signals", "data", "items"]);
+  const serverSec = toUnixSeconds(data?.timestamp ?? data?.ts ?? data?.server_time);
+  const refSec = serverSec > 0 && Math.abs(serverSec - nowSec) <= 300 ? serverSec : nowSec;
 
-  // Build a set of all pairs we know about: from the snapshot AND from our
-  // App 2 historical cache. This way even if a pair is currently NEUTRAL in
-  // the snapshot, we still pull its historical cached signals.
-  const allPairs = new Set<string>();
-  for (const r of arr) {
-    if (r?.pair) allPairs.add(r.pair);
+  const out: SourceSignal[] = [];
+  const seenCandles = new Set<string>(); // pair|candleTime
+
+  // 1. Live snapshot — authoritative for the current candle.
+  const liveEntries: CachedSignal[] = [];
+  for (const row of arr) {
+    const entry = normalizeApp2Row(row, refSec);
+    if (!entry) {
+      if (!canonicalPair(pickField(row, PAIR_KEYS))) skipped.noPair++;
+      else skipped.noDirection++;
+      continue;
+    }
+    liveEntries.push(entry);
+    const sig = app2CachedToSignal(entry, src.name, nowSec, freshnessWindowSec, offset);
+    sig.cached = false;
+    seenCandles.add(`${sig.pair}|${sig.candleTime}`);
+    out.push(sig);
   }
+  // Feed the history cache from here too, so App 2's past candles survive even
+  // if the background poller isn't running in this process.
+  if (liveEntries.length > 0) recordApp2Signals(liveEntries);
+
+  // 2. Historical cache — every candle the snapshot no longer shows. We take
+  //    the union of pairs seen live and pairs ever cached, so a pair that is
+  //    currently NEUTRAL still contributes its earlier candles.
+  const allPairs = new Set<string>(out.map((s) => s.pair));
   for (const p of getAllCachedApp2Pairs()) allPairs.add(p);
 
-  const out: SourceSignal[] = [];
-  // Map of (pair|candleTime) -> SourceSignal for dedup
-  const seenCandles = new Set<string>();
-
-  // First: current snapshot signals (only non-NEUTRAL ones)
-  for (const r of arr) {
-    const pair = r?.pair;
-    if (!pair) continue;
-    const rawSignal = String(r?.signal ?? "").toUpperCase().trim();
-    if (rawSignal !== "CALL" && rawSignal !== "PUT") continue;
-    const dir = rawSignal as Direction;
-
-    const timeStr = String(r?.time ?? "");
-    let candleTime = serverSec > 0 ? Math.floor(serverSec / 60) * 60 : nowSec;
-    const m = timeStr.match(/^(\d{1,2}):(\d{2})$/);
-    if (m) {
-      const hh = parseInt(m[1], 10);
-      const mm = parseInt(m[2], 10);
-      if (hh >= 0 && hh < 24 && mm >= 0 && mm < 60) {
-        const now = new Date(nowSec * 1000);
-        const dt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hh, mm, 0) / 1000;
-        let ts = dt;
-        if (ts - nowSec > 12 * 3600) ts -= 24 * 3600;
-        candleTime = Math.floor(ts / 60) * 60;
-      }
-    }
-
-    const conf100 = typeof r?.confidence === "number" ? r.confidence : 0;
-    const confidence = conf100 > 0 ? conf100 / 100 : null;
-    const lastUpdate = Number(r?.last_update ?? 0);
-    const ts = lastUpdate > 0 ? Math.floor(lastUpdate) : candleTime;
-    const ageSec = Math.max(0, nowSec - ts);
-    const strengthStr = typeof r?.strength === "string" ? r.strength.toUpperCase() : null;
-
-    seenCandles.add(`${pair}|${candleTime}`);
-    out.push({
-      source: "app2",
-      sourceName: src.name,
-      pair,
-      displayPair: displayPairFromAsset(pair),
-      direction: dir,
-      confidence,
-      strength: strengthStr,
-      timestamp: ts,
-      candleTime,
-      ageSec,
-      outcome: null,
-      strategy: r?.buyer_pct != null && r?.seller_pct != null
-        ? `buyers=${r.buyer_pct}% sellers=${r.seller_pct}%`
-        : null,
-      reasons: null,
-      fresh: ageSec <= freshnessWindowSec,
-    });
-  }
-
-  // Then: pull historical signals from our App 2 cache for ALL known pairs.
-  // These are signals from previous candles that the snapshot no longer shows.
-  // We dedupe by (pair, candleTime) — current snapshot wins.
-  const cachedSignals: SourceSignal[] = [];
   for (const pair of allPairs) {
-    const cached = getApp2CachedSignalsForPair(pair);
-    for (const c of cached) {
-      const key = `${c.pair}|${c.candleTime}`;
-      if (seenCandles.has(key)) continue;
+    for (const c of getApp2CachedSignalsForPair(pair)) {
+      const sig = app2CachedToSignal(c, src.name, nowSec, freshnessWindowSec, offset);
+      const key = `${sig.pair}|${sig.candleTime}`;
+      if (seenCandles.has(key)) continue; // live snapshot wins
       seenCandles.add(key);
-      const ageSec = Math.max(0, nowSec - c.candleTime);
-      cachedSignals.push({
-        source: "app2",
-        sourceName: src.name,
-        pair: c.pair,
-        displayPair: displayPairFromAsset(c.pair),
-        direction: c.signal,
-        confidence: c.confidence,
-        strength: c.strength,
-        timestamp: c.candleTime,
-        candleTime: c.candleTime,
-        ageSec,
-        outcome: null,
-        strategy: c.buyerPct != null && c.sellerPct != null
-          ? `buyers=${c.buyerPct}% sellers=${c.sellerPct}%`
-          : null,
-        reasons: null,
-        fresh: ageSec <= freshnessWindowSec,
-      });
+      out.push(sig);
     }
   }
 
-  return { signals: [...out, ...cachedSignals], health, rawCount: arr.length };
+  const health: AppStatus["health"] = fetchFailed
+    ? out.length > 0 ? "disconnected" : "down"
+    : data?.connected === false ? "disconnected" : "ok";
+
+  return {
+    signals: out,
+    health,
+    rawCount: arr.length,
+    skipped,
+    error: fetchFailed ? "fetch_failed" : undefined,
+    detail: fetchFailed && out.length > 0 ? "live snapshot failed — serving cached candles" : undefined,
+  };
 }
 
 /**
- * Helper: get all cached App 2 signals as SourceSignal[]. Used when the live
- * snapshot fetch fails entirely (so we still have *some* App 2 data from
- * our own historical cache).
- */
-function getApp2CachedSignalsAllPairs(nowSec: number, freshnessWindowSec: number, srcName: string): SourceSignal[] {
-  const out: SourceSignal[] = [];
-  const cached = getAllCachedApp2Signals();
-  for (const c of cached) {
-    const ageSec = Math.max(0, nowSec - c.candleTime);
-    out.push({
-      source: "app2",
-      sourceName: srcName,
-      pair: c.pair,
-      displayPair: displayPairFromAsset(c.pair),
-      direction: c.signal,
-      confidence: c.confidence,
-      strength: c.strength,
-      timestamp: c.candleTime,
-      candleTime: c.candleTime,
-      ageSec,
-      outcome: null,
-      strategy: c.buyerPct != null && c.sellerPct != null
-        ? `buyers=${c.buyerPct}% sellers=${c.sellerPct}%`
-        : null,
-      reasons: null,
-      fresh: ageSec <= freshnessWindowSec,
-    });
-  }
-  return out;
-}
-
-/**
- * App3 (OTC Live Trading): /api/share-signals (current) + /api/signals?limit=N (historical)
+ * App3 (OTC Live Trading): /api/share-signals (current) + /api/signals?limit=N
  *
- * App 3 has TWO relevant endpoints:
- *   1. /api/share-signals -> { signals: [...] } — the CURRENT candle's live
- *      signal for all 16 pairs. Each row has: asset, display, type, time
- *      (unix seconds for the candle being predicted), signal, strength,
- *      confidence (0-1 float), prediction_candle {open,high,low,close}.
- *   2. /api/signals?limit=N -> [...] — RESOLVED historical signals (the
- *      candle has closed, result is known: correct/wrong/draw).
+ *   1. /api/share-signals — the CURRENT candle's live signal per pair.
+ *   2. /api/signals?limit=N — RESOLVED historical signals (candle closed,
+ *      result known: correct/wrong/draw).
  *
- * We need BOTH: the live signal for the current candle (so consensus can
- * align with App 1 and App 2 which also predict the current candle), plus
- * historical signals for backtest win-rate calculation.
- *
- * We merge them, deduping by (pair, candleTime). When both exist for the
- * same candle, the historical one wins (it has the resolved outcome).
+ * We need both: the live signal so consensus can align with App 1 / App 2 on
+ * the candle in play, plus history for the win-rate panel. They are merged and
+ * deduped by (pair, candleTime); the historical row wins because it carries a
+ * resolved outcome.
  */
 async function fetchApp3(freshnessWindowSec: number, nowSec: number): Promise<NormalizeResult> {
   const src = SOURCES[2];
+  const offset = getCandleOffsetSec("app3");
+  const skipped = newSkipped();
   const out: SourceSignal[] = [];
   const seenCandles = new Set<string>(); // pair|candleTime
   let health: AppStatus["health"] = "ok";
   let rawCount = 0;
-  let fetchError: string | undefined;
+  let histOk = false;
+  let liveOk = false;
 
-  // --- 1. Fetch RESOLVED historical signals (these have WIN/LOSS outcomes) ---
+  // --- 1. RESOLVED historical signals (these carry WIN/LOSS outcomes) ---
   const histUrl = `${src.baseUrl}${(src as any).historicalPath ?? "/api/signals?limit=300"}`;
   try {
     const histData = await fetchJsonWithTimeout(histUrl, FETCH_TIMEOUT_MS);
     if (histData) {
-      const arr: any[] = Array.isArray(histData) ? histData : (Array.isArray(histData?.signals) ? histData.signals : []);
+      histOk = true;
+      const arr = pickArray(histData, ["signals", "rows", "data"]);
       rawCount = arr.length;
       for (const s of arr) {
-        const a = s?.asset;
-        if (!a) continue;
-        const ts = Math.floor(Number(s.ctime ?? 0));
-        const dir = String(s.signal ?? "").toUpperCase() as Direction;
-        if (dir !== "CALL" && dir !== "PUT") continue;
-        const candleTime = Math.floor(ts / 60) * 60;
-        const ageSec = Math.max(0, nowSec - ts);
-        const key = `${a}|${candleTime}`;
+        const pair = canonicalPair(pickField(s, PAIR_KEYS));
+        if (!pair) { skipped.noPair++; continue; }
+        const dir = parseDirection(pickField(s, DIRECTION_KEYS));
+        if (!dir) { skipped.noDirection++; continue; }
+        // NOTE: ctime used to be read with a bare Math.floor(Number(...)), so
+        // a millisecond value would put the candle ~53,000 years out — which
+        // both hid the signal and made that bogus bucket the pair's "newest
+        // candle". toUnixSeconds() normalizes the unit first.
+        const ctime = toUnixSeconds(pickField(s, ["ctime", "candle_time", "time", "ts"]));
+        if (!(ctime > 0)) { skipped.noCandle++; continue; }
+        const candleTime = candleFloor(ctime) + offset;
+        const result = String(pickField(s, ["result", "outcome", "status"]) ?? "").toLowerCase();
+        const key = `${pair}|${candleTime}`;
         seenCandles.add(key);
-        out.push({
-          source: "app3",
-          sourceName: src.name,
-          pair: a,
-          displayPair: displayPairFromAsset(a),
-          direction: dir,
-          confidence: typeof s.confidence === "number" ? s.confidence : null,
-          strength: typeof s.strength === "string" ? s.strength : null,
-          timestamp: ts,
-          candleTime,
-          ageSec,
-          outcome: s.result === "correct" ? "CORRECT" : s.result === "wrong" ? "WRONG" : s.result === "draw" ? "DRAW" : null,
-          strategy: typeof s.codes === "string" && s.codes ? s.codes : null,
-          reasons: null,
-          fresh: ageSec <= freshnessWindowSec,
-        });
+        out.push(
+          makeSignal(
+            {
+              source: "app3",
+              sourceName: src.name,
+              pair,
+              direction: dir,
+              confidence: typeof s?.confidence === "number" ? s.confidence : null,
+              strength: typeof s?.strength === "string" ? s.strength : null,
+              timestamp: ctime,
+              candleTime,
+              outcome:
+                result === "correct" || result === "win"
+                  ? "CORRECT"
+                  : result === "wrong" || result === "loss"
+                  ? "WRONG"
+                  : result === "draw"
+                  ? "DRAW"
+                  : null,
+              strategy: typeof s?.codes === "string" && s.codes ? s.codes : null,
+              reasons: null,
+            },
+            nowSec,
+            freshnessWindowSec
+          )
+        );
       }
     }
   } catch {
-    // Historical fetch failed — keep going, we still want live signals.
+    // Historical fetch failed — keep going, we still want the live signals.
   }
 
-  // --- 2. Fetch CURRENT live signals from /api/share-signals ---
+  // --- 2. CURRENT live signals from /api/share-signals ---
   try {
     const liveData = await fetchJsonWithTimeout(`${src.baseUrl}${src.signalsPath}`, FETCH_TIMEOUT_MS);
     if (liveData) {
-      const liveArr: any[] = Array.isArray(liveData?.signals) ? liveData.signals : (Array.isArray(liveData) ? liveData : []);
+      liveOk = true;
+      const liveArr = pickArray(liveData, ["signals", "rows", "data"]);
       for (const r of liveArr) {
-        const a = r?.asset;
-        if (!a) continue;
-        const rawSignal = String(r?.signal ?? "").toUpperCase().trim();
-        if (rawSignal !== "CALL" && rawSignal !== "PUT") continue;
-        const dir = rawSignal as Direction;
-        // App 3's share-signals `time` is a unix-seconds timestamp for the
-        // candle being predicted.
-        const ts = Math.floor(Number(r?.time ?? 0));
-        const candleTime = ts > 0 ? Math.floor(ts / 60) * 60 : Math.floor(nowSec / 60) * 60;
-        const key = `${a}|${candleTime}`;
+        const pair = canonicalPair(pickField(r, PAIR_KEYS));
+        if (!pair) { skipped.noPair++; continue; }
+        const dir = parseDirection(pickField(r, DIRECTION_KEYS));
+        if (!dir) { skipped.noDirection++; continue; }
+        // App 3's share-signals `time` is a unix timestamp for the candle
+        // being predicted (unit-normalized, same reasoning as ctime above).
+        const t = toUnixSeconds(pickField(r, ["time", "candle_time", "ctime", "ts"]));
+        const candleTime = (t > 0 ? candleFloor(t) : candleFloor(nowSec)) + offset;
+        const key = `${pair}|${candleTime}`;
         if (seenCandles.has(key)) continue; // historical already has this candle
         seenCandles.add(key);
-        const ageSec = Math.max(0, nowSec - ts);
-        out.push({
-          source: "app3",
-          sourceName: src.name,
-          pair: a,
-          displayPair: displayPairFromAsset(a),
-          direction: dir,
-          confidence: typeof r?.confidence === "number" ? r.confidence : null,
-          strength: typeof r?.strength === "string" ? r.strength : null,
-          timestamp: ts > 0 ? ts : candleTime,
-          candleTime,
-          ageSec,
-          outcome: null, // live signal, not yet resolved
-          strategy: null,
-          reasons: null,
-          fresh: ageSec <= freshnessWindowSec,
-        });
+        out.push(
+          makeSignal(
+            {
+              source: "app3",
+              sourceName: src.name,
+              pair,
+              direction: dir,
+              confidence: typeof r?.confidence === "number" ? r.confidence : null,
+              strength: typeof r?.strength === "string" ? r.strength : null,
+              timestamp: t > 0 ? t : candleTime,
+              candleTime,
+              outcome: null, // live signal, not yet resolved
+              strategy: null,
+              reasons: null,
+            },
+            nowSec,
+            freshnessWindowSec
+          )
+        );
       }
     }
   } catch {
-    if (out.length === 0) {
-      // Both fetches failed
-      health = "down";
-      fetchError = "fetch_failed";
-    }
+    // fall through to the health decision below
   }
 
-  return { signals: out, health, rawCount, error: fetchError };
+  let error: string | undefined;
+  if (!histOk && !liveOk) {
+    health = "down";
+    error = "fetch_failed";
+  } else if (!liveOk) {
+    // The live endpoint is what feeds the current candle — say so rather than
+    // silently reporting "ok" while the current candle column stays empty.
+    health = "disconnected";
+    error = "live_fetch_failed";
+  }
+
+  return { signals: out, health, rawCount, skipped, error };
+}
+
+// ---- Consensus ----------------------------------------------------------
+
+/**
+ * Classify one candle's per-app signals.
+ *
+ * Only signals that are valid FOR THAT CANDLE vote. Apps are reported in three
+ * buckets so the dashboard can tell "app never sent anything" apart from "app
+ * sent something too late to count".
+ */
+function classifyCandle(
+  pair: string,
+  candleTime: number,
+  category: "otc" | "real",
+  appsMap: Partial<Record<AppId, SourceSignal>>
+): CandleConsensus {
+  const sigs: SourceSignal[] = [];
+  const missing: AppId[] = [];
+  const invalid: AppId[] = [];
+
+  (["app1", "app2", "app3"] as AppId[]).forEach((id) => {
+    const s = appsMap[id];
+    if (!s) { missing.push(id); return; }
+    if (!s.validForCandle) { invalid.push(id); return; }
+    sigs.push(s);
+  });
+
+  const callCount = sigs.filter((s) => s.direction === "CALL").length;
+  const putCount = sigs.filter((s) => s.direction === "PUT").length;
+  const neutralCount = sigs.filter((s) => s.direction === "NEUTRAL").length;
+  // Only CALL/PUT are votes — a NEUTRAL row must not be able to turn an
+  // all-neutral candle into a "conflict", which the old `callCount >= putCount`
+  // shortcut did (it defaulted to CALL even when both counts were zero).
+  const voteCount = callCount + putCount;
+
+  const agreeing: AppId[] = [];
+  const disagreeing: AppId[] = [];
+  let level: ConsensusLevel;
+  let direction: Direction | null = null;
+
+  if (voteCount === 0) {
+    level = "none";
+  } else if (voteCount === 1) {
+    level = "1-only";
+    const only = sigs.find((s) => s.direction === "CALL" || s.direction === "PUT")!;
+    direction = only.direction;
+    agreeing.push(only.source);
+  } else if (callCount === voteCount || putCount === voteCount) {
+    // Unanimous among the apps that voted.
+    direction = callCount === voteCount ? "CALL" : "PUT";
+    level = voteCount >= 3 ? "3-agree" : "2-agree";
+    sigs.forEach((s) => {
+      if (s.direction === direction) agreeing.push(s.source);
+    });
+  } else {
+    level = "conflict";
+    // Majority side (null on a tie) — reported for context only; a conflict is
+    // never a tradeable signal.
+    direction = callCount > putCount ? "CALL" : putCount > callCount ? "PUT" : null;
+    sigs.forEach((s) => {
+      if (s.direction === "NEUTRAL") return;
+      if (direction && s.direction === direction) agreeing.push(s.source);
+      else disagreeing.push(s.source);
+    });
+  }
+
+  return {
+    pair,
+    displayPair: displayPairFromAsset(pair),
+    category,
+    candleTime,
+    signals: sigs.sort((a, b) => (a.source > b.source ? 1 : -1)),
+    freshCount: sigs.length,
+    callCount,
+    putCount,
+    neutralCount,
+    consensus: {
+      level,
+      direction,
+      agreeingApps: agreeing,
+      disagreeingApps: disagreeing,
+      missingApps: missing,
+      invalidApps: invalid,
+    },
+  };
+}
+
+/**
+ * Pick the candle the dashboard should show as "now".
+ *
+ * `candles` is sorted newest first. We take the newest candle that isn't
+ * further ahead than one candle from the current minute: apps legitimately
+ * publish a signal for the NEXT candle, but anything beyond that is a bad
+ * timestamp, and letting such a bucket win used to blank out the whole row.
+ */
+function pickLatestCandle(candles: CandleConsensus[], nowSec: number): CandleConsensus | null {
+  if (candles.length === 0) return null;
+  const maxCandle = candleFloor(nowSec) + CANDLE_SEC;
+  for (const c of candles) {
+    if (c.candleTime <= maxCandle) return c;
+  }
+  return candles[candles.length - 1];
 }
 
 // ---- Aggregator entrypoint ----------------------------------------------
 
 export async function aggregateSignals(
-  freshnessWindowSec: number = 600,
+  freshnessWindowSec: number = 600
 ): Promise<AggregatedResponse> {
   const nowSec = Math.floor(Date.now() / 1000);
   const timestampMs = Date.now();
 
   // Fan out all 3 signals-fetchers AND all 3 health-fetchers in parallel.
-  // Health calls are independent of signals calls, so we can run them
-  // concurrently to minimize total latency.
   const [r1, r2, r3, h1, h2, h3] = await Promise.all([
     fetchApp1(freshnessWindowSec, nowSec),
     fetchApp2(freshnessWindowSec, nowSec),
@@ -670,20 +789,15 @@ export async function aggregateSignals(
     HEALTH_FETCHERS.app3(),
   ]);
 
-  // Merge health data into the per-app results.
-  // Health-endpoint data is authoritative for the online/token state.
   const results: Record<AppId, NormalizeResult> = {
     app1: { ...r1, ...mergeHealth(r1, h1) },
     app2: { ...r2, ...mergeHealth(r2, h2) },
     app3: { ...r3, ...mergeHealth(r3, h3) },
   };
 
-  // Build app status objects using authoritative health data.
   const apps: AppStatus[] = SOURCES.map((src) => {
     const r = results[src.id];
-    // Online if signals call succeeded AND health didn't say "down".
     const online = r.health !== "down" && r.health !== "unknown";
-    const freshCount = r.signals.filter((s) => s.fresh).length;
     return {
       id: src.id,
       name: src.name,
@@ -691,7 +805,7 @@ export async function aggregateSignals(
       online,
       lastChecked: timestampMs,
       signalCount: r.signals.length,
-      freshSignalCount: freshCount,
+      freshSignalCount: r.signals.filter((s) => s.fresh).length,
       health: r.health,
       detail: r.detail,
       live: r.live,
@@ -699,21 +813,20 @@ export async function aggregateSignals(
       uptimeSec: r.uptimeSec,
       activeStreams: r.activeStreams,
       latencyMs: r.latencyMs,
+      rawCount: r.rawCount,
+      skipped: r.skipped,
       error: r.error,
     };
   });
 
   // ---- Build candle-aligned consensus ----
-  // For each pair, group ALL signals by candle-time (minute-floored).
-  // For each (pair, candle) we have at most one signal per app (latest wins).
-  // Consensus is computed per-candle — only signals for the SAME candle
-  // are compared. This is the key fix: previously we compared "latest from
-  // each app" which could be from different candles, producing bogus matches.
-  const pairMap = new Map<string, {
-    otc: boolean;
-    // candleTime -> { app -> signal }
-    candles: Map<number, Partial<Record<AppId, SourceSignal>>>;
-  }>();
+  // For each pair, group ALL signals by candle-time (minute-floored). Within a
+  // (pair, candle) there is at most one signal per app. Consensus compares
+  // only signals for the SAME candle.
+  const pairMap = new Map<
+    string,
+    { otc: boolean; candles: Map<number, Partial<Record<AppId, SourceSignal>>> }
+  >();
 
   (["app1", "app2", "app3"] as AppId[]).forEach((id) => {
     for (const sig of results[id].signals) {
@@ -727,131 +840,63 @@ export async function aggregateSignals(
         candle = {};
         entry.candles.set(sig.candleTime, candle);
       }
-      // Keep the latest signal per app per candle (in case of dupes)
       const cur = candle[id];
-      if (!cur || sig.timestamp > cur.timestamp) {
+      // Prefer a signal that's actually valid for this candle; break ties on
+      // recency. (Previously a late duplicate could evict the valid one.)
+      if (
+        !cur ||
+        (sig.validForCandle && !cur.validForCandle) ||
+        (sig.validForCandle === cur.validForCandle && sig.timestamp > cur.timestamp)
+      ) {
         candle[id] = sig;
       }
     }
   });
 
-  // Build per-pair consensus list
   const pairs: PairConsensus[] = [];
   pairMap.forEach((entry, pair) => {
-    // For each candle, classify consensus
+    const category = entry.otc ? "otc" : "real";
     const candleEntries: CandleConsensus[] = [];
     entry.candles.forEach((appsMap, candleTime) => {
-      const sigs: SourceSignal[] = [];
-      let callCount = 0, putCount = 0, neutralCount = 0, freshCount = 0;
-      const agreeing: AppId[] = [];
-      const disagreeing: AppId[] = [];
-      const missing: AppId[] = [];
-
-      (["app1", "app2", "app3"] as AppId[]).forEach((id) => {
-        const s = appsMap[id];
-        if (!s) { missing.push(id); return; }
-        if (!s.fresh) { missing.push(id); return; }
-        sigs.push(s);
-        freshCount++;
-        if (s.direction === "CALL") callCount++;
-        else if (s.direction === "PUT") putCount++;
-        else neutralCount++;
-      });
-
-      let level: ConsensusLevel;
-      let direction: Direction | null = null;
-
-      if (freshCount === 0) {
-        level = "none";
-      } else if (freshCount === 1) {
-        level = "1-only";
-        direction = sigs[0].direction;
-        agreeing.push(sigs[0].source);
-      } else {
-        const dominant = (callCount >= putCount ? "CALL" : "PUT") as Direction;
-        const dominantCount = dominant === "CALL" ? callCount : putCount;
-        if (dominantCount === freshCount) {
-          level = freshCount === 3 ? "3-agree" : "2-agree";
-          direction = dominant;
-          sigs.forEach((s) => {
-            if (s.direction === dominant) agreeing.push(s.source);
-            else disagreeing.push(s.source);
-          });
-        } else {
-          level = "conflict";
-          sigs.forEach((s) => {
-            if (s.direction === dominant) agreeing.push(s.source);
-            else disagreeing.push(s.source);
-          });
-        }
-      }
-
-      candleEntries.push({
-        pair,
-        displayPair: displayPairFromAsset(pair),
-        category: entry.otc ? "otc" : "real",
-        candleTime,
-        signals: sigs.sort((a, b) => (a.source > b.source ? 1 : -1)),
-        freshCount,
-        callCount,
-        putCount,
-        neutralCount,
-        consensus: {
-          level,
-          direction,
-          agreeingApps: agreeing,
-          disagreeingApps: disagreeing,
-          missingApps: missing,
-        },
-      });
+      candleEntries.push(classifyCandle(pair, candleTime, category, appsMap));
     });
 
-    // Sort candles newest first
     candleEntries.sort((a, b) => b.candleTime - a.candleTime);
 
-    // Pick the "latest candle" for display. We always show the NEWEST candle
-    // (candleEntries[0], since sorted newest-first). The user explicitly wants
-    // "if any candle data is missing, signal should be closed/none" — so we
-    // don't skip back to find an agreeing candle. The newest candle's
-    // consensus IS the pair's current consensus.
-    let latestCandle: CandleConsensus | null = null;
-    if (candleEntries.length > 0) {
-      latestCandle = candleEntries[0];
-    }
-
-    // The pair's overall consensus = the latest candle's consensus.
-    // The pair's signals list = the latest candle's signals (for the
-    // backwards-compatible "latest signal per app" view).
-    const signals = latestCandle ? latestCandle.signals : [];
-    const freshCount = latestCandle ? latestCandle.freshCount : 0;
-    const callCount = latestCandle ? latestCandle.callCount : 0;
-    const putCount = latestCandle ? latestCandle.putCount : 0;
-    const neutralCount = latestCandle ? latestCandle.neutralCount : 0;
+    const latestCandle = pickLatestCandle(candleEntries, nowSec);
 
     pairs.push({
       pair,
       displayPair: displayPairFromAsset(pair),
-      category: entry.otc ? "otc" : "real",
-      signals,
+      category,
+      signals: latestCandle ? latestCandle.signals : [],
       candles: candleEntries,
       latestCandle,
-      freshCount,
-      callCount,
-      putCount,
-      neutralCount,
-      consensus: latestCandle ? latestCandle.consensus : {
-        level: "none" as ConsensusLevel,
-        direction: null,
-        agreeingApps: [],
-        disagreeingApps: [],
-        missingApps: ["app1", "app2", "app3"] as AppId[],
-      },
+      freshCount: latestCandle ? latestCandle.freshCount : 0,
+      callCount: latestCandle ? latestCandle.callCount : 0,
+      putCount: latestCandle ? latestCandle.putCount : 0,
+      neutralCount: latestCandle ? latestCandle.neutralCount : 0,
+      consensus: latestCandle
+        ? latestCandle.consensus
+        : {
+            level: "none" as ConsensusLevel,
+            direction: null,
+            agreeingApps: [],
+            disagreeingApps: [],
+            missingApps: ["app1", "app2", "app3"] as AppId[],
+            invalidApps: [],
+          },
     });
   });
 
-  // Sort: 3-agree > 2-agree > conflict > 1-only > none; ties break by category (otc first) then displayPair
+  // Sort: 3-agree > 2-agree > conflict > 1-only > none; ties break by category
+  // (otc first) then displayPair.
   const levelOrder: Record<ConsensusLevel, number> = {
-    "3-agree": 0, "2-agree": 1, conflict: 2, "1-only": 3, none: 4,
+    "3-agree": 0,
+    "2-agree": 1,
+    conflict: 2,
+    "1-only": 3,
+    none: 4,
   };
   pairs.sort((a, b) => {
     const l = levelOrder[a.consensus.level] - levelOrder[b.consensus.level];
@@ -881,4 +926,18 @@ export async function aggregateSignals(
     pairs,
     summary,
   };
+}
+
+/**
+ * Aggregation plus the per-app raw signal lists, for /api/diag. Kept separate
+ * so the hot path doesn't ship the raw arrays to every dashboard poll.
+ */
+export async function aggregateWithRaw(freshnessWindowSec: number = 1800) {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const [r1, r2, r3] = await Promise.all([
+    fetchApp1(freshnessWindowSec, nowSec),
+    fetchApp2(freshnessWindowSec, nowSec),
+    fetchApp3(freshnessWindowSec, nowSec),
+  ]);
+  return { nowSec, perApp: { app1: r1, app2: r2, app3: r3 } };
 }

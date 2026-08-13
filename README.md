@@ -96,7 +96,9 @@ Once connected, Railway auto-deploys on every `git push` to `main`. To disable, 
 │  │  ├─ /api/aggregated  — fetch from 3 apps         │    │
 │  │  ├─ /api/snapshot    — cached 5s background poller│    │
 │  │  ├─ /api/backtest    — win-rate calculator        │    │
+│  │  ├─ /api/diag        — alignment diagnostics      │    │
 │  │  └─ src/lib/                                   │    │
+│  │     ├─ signal-normalize.ts   — pair/time/candle  │    │
 │  │     ├─ signal-aggregator.ts  — 3-app consensus   │    │
 │  │     ├─ app2-cache.ts         — App 2 history     │    │
 │  │     ├─ snapshot-poller.ts    — 5s cache refresh   │    │
@@ -118,6 +120,54 @@ Once connected, Railway auto-deploys on every `git push` to `main`. To disable, 
 | `GET /api/snapshot?refresh=1` | Force re-poll before returning |
 | `GET /api/aggregated` | Direct aggregated fetch (no cache) |
 | `GET /api/backtest` | Run candle-aligned backtest, return win rates |
+| `GET /api/diag` | Alignment diagnostics — see below |
+| `GET /api/diag?poll=1` | Same, after forcing one App 2 cache poll |
+
+## Troubleshooting: an app's column is empty
+
+Open `/api/diag`. It reports, per app: rows returned, rows dropped and why,
+the pair keys it produced, and the newest candle it published. It also reports
+`offsets` — the candle difference between each pair of apps, measured on pairs
+they both cover.
+
+- `apps[].rawRows = 0` → the upstream returned nothing. Check that app itself.
+- `apps[].skipped.noPair / noDirection` high → the upstream renamed a field.
+- `pairOverlap[].onlyIn` non-empty → the apps genuinely cover different assets
+  (after canonicalization, spelling differences are no longer possible).
+- `offsets[].modalOffsetCandles ≠ 0` → the two apps label candles differently:
+  one tags the candle it analysed, the other the candle it predicts. Correct it
+  with an environment variable rather than a code change:
+
+  ```bash
+  APP1_CANDLE_OFFSET=0    # candles to shift App 1's bucket by
+  APP2_CANDLE_OFFSET=1    # e.g. App 2 is one candle behind the other two
+  APP3_CANDLE_OFFSET=0
+  ```
+
+  `/api/diag` prints the exact variable to set in `offsets[].hint`.
+
+## Consensus rules
+
+Consensus is computed per **(pair, candle)** — never across candles:
+
+- A signal counts for a candle if it was emitted at most 5 minutes before that
+  candle and no later than 30s after it closed. Anything else is reported as
+  `invalidApps` ("late" on the dashboard) rather than silently dropped.
+- `3-agree` / `2-agree` require the participating apps to be **unanimous**.
+  Two of three agreeing while the third disagrees is a `conflict`, not a
+  2-agree.
+- `NEUTRAL` rows do not vote; an app that is neutral counts as missing.
+
+## Tests
+
+```bash
+bun test tests/
+```
+
+`tests/signal-normalize.test.ts` covers pair/timestamp/clock normalization;
+`tests/signal-aggregator.test.ts` runs the aggregator against faked upstreams
+that reproduce the real-world differences between the 3 apps (different pair
+spellings, millisecond vs second timestamps, non-UTC clock strings).
 
 ## Disclaimer
 
