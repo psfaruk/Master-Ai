@@ -13,12 +13,10 @@ cmds = [
 [phases.build]
 cmds = [
   "echo 'Building Next.js app...'",
-  # Next.js build with standalone output — produces .next/standalone/server.js
-  "bun run build",
-  # Copy the static + public assets into the standalone bundle so the
-  # server can serve them in production.
-  "cp -r .next/static .next/standalone/.next/",
-  "cp -r public .next/standalone/ 2>/dev/null || true"
+  # Next.js build with standalone output. Since Next 13.4+, `output: "standalone"`
+  # automatically traces and copies static + public assets into .next/standalone,
+  # so no manual `cp -r` is needed.
+  "bun run build"
 ]
 
 [start]
