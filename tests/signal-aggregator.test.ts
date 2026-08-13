@@ -78,16 +78,20 @@ function threeAppsAgreeing(direction: "CALL" | "PUT" = "CALL") {
     ],
   };
   r[`${APP2}/api/share-signals`] = {
-    timestamp: nowSec * 1000,
+    timestamp: nowSec, // App 2 sends time.time() — unix SECONDS, float
     rows: [
       {
         // Display-style spelling with a slash and a spaced OTC marker.
         pair: "USD/COP OTC",
         signal: direction,
-        time: clockAt(currentCandle, 6), // rendered in UTC+6
+        type: "OTC",
+        // App 2 reports the LAST CLOSED candle; its prediction is for the
+        // candle that is now running, i.e. this + 1 minute.
+        time: clockAt(prevCandle, 0),
         confidence: 78, // 0-100 scale
         strength: "strong",
-        last_update: (currentCandle + 12) * 1000, // milliseconds
+        last_update: 3, // SECONDS AGO, not a timestamp
+        live: true,
         buyer_pct: 63,
         seller_pct: 37,
       },
@@ -168,7 +172,7 @@ describe("cross-app alignment", () => {
   test("App 2 in a different timezone still aligns", async () => {
     for (const tz of [-8, -3, 0, 5, 9]) {
       routes = threeAppsAgreeing("CALL");
-      (routes[`${APP2}/api/share-signals`] as any).rows[0].time = clockAt(currentCandle, tz);
+      (routes[`${APP2}/api/share-signals`] as any).rows[0].time = clockAt(prevCandle, tz);
       const res = await aggregate();
       const app2 = findPair(res, "USDCOP_otc").latestCandle!.signals.find(
         (s: any) => s.source === "app2"
@@ -176,6 +180,65 @@ describe("cross-app alignment", () => {
       expect(app2).toBeDefined();
       expect(app2!.candleTime).toBe(currentCandle);
     }
+  });
+
+  // --- Regressions verified against App 2's own source (psfaruk/binary-signals-app,
+  // server.py /api/share-signals + feed.py). These two are why App 2's column
+  // on the dashboard was empty on every row.
+
+  test("App 2's `last_update` is an age in seconds, not a timestamp", async () => {
+    routes = threeAppsAgreeing("CALL");
+    // server.py: last_update = round(now - last_tick, 0)  → "3" means 3s ago.
+    // Read as a unix timestamp that is 1970, making the signal look ~56 years
+    // stale, and it was dropped as not fresh.
+    (routes[`${APP2}/api/share-signals`] as any).rows[0].last_update = 3;
+
+    const res = await aggregate();
+    const app2 = findPair(res, "USDCOP_otc").latestCandle!.signals.find(
+      (s: any) => s.source === "app2"
+    );
+
+    expect(app2).toBeDefined();
+    expect(app2!.validForCandle).toBe(true);
+    expect(app2!.fresh).toBe(true);
+    expect(app2!.ageSec).toBeLessThan(120);
+    expect(app2!.timestamp).toBe(currentCandle);
+  });
+
+  test("App 2's `time` is the last CLOSED candle, so its signal is the next one", async () => {
+    routes = threeAppsAgreeing("CALL");
+    const row = (routes[`${APP2}/api/share-signals`] as any).rows[0];
+    // server.py takes candles[-1] (closed history); feed.py opens the running
+    // candle at last["time"] + period and predicts THAT one.
+    row.time = clockAt(prevCandle, 0);
+
+    const res = await aggregate();
+    const app2 = findPair(res, "USDCOP_otc").latestCandle!.signals.find(
+      (s: any) => s.source === "app2"
+    )!;
+
+    // Bucketed one candle forward — the candle it actually predicts, which is
+    // the same candle App 1 and App 3 label directly.
+    expect(app2.candleTime).toBe(currentCandle);
+    expect(app2.candleTime).toBe(prevCandle + 60);
+  });
+
+  test("App 2 rows for a dead pair (time '—') are skipped, not guessed", async () => {
+    routes = threeAppsAgreeing("CALL");
+    (routes[`${APP2}/api/share-signals`] as any).rows.push({
+      pair: "AUDCAD_otc",
+      type: "OTC",
+      time: "—", // server.py emits this when the pair has no stream
+      signal: "CALL",
+      confidence: 0,
+      strength: "—",
+      last_update: null,
+      live: false,
+    });
+
+    const res = await aggregate();
+    // No candle can be known for that row, so it must not invent one.
+    expect(res.pairs.find((p) => p.pair === "AUDCAD_otc")).toBeUndefined();
   });
 
   test("a millisecond ctime from App 3 does not hijack the newest candle", async () => {

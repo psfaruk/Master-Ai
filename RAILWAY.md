@@ -21,9 +21,14 @@ Railway-এ deploy করার সময় নিচের variables গুল
 বিশ্লেষণ করছে সেটির সময় দেয়, আরেকটি যে candle predict করছে সেটির। ফলে signal
 গুলো পাশাপাশি bucket-এ পড়ে যায় এবং কখনো consensus তৈরি হয় না।
 
-`/api/diag` endpoint-এ `offsets[].modalOffsetCandles` দেখুন। মান `0` হলে
-alignment ঠিক আছে, কিছু সেট করার দরকার নেই। মান `0` না হলে নিচের variable
-দিয়ে ঠিক করুন (`offsets[].hint`-এ ঠিক কোনটা সেট করতে হবে লেখা থাকে):
+**App 2-এর offset কোডেই ঠিক করা আছে — আবার সেট করবেন না।** App 2-এর
+`/api/share-signals` শেষ *বন্ধ হওয়া* candle-এর সময় পাঠায়, কিন্তু signal-টা
+তার *পরের* (চলতি) candle-এর জন্য। তাই `app2-cache.ts`-এ এক candle এগিয়ে
+নেওয়া হয়। এর উপরে `APP2_CANDLE_OFFSET=1` দিলে এক candle বেশি সরে যাবে।
+
+বাকি কোনো offset থাকলে `/api/diag`-এ `offsets[].modalOffsetCandles` দেখুন।
+মান `0` হলে alignment ঠিক আছে, কিছু সেট করার দরকার নেই। `0` না হলে নিচের
+variable দিয়ে ঠিক করুন (`offsets[].hint`-এ ঠিক কোনটা সেট করতে হবে লেখা থাকে):
 
 | Variable | Value | Notes |
 |---|---|---|
