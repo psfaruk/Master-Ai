@@ -3,19 +3,32 @@
  * ---------------
  * Fetches historical signals from all 3 source apps, normalizes them,
  * aligns them by candle-time (minute-floored), classifies each candle's
- * consensus, and computes per-level win rate.
+ * consensus, and computes per-level AND per-pair win rate.
  *
- * Normalization goes through ./signal-normalize.ts — the same helpers the live
- * aggregator uses. This matters: when the backtest parsed pairs and timestamps
- * with its own slightly different code, it clustered signals differently from
- * the dashboard, so the win rates it reported were not the win rates of the
- * signals actually being shown.
+ * Outcomes are graded against ACTUAL candle data from App 3 (see
+ * ./candle-fetcher.ts). This means:
+ *   - Every signal gets a win/loss verdict, even when its source app
+ *     doesn't report one (notably App 2, which never reports outcomes).
+ *   - The verdict is computed from (close - open) vs direction, so it is
+ *     independent of the source app's own bookkeeping and is therefore
+ *     consistent across all 3 apps.
+ *
+ * Per-pair breakdown:
+ *   The `perPair` field holds per-pair per-level stats and the per-pair
+ *   cluster history. The UI uses this to render a pair selector + a
+ *   "show me only 2-agree signals for this pair" filter.
  *
  * Used by GET /api/backtest.
  */
 
 import { fetchJsonWithTimeout } from "./backtest-fetcher";
 import { getAllCachedApp2Signals, startApp2CachePoller } from "./app2-cache";
+import {
+  gradeSignal,
+  refreshCandles,
+  startCandlePoller,
+  type Candle,
+} from "./candle-fetcher";
 import {
   canonicalPair,
   candleFloor,
@@ -25,6 +38,7 @@ import {
   pickArray,
   pickField,
   toUnixSeconds,
+  CANDLE_SEC,
   DIRECTION_KEYS,
   PAIR_KEYS,
   type AppId,
@@ -41,7 +55,7 @@ export interface NormalizedSignal {
   /** Candle time (unix seconds, minute-floored) — used for strict alignment. */
   candleTime: number;
   direction: Direction;
-  /** 1=win, 0=loss, null=unknown (incl. ACTIVE / unresolved).
+  /** 1=win, 0=loss, null=unknown (incl. ACTIVE / unresolved / no candle data).
    *  DRAW is represented as `null` and tracked separately via rawStatus so
    *  the backtest can EXCLUDE draws from the graded count (a draw is neither
    *  a win nor a loss — counting it as "unknown" used to dilute the win rate). */
@@ -82,12 +96,24 @@ export interface SourceStat {
   draw: number;
 }
 
+/** Per-pair stats — one entry per consensus level. */
+export interface PairStat {
+  pair: string;
+  displayPair: string;
+  category: "otc" | "real";
+  levels: Record<ConsensusLevel, LevelStat>;
+  /** Recent clusters for this pair, newest first. */
+  history: ClassifiedCluster[];
+}
+
 export interface BacktestResult {
   timestamp: number;
   totalSignals: number;
   totalClusters: number;
   levels: Record<ConsensusLevel, LevelStat>;
   sources: Record<AppId, SourceStat>;
+  /** Per-pair breakdown — used by the per-pair win rate UI. */
+  perPair: PairStat[];
   sampleThreeAgree: ClassifiedCluster[];
   sampleTwoAgree: ClassifiedCluster[];
   verdict:
@@ -123,14 +149,9 @@ function normalizeApp1(d: any): NormalizedSignal | null {
 
   const status = pickField(d, ["status", "result", "outcome"]);
   const s = String(status ?? "").toUpperCase();
-  // DRAW / VOID are resolved-but-neutral outcomes. We keep outcome=null (so
-  // they do NOT count toward win/loss) and surface rawStatus so the backtest's
-  // stats loop can put them in the draw bucket instead of the unknown bucket.
-  // VOID = Quotex cancelled the trade (rare); same treatment as DRAW.
   let outcome: 0 | 1 | null = null;
   if (s === "WIN" || s === "CORRECT") outcome = 1;
   else if (s === "LOSS" || s === "WRONG") outcome = 0;
-  // DRAW, VOID, ACTIVE all leave outcome=null — DRAW/VOID tracked via rawStatus.
 
   return {
     source: "app1",
@@ -154,8 +175,6 @@ function normalizeApp3(d: any, timeKeys: string[]): NormalizedSignal | null {
   const candleTime = candleFloor(ts) + getCandleOffsetSec("app3");
 
   const result = String(pickField(d, ["result", "outcome", "status"]) ?? "").toLowerCase();
-  // DRAW: resolved but neutral. outcome stays null so it doesn't count toward
-  // win/loss; rawStatus="draw" lets the stats loop bucket it as draw, not unknown.
   let outcome: 0 | 1 | null = null;
   if (result === "correct" || result === "win") outcome = 1;
   else if (result === "wrong" || result === "loss") outcome = 0;
@@ -188,13 +207,8 @@ function classifyCluster(cluster: Cluster) {
     direction = callC > putC ? "CALL" : putC > callC ? "PUT" : null;
   }
 
-  // Grade only the apps that voted for the consensus direction. A conflict has
-  // no tradeable direction, so it is never graded — counting the majority side
-  // of a conflict as a "win" used to inflate the conflict row's win rate.
+  // Grade only the apps that voted for the consensus direction.
   const gradable = level === "conflict" ? [] : signalList.filter((a) => a.direction === direction);
-  // DRAW/VOID outcomes are tracked SEPARATELY — they are resolved (so not
-  // "unknown") but neither win nor loss. Excluding them from the win/loss/unknown
-  // buckets keeps the win rate honest; counting them as "unknown" used to dilute it.
   const isNeutral = (rs: string) => {
     const v = rs.toLowerCase();
     return v === "draw" || v === "void";
@@ -225,12 +239,56 @@ function classifyCluster(cluster: Cluster) {
   };
 }
 
+// ---- Outcome grading against candle data ----------------------------------
+
+/**
+ * Fill in missing outcomes by grading each signal against the actual candle
+ * close from App 3 (via candle-fetcher).
+ *
+ * For signals whose source app already reports an outcome (App 1 / App 3),
+ * we KEEP that outcome — it is the source-of-truth verdict.
+ *
+ * For signals with no outcome (App 2, or any signal whose source marked it
+ * ACTIVE/null), we look up the candle by (pair, candleTime) and grade:
+ *   - CALL wins if close > open
+ *   - PUT  wins if close < open
+ *   - DRAW if close === open (within epsilon)
+ *   - UNKNOWN if candle data is missing (candle hasn't closed yet, or App 3
+ *     doesn't track this pair)
+ *
+ * The candle data was refreshed at the top of runBacktest().
+ */
+function gradeWithCandles(signals: NormalizedSignal[]): void {
+  for (const s of signals) {
+    if (s.outcome !== null) continue; // source already reported
+    if (s.rawStatus && /draw|void/i.test(s.rawStatus)) continue; // already classified
+
+    const result = gradeSignal(s.pair, s.candleTime, s.direction);
+    if (result.outcome === "WIN") {
+      s.outcome = 1;
+    } else if (result.outcome === "LOSS") {
+      s.outcome = 0;
+      // Also record rawStatus so the isNeutral() check above doesn't trip
+      // on candles we ourselves graded as DRAW.
+    } else if (result.outcome === "DRAW") {
+      s.rawStatus = "draw";
+    }
+    // UNKNOWN → leave outcome null (still graded as "unknown" by the stats loop)
+  }
+}
+
 // ---- Main runner ----------------------------------------------------------
 
 export async function runBacktest(): Promise<BacktestResult> {
   // App 2 has no history endpoint — our own poller is the only source of past
   // candles, so make sure it is running even if /api/snapshot was never hit.
   startApp2CachePoller();
+  // Start the candle poller too — it grades signals against actual closes.
+  startCandlePoller();
+  // Force one synchronous refresh so the grading below has fresh data.
+  // (The background poller may have just started; this guarantees we have
+  // at least one fetch in the cache before we try to grade.)
+  await refreshCandles().catch(() => {});
 
   const allSignals: NormalizedSignal[] = [];
   const nowSec = Math.floor(Date.now() / 1000);
@@ -239,8 +297,6 @@ export async function runBacktest(): Promise<BacktestResult> {
   const push = (s: NormalizedSignal | null) => {
     if (!s) return;
     if (s.candleTime < minCandle) return;
-    // Same rule as the live dashboard: a signal only counts for a candle if it
-    // was emitted in time for that candle.
     if (!isSignalValidForCandle(s.ts, s.candleTime)) return;
     allSignals.push(s);
   };
@@ -251,10 +307,7 @@ export async function runBacktest(): Promise<BacktestResult> {
     for (const s of pickArray(d, ["signals", "rows", "data"])) push(normalizeApp1(s));
   } catch { /* ignore — a missing app just means fewer clusters */ }
 
-  // App2 — historical candles recorded by our own poller. The live snapshot
-  // only ever holds the current candle, and app2-cache is already polling it
-  // every 5s, so the cache IS the complete picture; reading the live endpoint
-  // again here would only duplicate the newest row.
+  // App2 — historical candles recorded by our own poller.
   for (const c of getAllCachedApp2Signals()) {
     push({
       source: "app2",
@@ -262,7 +315,7 @@ export async function runBacktest(): Promise<BacktestResult> {
       ts: c.firstSeenSec > 0 ? c.firstSeenSec : c.candleTime,
       candleTime: c.candleTime + getCandleOffsetSec("app2"),
       direction: c.signal,
-      outcome: null, // App 2 never reports an outcome
+      outcome: null, // App 2 never reports an outcome — graded via candle data below
       rawStatus: null,
     });
   }
@@ -281,9 +334,10 @@ export async function runBacktest(): Promise<BacktestResult> {
     }
   } catch { /* ignore */ }
 
+  // ---- Grade signals that lack an outcome, using candle close data ----
+  gradeWithCandles(allSignals);
+
   // ---- Candle-aligned clustering ----
-  // Group by (pair, candle); at most one signal per app per candle (latest
-  // wins). Only signals for the SAME candle are ever compared.
   const byPairCandle = new Map<string, Partial<Record<AppId, NormalizedSignal>>>();
   for (const s of allSignals) {
     const key = `${s.pair}|${s.candleTime}`;
@@ -306,11 +360,9 @@ export async function runBacktest(): Promise<BacktestResult> {
     allClusters.push({ ...classifyCluster(cluster), pair });
   });
 
-  // Newest first, so the samples shown on the dashboard are the recent ones.
   allClusters.sort((a, b) => b.ts - a.ts);
 
-  // Level stats — track draw separately from win/loss/unknown so the
-  // win rate isn't diluted by resolved-but-drawn candles.
+  // ---- Level stats (global, across all pairs) ----
   const levels: Record<ConsensusLevel, LevelStat> = {
     "3-agree": newLevelStat(),
     "2-agree": newLevelStat(),
@@ -318,22 +370,44 @@ export async function runBacktest(): Promise<BacktestResult> {
     "1-only": newLevelStat(),
   };
   for (const c of allClusters) {
-    const s = levels[c.level];
-    s.total++;
-    if (c.outcome === 1) s.win++;
-    else if (c.outcome === 0) s.loss++;
-    else if ((c as any).agreeingDraw > 0 && c.outcome === null) s.draw += (c as any).agreeingDraw;
-    else s.unknown++;
-    if (c.direction === "CALL") {
-      s.call++;
-      if (c.outcome === 1) s.callWin++;
-      else if (c.outcome === 0) s.callLoss++;
-    } else if (c.direction === "PUT") {
-      s.put++;
-      if (c.outcome === 1) s.putWin++;
-      else if (c.outcome === 0) s.putLoss++;
-    }
+    addClusterToLevel(levels[c.level], c);
   }
+
+  // ---- Per-pair stats ----
+  // Group clusters by pair, then compute per-level stats per pair.
+  const clustersByPair = new Map<string, ClassifiedCluster[]>();
+  for (const c of allClusters) {
+    let arr = clustersByPair.get(c.pair);
+    if (!arr) { arr = []; clustersByPair.set(c.pair, arr); }
+    arr.push(c);
+  }
+
+  const perPair: PairStat[] = [];
+  clustersByPair.forEach((clusters, pair) => {
+    const pl: Record<ConsensusLevel, LevelStat> = {
+      "3-agree": newLevelStat(),
+      "2-agree": newLevelStat(),
+      conflict: newLevelStat(),
+      "1-only": newLevelStat(),
+    };
+    for (const c of clusters) addClusterToLevel(pl[c.level], c);
+
+    perPair.push({
+      pair,
+      displayPair: displayPairFromAssetLocal(pair),
+      category: pair.endsWith("_otc") ? "otc" : "real",
+      levels: pl,
+      history: clusters,
+    });
+  });
+
+  // Sort perPair so the pairs with the most clusters (most data) come first.
+  perPair.sort((a, b) => {
+    const aTotal = a.levels["3-agree"].total + a.levels["2-agree"].total + a.levels["1-only"].total;
+    const bTotal = b.levels["3-agree"].total + b.levels["2-agree"].total + b.levels["1-only"].total;
+    if (aTotal !== bTotal) return bTotal - aTotal;
+    return a.displayPair.localeCompare(b.displayPair);
+  });
 
   // Source stats — track draw separately too.
   const sources: Record<AppId, SourceStat> = {
@@ -386,10 +460,28 @@ export async function runBacktest(): Promise<BacktestResult> {
     totalClusters: allClusters.length,
     levels,
     sources,
+    perPair,
     sampleThreeAgree,
     sampleTwoAgree,
     verdict,
   };
+}
+
+function addClusterToLevel(s: LevelStat, c: ReturnType<typeof classifyCluster>): void {
+  s.total++;
+  if (c.outcome === 1) s.win++;
+  else if (c.outcome === 0) s.loss++;
+  else if ((c as any).agreeingDraw > 0 && c.outcome === null) s.draw += (c as any).agreeingDraw;
+  else s.unknown++;
+  if (c.direction === "CALL") {
+    s.call++;
+    if (c.outcome === 1) s.callWin++;
+    else if (c.outcome === 0) s.callLoss++;
+  } else if (c.direction === "PUT") {
+    s.put++;
+    if (c.outcome === 1) s.putWin++;
+    else if (c.outcome === 0) s.putLoss++;
+  }
 }
 
 function newLevelStat(): LevelStat {
@@ -398,3 +490,23 @@ function newLevelStat(): LevelStat {
     call: 0, put: 0, callWin: 0, callLoss: 0, putWin: 0, putLoss: 0,
   };
 }
+
+// Local copy of displayPairFromAsset so we don't introduce a new import
+// cycle through signal-aggregator → app2-cache → ... — the canonical
+// implementation lives in signal-normalize.ts and is identical.
+function displayPairFromAssetLocal(canonical: string): string {
+  const otc = canonical.endsWith("_otc");
+  const base = otc ? canonical.slice(0, -4) : canonical;
+  const suffix = otc ? " OTC" : "";
+  const QUOTES = ["USDT","USDC","BUSD","USD","EUR","GBP","JPY","CHF","CAD","AUD","NZD"];
+  for (const q of QUOTES) {
+    if (base.length > q.length && base.endsWith(q)) {
+      return `${base.slice(0, base.length - q.length)}/${q}${suffix}`;
+    }
+  }
+  if (base.length === 6) return `${base.slice(0, 3)}/${base.slice(3)}${suffix}`;
+  return `${base}${suffix}`;
+}
+
+// Re-export Candle type so consumers can import it from backtest-runner.
+export type { Candle };

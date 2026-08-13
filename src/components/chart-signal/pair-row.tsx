@@ -11,6 +11,7 @@ import { APP_META } from "@/components/shared/app-meta"
 import { CONSENSUS_META } from "@/components/shared/consensus-meta"
 import { fmtAgo, fmtSigTime } from "@/components/shared/format"
 import { DirectionPill } from "./direction-pill"
+import { CandleCountdown } from "./candle-countdown"
 
 interface PairRowProps {
   pair: PairConsensus
@@ -74,6 +75,10 @@ export function PairRow({ pair, showLateBadges }: PairRowProps) {
                 >
                   {fmtSigTime(lc.candleTime)}
                 </div>
+                <CandleCountdown
+                  candleTimeSec={lc.candleTime}
+                  className="block mt-0.5"
+                />
               </div>
             )}
           </div>

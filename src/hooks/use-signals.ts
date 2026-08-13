@@ -7,6 +7,7 @@ import type {
   AppStatus,
 } from "@/lib/signal-aggregator"
 import type { AppSettings } from "@/stores/app-store"
+import { usePreciseClock } from "./use-precise-clock"
 
 export interface UseSignalsResult {
   data: AggregatedResponse | null
@@ -14,8 +15,8 @@ export interface UseSignalsResult {
   error: string | null
   isRefreshing: boolean
   lastUpdated: number
-  /** Wall clock in ms — ticks every 1s for the header. */
-  nowSec: number
+  /** Wall clock in ms — ticks at ~50ms (rAF-throttled) for millisecond display. */
+  nowMs: number
   /** WebSocket is connected AND recently delivered a snapshot. */
   wsConnected: boolean
   /** Whether the 5s background poller (vs slow /api/aggregated) is in use. */
@@ -27,14 +28,25 @@ export interface UseSignalsResult {
 
 /**
  * Owns all signal fetching for the dashboard:
- *   - 5s polling loop against /api/snapshot (with /api/aggregated fallback)
+ *   - Adaptive polling loop against /api/snapshot (with /api/aggregated fallback)
+ *     — polls every ADAPTIVE_FAST_MS during the first 10s of a candle so
+ *       signals appear within milliseconds of candle open, then slows to
+ *       ADAPTIVE_SLOW_MS for the remainder of the candle.
  *   - Optional WebSocket push via the signal-pusher mini-service
- *   - 1s wall-clock tick for the header
+ *   - Precise wall clock (rAF-throttled) for the header & per-row countdowns
  *   - manual refresh handler
  *
  * Extracted from the original page.tsx so that <AppShell> can render any
  * tab without re-mounting (and thus without re-connecting the WebSocket).
  */
+
+/** Fast poll interval — used during the first 10s after a candle opens. */
+const ADAPTIVE_FAST_MS = 800
+/** Slow poll interval — used for the remainder of the candle. */
+const ADAPTIVE_SLOW_MS = 3000
+/** Window after candle open during which we poll fast. */
+const BURST_WINDOW_SEC = 10
+
 export function useSignals(settings: AppSettings): UseSignalsResult {
   const [data, setData] = useState<AggregatedResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -44,12 +56,18 @@ export function useSignals(settings: AppSettings): UseSignalsResult {
   const [lastDataAt, setLastDataAt] = useState<number>(0)
   const [fastPoller, setFastPoller] = useState(false)
   const [wsConnected, setWsConnected] = useState(false)
-  const [nowSec, setNowSec] = useState<number>(0)
+
+  // Precise wall clock — updates ~20Hz via rAF. Used by HeaderBar (UTC ms
+  // display) and by per-row CandleCountdown (sub-second countdown).
+  const nowMs = usePreciseClock(50)
 
   const socketRef = useRef<Socket | null>(null)
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // We use a self-rescheduling setTimeout loop instead of setInterval so we
+  // can vary the gap (fast during candle-open burst, slow otherwise) without
+  // having to tear down the interval on every change.
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Keep latest settings in a ref so the polling loop reads fresh values
-  // without having to tear down and re-create the interval on every change.
+  // without having to tear down and re-create the loop on every change.
   const settingsRef = useRef(settings)
   settingsRef.current = settings
 
@@ -57,7 +75,7 @@ export function useSignals(settings: AppSettings): UseSignalsResult {
   const fetchData = useCallback(async (silent = false) => {
     if (!silent) setIsRefreshing(true)
     try {
-      // Try the fast snapshot endpoint first (backed by a 5s background poller).
+      // Try the fast snapshot endpoint first (backed by the adaptive poller).
       let res: Response
       try {
         res = await fetch("/api/snapshot", { cache: "no-store" })
@@ -111,15 +129,40 @@ export function useSignals(settings: AppSettings): UseSignalsResult {
     }
   }, [fetchData])
 
-  // ---- Polling loop ------------------------------------------------------
-  // Re-created whenever autoRefresh or pollIntervalMs changes.
+  // ---- Adaptive polling loop --------------------------------------------
+  // Polls every ADAPTIVE_FAST_MS for the first BURST_WINDOW_SEC of a candle,
+  // then ADAPTIVE_SLOW_MS for the rest. This is the key fix for the
+  // "signal appears 27-32s late" complaint: when a new candle opens, the
+  // source apps publish their signal within seconds, and this loop picks it
+  // up within ADAPTIVE_FAST_MS (typically <1s) instead of waiting up to 5s.
   useEffect(() => {
-    if (timerRef.current) clearInterval(timerRef.current)
-    if (!settings.autoRefresh) return
-    fetchData(true)
-    timerRef.current = setInterval(() => fetchData(true), settings.pollIntervalMs)
+    let cancelled = false
+
+    const scheduleNext = () => {
+      if (cancelled) return
+      if (!settingsRef.current.autoRefresh) return
+      // Compute the gap based on how far into the current minute we are.
+      const now = Date.now()
+      const secIntoCandle = Math.floor(now / 1000) % 60
+      const gap = secIntoCandle < BURST_WINDOW_SEC ? ADAPTIVE_FAST_MS : ADAPTIVE_SLOW_MS
+      timerRef.current = setTimeout(async () => {
+        if (cancelled) return
+        await fetchData(true)
+        scheduleNext()
+      }, gap)
+    }
+
+    if (settings.autoRefresh) {
+      // Kick off immediately for the first poll, then enter the loop.
+      fetchData(true).finally(() => scheduleNext())
+    }
+
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current)
+      cancelled = true
+      if (timerRef.current) {
+        clearTimeout(timerRef.current)
+        timerRef.current = null
+      }
     }
   }, [settings.autoRefresh, settings.pollIntervalMs, fetchData])
 
@@ -129,7 +172,6 @@ export function useSignals(settings: AppSettings): UseSignalsResult {
   // connections.
   useEffect(() => {
     if (!settings.websocketEnabled) {
-      // Clean up any existing socket when the user toggles WS off.
       if (socketRef.current) {
         socketRef.current.disconnect()
         socketRef.current = null
@@ -169,16 +211,11 @@ export function useSignals(settings: AppSettings): UseSignalsResult {
     }
   }, [settings.websocketEnabled])
 
-  // ---- 1s wall clock -----------------------------------------------------
-  useEffect(() => {
-    setNowSec(Date.now())
-    const t = setInterval(() => setNowSec(Date.now()), 1000)
-    return () => clearInterval(t)
-  }, [])
-
   // ---- Force re-render every 5s so the LIVE badge falls back to POLL ----
-  // when no data has arrived within 12s. Without this, the badge would stay
-  // stuck on LIVE until the next user interaction.
+  // when no data has arrived within 12s. The precise clock already re-renders
+  // 20×/s, so this would technically be redundant — but the precise clock's
+  // state lives in a different component's hook tree, and we keep this here
+  // as a defensive fallback in case the consumer doesn't subscribe to it.
   const [, setTick] = useState(0)
   useEffect(() => {
     const t = setInterval(() => setTick((v) => v + 1), 5000)
@@ -193,7 +230,7 @@ export function useSignals(settings: AppSettings): UseSignalsResult {
     error,
     isRefreshing,
     lastUpdated,
-    nowSec,
+    nowMs,
     wsConnected,
     fastPoller,
     isLive,

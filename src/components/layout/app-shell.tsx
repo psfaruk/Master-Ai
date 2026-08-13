@@ -35,7 +35,7 @@ export function AppShell() {
 
   const {
     data, loading, error, isRefreshing, lastUpdated,
-    nowSec, wsConnected, fastPoller, isLive, handleRefresh,
+    nowMs, wsConnected, fastPoller, isLive, handleRefresh,
   } = useSignals(settings)
 
   const {
@@ -45,7 +45,7 @@ export function AppShell() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       <HeaderBar
-        nowSec={nowSec}
+        nowMs={nowMs}
         lastUpdated={lastUpdated}
         isLive={isLive}
         wsConnected={wsConnected}

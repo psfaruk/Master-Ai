@@ -6,10 +6,11 @@ import {
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
-import { fmtClock } from "@/components/shared/format"
+import { fmtClock, fmtClockSec } from "@/components/shared/format"
 
 interface HeaderBarProps {
-  nowSec: number
+  /** Wall clock in ms — rAF-throttled, updates ~20Hz for smooth ms display. */
+  nowMs: number
   lastUpdated: number
   isLive: boolean
   wsConnected: boolean
@@ -23,16 +24,22 @@ interface HeaderBarProps {
 /**
  * The top sticky header. Same on mobile and desktop — only its layout
  * density changes via flex-wrap.
+ *
+ * The wall clock displays UTC with millisecond precision and updates at
+ * ~20Hz (the precise-clock hook ties updates to rAF so we never re-render
+ * more often than the browser can paint). A "UTC" chip is shown next to
+ * the clock so there is no ambiguity about which timezone the displayed
+ * time refers to.
  */
 export function HeaderBar({
-  nowSec, lastUpdated, isLive, wsConnected, fastPoller,
+  nowMs, lastUpdated, isLive, wsConnected, fastPoller,
   isRefreshing, autoRefresh, onRefresh, onToggleAutoRefresh,
 }: HeaderBarProps) {
   const liveTitle = isLive
     ? (wsConnected
-        ? "Real-time WebSocket connected (5s push)"
+        ? "Real-time WebSocket connected"
         : fastPoller
-        ? "Live data via 5s background poller"
+        ? "Live data via adaptive poller (fast after candle open)"
         : "Receiving live data via polling")
     : "No recent data — check connection"
 
@@ -76,15 +83,21 @@ export function HeaderBar({
             )}
           </div>
 
-          {/* Wall clock */}
+          {/* Wall clock — UTC with milliseconds */}
           <div className="flex items-center gap-1.5 text-xs text-slate-400 mr-1">
             <Clock className="h-3.5 w-3.5" />
-            <span className="tabular-nums text-slate-200 font-semibold">
-              {fmtClock(nowSec)}
+            <span className="tabular-nums text-slate-200 font-semibold text-[13px]">
+              {fmtClock(nowMs)}
+            </span>
+            <span
+              className="text-[9px] font-bold tracking-wider px-1 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30"
+              title="All times in this dashboard are displayed in UTC"
+            >
+              UTC
             </span>
             {lastUpdated > 0 && (
-              <span className="text-slate-500 ml-1" title="Last data update">
-                ·data {fmtClock(lastUpdated)}
+              <span className="text-slate-500 ml-1 tabular-nums" title="Last data update (UTC)">
+                ·data {fmtClockSec(lastUpdated)}
               </span>
             )}
           </div>
