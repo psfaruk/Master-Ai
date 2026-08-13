@@ -8,6 +8,7 @@
     "start": "NODE_ENV=production node .next/standalone/server.js",
     "start:bun": "NODE_ENV=production bun .next/standalone/server.js",
     "lint": "eslint .",
+    "test": "bun test tests/",
     "db:push": "prisma db push --accept-data-loss",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",

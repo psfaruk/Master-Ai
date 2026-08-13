@@ -5,20 +5,39 @@
  * aligns them by candle-time (minute-floored), classifies each candle's
  * consensus, and computes per-level win rate.
  *
+ * Normalization goes through ./signal-normalize.ts — the same helpers the live
+ * aggregator uses. This matters: when the backtest parsed pairs and timestamps
+ * with its own slightly different code, it clustered signals differently from
+ * the dashboard, so the win rates it reported were not the win rates of the
+ * signals actually being shown.
+ *
  * Used by GET /api/backtest.
  */
 
 import { fetchJsonWithTimeout } from "./backtest-fetcher";
-import { getAllCachedApp2Signals } from "./app2-cache";
+import { getAllCachedApp2Signals, startApp2CachePoller } from "./app2-cache";
+import {
+  canonicalPair,
+  candleFloor,
+  getCandleOffsetSec,
+  isSignalValidForCandle,
+  parseDirection,
+  pickArray,
+  pickField,
+  toUnixSeconds,
+  DIRECTION_KEYS,
+  PAIR_KEYS,
+  type AppId,
+} from "./signal-normalize";
 
-export type AppId = "app1" | "app2" | "app3";
+export type { AppId };
 export type Direction = "CALL" | "PUT";
 export type ConsensusLevel = "3-agree" | "2-agree" | "conflict" | "1-only";
 
 export interface NormalizedSignal {
   source: AppId;
   pair: string;
-  ts: number; // unix seconds
+  ts: number; // unix seconds — when the app emitted the signal
   /** Candle time (unix seconds, minute-floored) — used for strict alignment. */
   candleTime: number;
   direction: Direction;
@@ -75,250 +94,196 @@ const SOURCES = {
   app1: { name: "Minimum Pair", url: "https://minimum-pair-production.up.railway.app/api/signals" },
   app2: { name: "Binary Signal Terminal", url: "https://binary-signals-app-production.up.railway.app/api/share-signals" },
   app3: { name: "OTC Live Trading", url: "https://otc-live-trading-production.up.railway.app/api/signals?limit=500" },
+  app3Live: { name: "OTC Live Trading", url: "https://otc-live-trading-production.up.railway.app/api/share-signals" },
 } as const;
+
+/** How far back the backtest looks. */
+const LOOKBACK_SEC = 6 * 3600;
 
 // ---- Normalizers ----------------------------------------------------------
 
 function normalizeApp1(d: any): NormalizedSignal | null {
-  const pair = d?.symbol;
+  const pair = canonicalPair(pickField(d, PAIR_KEYS));
   if (!pair) return null;
-  const tsMs = Number(d?.signalAt ?? d?.entryTime ?? 0);
-  const ts = tsMs > 1e12 ? Math.floor(tsMs / 1000) : Math.floor(tsMs);
-  const direction = String(d?.direction ?? "").toUpperCase();
-  if (direction !== "CALL" && direction !== "PUT") return null;
-  // Candle time = entryTime (the minute being predicted), minute-floored.
-  const entryMs = Number(d?.entryTime ?? 0);
-  const entrySec = entryMs > 1e12 ? Math.floor(entryMs / 1000) : Math.floor(entryMs);
-  const candleTime = entrySec > 0 ? Math.floor(entrySec / 60) * 60 : Math.floor(ts / 60) * 60;
-  const status = d?.status;
+  const direction = parseDirection(pickField(d, DIRECTION_KEYS));
+  if (!direction) return null;
+
+  const emittedAt = toUnixSeconds(pickField(d, ["signalAt", "signal_at", "createdAt", "ts"]));
+  const entrySec = toUnixSeconds(pickField(d, ["entryTime", "entry_time", "candleTime", "ctime"]));
+  const base = entrySec > 0 ? entrySec : emittedAt;
+  if (!(base > 0)) return null;
+  const candleTime = candleFloor(base) + getCandleOffsetSec("app1");
+
+  const status = pickField(d, ["status", "result", "outcome"]);
+  const s = String(status ?? "").toUpperCase();
   let outcome: 0 | 1 | null = null;
-  if (status === "WIN") outcome = 1;
-  else if (status === "LOSS") outcome = 0;
-  else outcome = null; // DRAW / VOID / unknown
-  return { source: "app1", pair, ts, candleTime, direction, outcome, rawStatus: status ?? null };
+  if (s === "WIN" || s === "CORRECT") outcome = 1;
+  else if (s === "LOSS" || s === "WRONG") outcome = 0;
+
+  return {
+    source: "app1",
+    pair,
+    ts: emittedAt > 0 ? emittedAt : candleTime,
+    candleTime,
+    direction,
+    outcome,
+    rawStatus: status != null ? String(status) : null,
+  };
 }
 
-function normalizeApp2Row(r: any, serverSec: number, nowSec: number): NormalizedSignal | null {
-  const pair = r?.pair;
+function normalizeApp3(d: any, timeKeys: string[]): NormalizedSignal | null {
+  const pair = canonicalPair(pickField(d, PAIR_KEYS));
   if (!pair) return null;
-  const rawSignal = String(r?.signal ?? "").toUpperCase().trim();
-  if (rawSignal !== "CALL" && rawSignal !== "PUT") return null;
-  // Parse "HH:MM" candle time
-  const timeStr = String(r?.time ?? "");
-  let candleTime = serverSec > 0 ? Math.floor(serverSec / 60) * 60 : nowSec;
-  const m = timeStr.match(/^(\d{1,2}):(\d{2})$/);
-  if (m) {
-    const hh = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
-    if (hh >= 0 && hh < 24 && mm >= 0 && mm < 60) {
-      const now = new Date(nowSec * 1000);
-      const dt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hh, mm, 0) / 1000;
-      let ts = dt;
-      if (ts - nowSec > 12 * 3600) ts -= 24 * 3600;
-      candleTime = Math.floor(ts / 60) * 60;
-    }
-  }
-  const ts = candleTime; // Use candle time as the signal ts
-  return { source: "app2", pair, ts, candleTime, direction: rawSignal as "CALL" | "PUT", outcome: null, rawStatus: null };
-}
+  const direction = parseDirection(pickField(d, DIRECTION_KEYS));
+  if (!direction) return null;
 
-function normalizeApp3(d: any): NormalizedSignal | null {
-  const pair = d?.asset;
-  if (!pair) return null;
-  const ts = Math.floor(Number(d?.ctime ?? 0));
-  const direction = String(d?.signal ?? "").toUpperCase();
-  if (direction !== "CALL" && direction !== "PUT") return null;
-  const candleTime = Math.floor(ts / 60) * 60;
-  const result = d?.result;
+  const ts = toUnixSeconds(pickField(d, timeKeys));
+  if (!(ts > 0)) return null;
+  const candleTime = candleFloor(ts) + getCandleOffsetSec("app3");
+
+  const result = String(pickField(d, ["result", "outcome", "status"]) ?? "").toLowerCase();
   let outcome: 0 | 1 | null = null;
-  if (result === "correct") outcome = 1;
-  else if (result === "wrong") outcome = 0;
-  else outcome = null; // draw / unknown
-  return { source: "app3", pair, ts, candleTime, direction, outcome, rawStatus: result ?? null };
+  if (result === "correct" || result === "win") outcome = 1;
+  else if (result === "wrong" || result === "loss") outcome = 0;
+
+  return { source: "app3", pair, ts, candleTime, direction, outcome, rawStatus: result || null };
 }
 
-// ---- Cluster detection ----------------------------------------------------
-
-function findClusters(signalsForPair: NormalizedSignal[], windowSec = 60): Cluster[] {
-  const arr = signalsForPair;
-  const n = arr.length;
-  const clusters: Cluster[] = [];
-  const seen = new Set<string>();
-  for (let i = 0; i < n; i++) {
-    const anchor = arr[i];
-    const members: NormalizedSignal[] = [anchor];
-    for (let j = 0; j < n; j++) {
-      if (j === i) continue;
-      const other = arr[j];
-      if (Math.abs(other.ts - anchor.ts) <= windowSec) {
-        members.push(other);
-      }
-    }
-    const appsIn = members.map((m) => m.source).sort() as string[];
-    const tsMin = Math.min(...members.map((m) => m.ts));
-    const sig = `${appsIn.join(",")}|${Math.floor(tsMin / 60)}`;
-    if (seen.has(sig)) continue;
-    seen.add(sig);
-    const perApp: Partial<Record<AppId, NormalizedSignal>> = {};
-    for (const m of members) {
-      const cur = perApp[m.source];
-      if (!cur || m.ts > cur.ts) perApp[m.source] = m;
-    }
-    clusters.push({ tsAnchor: anchor.ts, apps: perApp, nApps: Object.keys(perApp).length });
-  }
-  return clusters;
-}
+// ---- Cluster classification -----------------------------------------------
 
 function classifyCluster(cluster: Cluster) {
-  const apps = cluster.apps;
-  const n = cluster.nApps;
-  const signalList = Object.values(apps).filter(Boolean) as NormalizedSignal[];
-  const directions = signalList.map((a) => a.direction);
-  const callC = directions.filter((d) => d === "CALL").length;
-  const putC = directions.filter((d) => d === "PUT").length;
+  const signalList = Object.values(cluster.apps).filter(Boolean) as NormalizedSignal[];
+  const n = signalList.length;
+  const callC = signalList.filter((a) => a.direction === "CALL").length;
+  const putC = signalList.filter((a) => a.direction === "PUT").length;
 
   let level: ConsensusLevel;
   let direction: Direction | null;
 
-  if (callC === n) {
+  if (n === 1) {
+    level = "1-only";
+    direction = signalList[0].direction;
+  } else if (callC === n) {
     direction = "CALL";
-    level = n === 3 ? "3-agree" : n === 2 ? "2-agree" : "1-only";
+    level = n >= 3 ? "3-agree" : "2-agree";
   } else if (putC === n) {
     direction = "PUT";
-    level = n === 3 ? "3-agree" : n === 2 ? "2-agree" : "1-only";
-  } else if (callC >= 2 || putC >= 2) {
-    direction = callC > putC ? "CALL" : "PUT";
-    level = "conflict";
+    level = n >= 3 ? "3-agree" : "2-agree";
   } else {
-    direction = null;
     level = "conflict";
+    direction = callC > putC ? "CALL" : putC > callC ? "PUT" : null;
   }
 
-  const targetDir = direction;
-  const agreeingOutcomes = signalList
-    .filter((a) => a.direction === targetDir && a.outcome !== null)
-    .map((a) => a.outcome as 0 | 1);
+  // Grade only the apps that voted for the consensus direction. A conflict has
+  // no tradeable direction, so it is never graded — counting the majority side
+  // of a conflict as a "win" used to inflate the conflict row's win rate.
+  const gradable = level === "conflict" ? [] : signalList.filter((a) => a.direction === direction);
+  const outcomes = gradable.map((a) => a.outcome).filter((o): o is 0 | 1 => o !== null);
 
-  const win = agreeingOutcomes.filter((o) => o === 1).length;
-  const loss = agreeingOutcomes.filter((o) => o === 0).length;
-  const unknown = signalList.filter((a) => a.direction === targetDir && a.outcome === null).length;
+  const win = outcomes.filter((o) => o === 1).length;
+  const loss = outcomes.filter((o) => o === 0).length;
+  const unknown = gradable.length - outcomes.length;
 
   let outcome: 0 | 1 | null = null;
-  if (agreeingOutcomes.length === 0) outcome = null;
-  else if (agreeingOutcomes.every((o) => o === 1)) outcome = 1;
-  else outcome = 0;
+  if (outcomes.length > 0) outcome = outcomes.every((o) => o === 1) ? 1 : 0;
 
   return {
-    level, direction, nApps: n, callCount: callC, putCount: putC,
-    agreeingWin: win, agreeingLoss: loss, agreeingUnknown: unknown,
-    outcome, ts: cluster.tsAnchor,
+    level,
+    direction,
+    nApps: n,
+    callCount: callC,
+    putCount: putC,
+    agreeingWin: win,
+    agreeingLoss: loss,
+    agreeingUnknown: unknown,
+    outcome,
+    ts: cluster.tsAnchor,
   };
 }
 
 // ---- Main runner ----------------------------------------------------------
 
 export async function runBacktest(): Promise<BacktestResult> {
+  // App 2 has no history endpoint — our own poller is the only source of past
+  // candles, so make sure it is running even if /api/snapshot was never hit.
+  startApp2CachePoller();
+
   const allSignals: NormalizedSignal[] = [];
   const nowSec = Math.floor(Date.now() / 1000);
+  const minCandle = candleFloor(nowSec - LOOKBACK_SEC);
+
+  const push = (s: NormalizedSignal | null) => {
+    if (!s) return;
+    if (s.candleTime < minCandle) return;
+    // Same rule as the live dashboard: a signal only counts for a candle if it
+    // was emitted in time for that candle.
+    if (!isSignalValidForCandle(s.ts, s.candleTime)) return;
+    allSignals.push(s);
+  };
 
   // App1 — historical signals with WIN/LOSS outcome
   try {
     const d = await fetchJsonWithTimeout(SOURCES.app1.url);
-    const arr: any[] = Array.isArray(d?.signals) ? d.signals : [];
-    for (const s of arr) {
-      const n = normalizeApp1(s);
-      if (n) allSignals.push(n);
-    }
-  } catch { /* ignore */ }
+    for (const s of pickArray(d, ["signals", "rows", "data"])) push(normalizeApp1(s));
+  } catch { /* ignore — a missing app just means fewer clusters */ }
 
-  // App2 — current snapshot from /api/share-signals + cached historical
-  // We poll the live endpoint for the current candle, and pull from our
-  // app2-cache for historical candles.
-  try {
-    const d = await fetchJsonWithTimeout(SOURCES.app2.url);
-    const arr: any[] = Array.isArray(d?.rows) ? d.rows : [];
-    const serverTs = Number(d?.timestamp ?? 0);
-    const serverSec = serverTs > 1e12 ? Math.floor(serverTs / 1000) : Math.floor(serverTs);
-    for (const r of arr) {
-      const n = normalizeApp2Row(r, serverSec, nowSec);
-      if (n) allSignals.push(n);
-    }
-  } catch { /* ignore */ }
-  // Pull cached App 2 historical signals too
+  // App2 — historical candles recorded by our own poller. The live snapshot
+  // only ever holds the current candle, and app2-cache is already polling it
+  // every 5s, so the cache IS the complete picture; reading the live endpoint
+  // again here would only duplicate the newest row.
   for (const c of getAllCachedApp2Signals()) {
-    const ageSec = Math.max(0, nowSec - c.candleTime);
-    // Only include if within 1 hour (same freshness window as the live poller)
-    if (ageSec > 3600) continue;
-    allSignals.push({
+    push({
       source: "app2",
       pair: c.pair,
-      ts: c.candleTime,
-      candleTime: c.candleTime,
+      ts: c.firstSeenSec > 0 ? c.firstSeenSec : c.candleTime,
+      candleTime: c.candleTime + getCandleOffsetSec("app2"),
       direction: c.signal,
-      outcome: null,
+      outcome: null, // App 2 never reports an outcome
       rawStatus: null,
     });
   }
 
-  // App3 — historical resolved signals + current live signals
-  // Historical has correct/wrong outcome; live has no outcome (current candle).
+  // App3 — resolved history (has correct/wrong) + the current live candle.
   try {
     const d = await fetchJsonWithTimeout(SOURCES.app3.url);
-    const arr: any[] = Array.isArray(d) ? d : Array.isArray(d?.signals) ? d.signals : [];
-    for (const s of arr) {
-      const n = normalizeApp3(s);
-      if (n) allSignals.push(n);
+    for (const s of pickArray(d, ["signals", "rows", "data"])) {
+      push(normalizeApp3(s, ["ctime", "candle_time", "time", "ts"]));
     }
   } catch { /* ignore */ }
-  // Also fetch App 3 live signals from /api/share-signals so the current
-  // candle (which may not yet be in the historical endpoint) is included.
   try {
-    const liveUrl = "https://otc-live-trading-production.up.railway.app/api/share-signals";
-    const d = await fetchJsonWithTimeout(liveUrl);
-    const liveArr: any[] = Array.isArray(d?.signals) ? d.signals : (Array.isArray(d) ? d : []);
-    for (const r of liveArr) {
-      const asset = r?.asset;
-      if (!asset) continue;
-      const rawSignal = String(r?.signal ?? "").toUpperCase().trim();
-      if (rawSignal !== "CALL" && rawSignal !== "PUT") continue;
-      const ts = Math.floor(Number(r?.time ?? 0));
-      const candleTime = ts > 0 ? Math.floor(ts / 60) * 60 : Math.floor(nowSec / 60) * 60;
-      allSignals.push({
-        source: "app3", pair: asset, ts, candleTime,
-        direction: rawSignal as "CALL" | "PUT",
-        outcome: null, rawStatus: null,
-      });
+    const d = await fetchJsonWithTimeout(SOURCES.app3Live.url);
+    for (const s of pickArray(d, ["signals", "rows", "data"])) {
+      push(normalizeApp3(s, ["time", "candle_time", "ctime", "ts"]));
     }
   } catch { /* ignore */ }
-
-  // Group by pair
-  const byPair = new Map<string, NormalizedSignal[]>();
-  for (const s of allSignals) {
-    let arr = byPair.get(s.pair);
-    if (!arr) { arr = []; byPair.set(s.pair, arr); }
-    arr.push(s);
-  }
-  byPair.forEach((arr) => arr.sort((a, b) => a.ts - b.ts));
 
   // ---- Candle-aligned clustering ----
-  // For each pair, group signals by candleTime. For each (pair, candle),
-  // at most one signal per app (latest wins). Then classify consensus
-  // per-candle — only signals for the SAME candle are compared.
+  // Group by (pair, candle); at most one signal per app per candle (latest
+  // wins). Only signals for the SAME candle are ever compared.
+  const byPairCandle = new Map<string, Partial<Record<AppId, NormalizedSignal>>>();
+  for (const s of allSignals) {
+    const key = `${s.pair}|${s.candleTime}`;
+    let c = byPairCandle.get(key);
+    if (!c) { c = {}; byPairCandle.set(key, c); }
+    const cur = c[s.source];
+    if (!cur || s.ts > cur.ts) c[s.source] = s;
+  }
+
   const allClusters: ClassifiedCluster[] = [];
-  byPair.forEach((arr, pair) => {
-    const candleMap = new Map<number, Partial<Record<AppId, NormalizedSignal>>>();
-    for (const s of arr) {
-      let c = candleMap.get(s.candleTime);
-      if (!c) { c = {}; candleMap.set(s.candleTime, c); }
-      const cur = c[s.source];
-      if (!cur || s.ts > cur.ts) c[s.source] = s;
-    }
-    candleMap.forEach((appsMap, candleTime) => {
-      const cluster: Cluster = { tsAnchor: candleTime, apps: appsMap, nApps: Object.keys(appsMap).length };
-      const cls = classifyCluster(cluster);
-      allClusters.push({ ...cls, pair });
-    });
+  byPairCandle.forEach((appsMap, key) => {
+    const sep = key.lastIndexOf("|");
+    const pair = key.slice(0, sep);
+    const candleTime = Number(key.slice(sep + 1));
+    const cluster: Cluster = {
+      tsAnchor: candleTime,
+      apps: appsMap,
+      nApps: Object.keys(appsMap).length,
+    };
+    allClusters.push({ ...classifyCluster(cluster), pair });
   });
+
+  // Newest first, so the samples shown on the dashboard are the recent ones.
+  allClusters.sort((a, b) => b.ts - a.ts);
 
   // Level stats
   const levels: Record<ConsensusLevel, LevelStat> = {
@@ -358,10 +323,7 @@ export async function runBacktest(): Promise<BacktestResult> {
     else st.unknown++;
   }
 
-  // Samples
-  const sampleThreeAgree = allClusters
-    .filter((c) => c.level === "3-agree")
-    .slice(0, 10);
+  const sampleThreeAgree = allClusters.filter((c) => c.level === "3-agree").slice(0, 10);
   const sampleTwoAgree = allClusters
     .filter((c) => c.level === "2-agree" && c.outcome !== null)
     .slice(0, 10);
@@ -372,9 +334,9 @@ export async function runBacktest(): Promise<BacktestResult> {
   const g1 = levels["1-only"].win + levels["1-only"].loss;
   let verdict: BacktestResult["verdict"];
   if (g3 >= 5 && g2 >= 5 && g1 >= 5) {
-    const wr3 = levels["3-agree"].win / g3 * 100;
-    const wr2 = levels["2-agree"].win / g2 * 100;
-    const wr1 = levels["1-only"].win / g1 * 100;
+    const wr3 = (levels["3-agree"].win / g3) * 100;
+    const wr2 = (levels["2-agree"].win / g2) * 100;
+    const wr1 = (levels["1-only"].win / g1) * 100;
     if (wr3 >= wr2 && wr2 >= wr1) {
       verdict = { kind: "validated", message: `Consensus logic confirmed: 3-agree ${wr3.toFixed(1)}% >= 2-agree ${wr2.toFixed(1)}% >= 1-only ${wr1.toFixed(1)}%` };
     } else if (wr3 >= wr1) {
