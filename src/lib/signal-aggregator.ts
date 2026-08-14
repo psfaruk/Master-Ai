@@ -173,8 +173,14 @@ const SOURCES = [
     name: "Minimum Pair",
     shortName: "App 1",
     baseUrl: "https://minimum-pair-production.up.railway.app",
-    signalsPath: "/api/signals",
-    healthPath: "/api/health",
+    // New Minimum Pair app (FastAPI). The signal history endpoint returns a
+    // bare JSON array of recent signals across ALL pairs when called without
+    // ?pair=. We pull a generous limit so the candle-aligned consensus has
+    // enough history to grade WIN/LOSS outcomes for past candles.
+    signalsPath: "/api/history?limit=500",
+    // /api/status reports Quotex connection state, active pair streams,
+    // auth_mode and min_confidence — used as the authoritative health source.
+    healthPath: "/api/status",
     accent: "amber",
   },
   {
@@ -235,19 +241,40 @@ async function fetchApp1Health(): Promise<Partial<NormalizeResult>> {
   try {
     const d = await fetchJsonWithTimeout(`${SOURCES[0].baseUrl}${SOURCES[0].healthPath}`, 6000);
     if (!d) return { error: "empty_health" };
-    const st = d?.status ?? {};
-    const tokenExpired = st?.tokenExpired === true || st?.state === "token_expired";
-    const live = st?.live === true;
+    // New Minimum Pair app /api/status shape:
+    //   { quotex_connected, error, pairs, active_pairs,
+    //     min_confidence, always_signal, account_mode, auth_mode }
+    const connected = d?.quotex_connected === true;
+    const errMsg = typeof d?.error === "string" && d.error ? d.error : null;
+    const activePairs: any[] = Array.isArray(d?.active_pairs) ? d.active_pairs : [];
+
+    // The new app does not expose a token-expired flag directly. When it uses
+    // session_token auth and is NOT connected without an explicit error
+    // message, the most likely root cause is an expired/rejected session
+    // token — surface that as "token_expired" so the dashboard shows the
+    // amber "token expired" pill instead of a generic "disconnected".
+    // If there IS an explicit error, trust the app's own message instead.
+    const tokenExpired =
+      !connected && d?.auth_mode === "session_token" && !errMsg;
+
     let health: AppStatus["health"];
-    if (tokenExpired) health = "token_expired";
-    else if (!live) health = "disconnected";
-    else health = "ok";
+    if (connected) health = "ok";
+    else if (tokenExpired) health = "token_expired";
+    else health = "disconnected";
+
+    const detailParts: string[] = [];
+    if (connected) detailParts.push(`live · ${activePairs.length} pairs`);
+    else if (tokenExpired) detailParts.push("session token expired");
+    else if (errMsg) detailParts.push(errMsg);
+    else detailParts.push("connecting…");
+    if (d?.auth_mode) detailParts.push(`auth=${d.auth_mode}`);
+
     return {
       health,
-      live,
+      live: connected,
       tokenExpired,
-      detail: st?.detail,
-      uptimeSec: typeof st?.uptimeSec === "number" ? st.uptimeSec : undefined,
+      activeStreams: activePairs.length,
+      detail: detailParts.join(" · "),
     };
   } catch {
     return { error: "health_fetch_failed" };
@@ -348,7 +375,43 @@ function makeSignal(
   };
 }
 
-/** App1 (Minimum Pair): /api/signals -> { signals: [...] } */
+/**
+ * App1 (Minimum Pair — FastAPI edition): GET /api/history?limit=N
+ *
+ * Returns a BARE JSON ARRAY of recent signals across all tracked pairs. Each
+ * row has this shape:
+ *
+ *   { id, pair, direction, created_at, entry_ts, target_close_ts,
+ *     confidence, source, entry_price, close_price, result }
+ *
+ * Field semantics:
+ *   - pair            display form ("USD/COP OTC", "EUR/USD") — canonicalPair()
+ *                     collapses every spelling into one map key, same as before.
+ *   - direction       "CALL" | "PUT" — parseDirection() already covers it.
+ *   - entry_ts        unix SECONDS — the candle open being predicted. This is
+ *                     the candle-alignment key (same role as the old App 1's
+ *                     `entryTime` field, just renamed). candleFloor() + the
+ *                     APP1_CANDLE_OFFSET env knob apply on top.
+ *   - created_at      unix SECONDS — when the signal was emitted. The new app
+ *                     emits at candle open, so created_at usually equals
+ *                     entry_ts. We still prefer it for `timestamp` so ageSec
+ *                     and freshness checks behave correctly. toUnixSeconds()
+ *                     handles either seconds or milliseconds transparently.
+ *   - confidence      0..1 float — a value of 0 means "no info", surfaced as
+ *                     null so the UI shows "—" instead of "0.0%".
+ *   - result          "WIN" | "LOSS" | "PENDING" — PENDING maps to outcome=null
+ *                     (UI shows "pending"). The old App 1 used `status` with
+ *                     WIN/LOSS/DRAW/VOID/ACTIVE — we keep those aliases too
+ *                     so a future field rename doesn't blank the column.
+ *   - source          strategy string (comma-separated when multiple, e.g.
+ *                     "near_support,doji_reversal"). Goes straight into
+ *                     `strategy`. The old App 1 used `primaryPattern`.
+ *
+ * The endpoint is wrapped in pickArray() which already handles a bare array,
+ * an envelope (`{signals:[...]}` / `{rows:[...]}`) and any other top-level
+ * array-of-objects property — so a future envelope rename upstream is a
+ * no-op here.
+ */
 async function fetchApp1(freshnessWindowSec: number, nowSec: number): Promise<NormalizeResult> {
   const src = SOURCES[0];
   const skipped = newSkipped();
@@ -361,9 +424,11 @@ async function fetchApp1(freshnessWindowSec: number, nowSec: number): Promise<No
   if (!data) {
     return { signals: [], health: "down", rawCount: 0, skipped, error: "empty_response" };
   }
-  const arr = pickArray(data, ["signals", "rows", "data"]);
-  const health: AppStatus["health"] =
-    data?.status?.state === "token_expired" || data?.status?.tokenExpired ? "token_expired" : "ok";
+  // New app returns a bare JSON array. pickArray() also accepts the old
+  // envelope shapes ({signals, rows, data}) for free, so a future rename
+  // upstream is silently tolerated.
+  const arr = pickArray(data, ["history", "signals", "rows", "data"]);
+  const health: AppStatus["health"] = "ok";
 
   const offset = getCandleOffsetSec("app1");
 
@@ -376,39 +441,62 @@ async function fetchApp1(freshnessWindowSec: number, nowSec: number): Promise<No
     const dir = parseDirection(pickField(s, DIRECTION_KEYS));
     if (!dir) { skipped.noDirection++; continue; }
 
-    const emittedAt = toUnixSeconds(pickField(s, ["signalAt", "signal_at", "createdAt", "ts"]));
-    const entrySec = toUnixSeconds(pickField(s, ["entryTime", "entry_time", "candleTime", "ctime"]));
-    // Candle time = the minute this signal predicts. App1 has an explicit
-    // entryTime — use it; otherwise fall back to the emission time.
-    const baseCandle = entrySec > 0 ? entrySec : emittedAt;
-    if (!(baseCandle > 0)) { skipped.noCandle++; continue; }
-    const candleTime = candleFloor(baseCandle) + offset;
+    // New app: entry_ts (seconds) is the candle being predicted.
+    // Old app: entryTime (ms or s). Both pass through toUnixSeconds() so the
+    // unit is normalized before bucketing — a ms value can no longer push the
+    // candle ~53,000 years out.
+    const entrySec = toUnixSeconds(
+      pickField(s, ["entry_ts", "entryTime", "entry_time", "candleTime", "ctime"])
+    );
+    if (!(entrySec > 0)) { skipped.noCandle++; continue; }
+    const candleTime = candleFloor(entrySec) + offset;
+
+    // created_at (new) / signalAt / signal_at / createdAt / ts (old aliases).
+    // Fall back to the candle time itself if the source omitted it — the new
+    // app emits at candle open so they're usually equal anyway.
+    const emittedAt = toUnixSeconds(
+      pickField(s, ["created_at", "signalAt", "signal_at", "createdAt", "ts"])
+    );
     const ts = emittedAt > 0 ? emittedAt : candleTime;
 
-    const quality = Number(pickField(s, ["quality"]));
     const confidenceRaw = typeof s?.confidence === "number" ? s.confidence : null;
     // App 1 confidence is 0-1. A value of exactly 0 means "no confidence info"
     // (the app emits 0 when it has none) — surface as null so the UI shows "—"
     // instead of the misleading "0.0%".
     const confidence = confidenceRaw !== null && confidenceRaw > 0 ? confidenceRaw : null;
 
-    // App 1 status: WIN / LOSS / DRAW / VOID / ACTIVE.
-    //   - WIN/LOSS → resolved outcome (used by backtest win-rate).
-    //   - DRAW → resolved but neither won nor lost. We surface it as DRAW so the
-    //     UI can show it, but the backtest EXCLUDES it from the graded count
-    //     (a draw is not a win and not a loss — counting it as "unknown"
-    //     used to inflate the unknown bucket and dilute the win rate).
-    //   - VOID → Quotex cancelled the trade (rare, e.g. liquidity gap). Same
-    //     treatment as DRAW: resolved-but-neutral, excluded from win/loss.
-    //   - ACTIVE → the candle is still running; outcome not yet known. Keep
-    //     outcome=null so the UI shows "pending" rather than "unknown".
+    // Outcome. The new app uses `result` (WIN/LOSS/PENDING). The old app used
+    // `status` (WIN/LOSS/DRAW/VOID/ACTIVE). Read both so the column survives
+    // either shape.
+    //   - WIN/CORRECT → WIN
+    //   - LOSS/WRONG  → LOSS
+    //   - DRAW/VOID   → DRAW (resolved-but-neutral; excluded from win/loss)
+    //   - PENDING/ACTIVE/null → outcome stays null (UI shows "pending")
+    const rawResult = s?.result ? String(s.result) : null;
     const rawStatus = s?.status ? String(s.status) : null;
+    const rawOutcome = rawResult ?? rawStatus;
+    const normalizedOutcome = rawOutcome ? String(rawOutcome).toUpperCase() : null;
     let outcome: SourceSignal["outcome"] = null;
-    if (rawStatus === "WIN" || rawStatus === "CORRECT") outcome = "WIN";
-    else if (rawStatus === "LOSS" || rawStatus === "WRONG") outcome = "LOSS";
-    else if (rawStatus === "DRAW") outcome = "DRAW";
-    else if (rawStatus === "VOID") outcome = "DRAW"; // group with DRAW — neither won nor lost
-    // ACTIVE / null / unknown → outcome stays null
+    if (normalizedOutcome === "WIN" || normalizedOutcome === "CORRECT") outcome = "WIN";
+    else if (normalizedOutcome === "LOSS" || normalizedOutcome === "WRONG") outcome = "LOSS";
+    else if (normalizedOutcome === "DRAW") outcome = "DRAW";
+    else if (normalizedOutcome === "VOID") outcome = "DRAW"; // group with DRAW
+    // PENDING / ACTIVE / null / unknown → outcome stays null
+
+    // Strategy. New app: `source` (string, comma-separated when multi-strategy).
+    // Old app: `primaryPattern`. Read both, prefer whichever is non-empty.
+    const strategyRaw =
+      (typeof s?.source === "string" && s.source) ||
+      (typeof s?.primaryPattern === "string" && s.primaryPattern) ||
+      null;
+
+    // Strength is derived from confidence for the new app (the old app had a
+    // separate `quality` field; if upstream ever adds it back, prefer it).
+    const quality = Number(pickField(s, ["quality"]));
+    const strengthBase = Number.isFinite(quality) && quality > 0
+      ? quality
+      : confidence ?? 0;
+    const strength = strengthBase >= 0.7 ? "STRONG" : strengthBase >= 0.45 ? "MEDIUM" : "WEAK";
 
     out.push(
       makeSignal(
@@ -418,13 +506,11 @@ async function fetchApp1(freshnessWindowSec: number, nowSec: number): Promise<No
           pair,
           direction: dir,
           confidence,
-          strength: Number.isFinite(quality)
-            ? quality >= 0.7 ? "STRONG" : quality >= 0.45 ? "MEDIUM" : "WEAK"
-            : null,
+          strength,
           timestamp: ts,
           candleTime,
           outcome,
-          strategy: s?.primaryPattern ?? null,
+          strategy: strategyRaw,
           reasons: Array.isArray(s?.reasons) ? s.reasons : null,
         },
         nowSec,

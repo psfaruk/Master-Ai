@@ -7,9 +7,16 @@
  * rendered in a non-UTC timezone.
  *
  * As of the recent App 2 update, App 2's `time` field is the candle being
- * PREDICTED (same semantics as App 1's entryTime and App 3's time). The old
+ * PREDICTED (same semantics as App 1's entry_ts and App 3's time). The old
  * +1-candle shift in normalizeApp2Row() has been removed — keeping it pushed
  * App 2 one candle into the future and broke cross-app consensus entirely.
+ *
+ * App 1 was rewired to the new Minimum Pair FastAPI app. Its signals now
+ * arrive via /api/history (a bare JSON array) instead of /api/signals, and
+ * its health lives at /api/status (quotex_connected) instead of /api/health.
+ * Field names changed: entryTime → entry_ts, signalAt → created_at,
+ * status → result, primaryPattern → source. The aggregator aliases both old
+ * and new names so a future rename upstream is tolerated.
  *
  * Run with:  bun test tests/
  */
@@ -43,7 +50,7 @@ function installFetchMock() {
     if (body && typeof body === "object" && "__status" in body) {
       return new Response("upstream error", { status: body.__status });
     }
-    return new Response(JSON.stringify(body ?? {}), {
+    return new Response(JSON.stringify(body ?? null), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
@@ -52,10 +59,12 @@ function installFetchMock() {
 
 function baseRoutes() {
   return {
-    [`${APP1}/api/health`]: { status: { live: true, tokenExpired: false } },
+    // New Minimum Pair app (FastAPI): /api/status reports Quotex connection.
+    [`${APP1}/api/status`]: { quotex_connected: true, error: null, active_pairs: ["USD/COP OTC"], auth_mode: "session_token" },
     [`${APP2}/api/status`]: { connected: true, streams: { active: [1, 2, 3] } },
     [`${APP3}/api/token-status`]: { connected: true, has_env_token: true, token_source: "env" },
-    [`${APP1}/api/signals`]: { signals: [] },
+    // New App 1: /api/history returns a BARE JSON ARRAY (no envelope).
+    [`${APP1}/api/history`]: [],
     [`${APP2}/api/share-signals`]: { timestamp: nowSec * 1000, rows: [] },
     [`${APP3}/api/signals`]: { signals: [] },
     [`${APP3}/api/share-signals`]: { signals: [] },
@@ -68,25 +77,31 @@ function baseRoutes() {
  * its clock in UTC+6.
  *
  * NOTE: App 2's `time` field is now the candle being PREDICTED (same semantics
- * as App 1's entryTime and App 3's time). The previous test suite assumed the
+ * as App 1's entry_ts and App 3's time). The previous test suite assumed the
  * old behavior where `time` was the last CLOSED candle and the signal was for
  * the next one — that has been fixed in App 2 itself.
  */
 function threeAppsAgreeing(direction: "CALL" | "PUT" = "CALL") {
   const r = baseRoutes();
-  r[`${APP1}/api/signals`] = {
-    signals: [
-      {
-        symbol: "USDCOP_otc",
-        direction,
-        // App 1 speaks milliseconds.
-        signalAt: (currentCandle - 8) * 1000,
-        entryTime: currentCandle * 1000,
-        confidence: 0.82,
-        quality: 0.75,
-      },
-    ],
-  };
+  // New App 1 payload shape — bare array, fields: entry_ts (SECONDS),
+  // created_at (SECONDS), confidence (0-1), result, source. The pair is in
+  // display form ("USD/COP OTC") — canonicalPair() collapses it to
+  // "USDCOP_otc", same key App 2 and App 3 land on.
+  r[`${APP1}/api/history`] = [
+    {
+      id: 1,
+      pair: "USD/COP OTC",
+      direction,
+      created_at: currentCandle - 8,
+      entry_ts: currentCandle,
+      target_close_ts: currentCandle + 60,
+      confidence: 0.82,
+      source: "near_support,doji_reversal",
+      entry_price: 4150.5,
+      close_price: null,
+      result: "PENDING",
+    },
+  ];
   r[`${APP2}/api/share-signals`] = {
     timestamp: nowSec, // App 2 sends time.time() — unix SECONDS, float
     rows: [
@@ -291,9 +306,12 @@ describe("cross-app alignment", () => {
   test("signals for different candles never form a consensus", async () => {
     routes = threeAppsAgreeing("CALL");
     // Push App 1 one candle ahead: it is predicting a different minute, so it
-    // must not be counted alongside App 2 / App 3.
-    (routes[`${APP1}/api/signals`] as any).signals[0].entryTime = (currentCandle + 60) * 1000;
-    (routes[`${APP1}/api/signals`] as any).signals[0].signalAt = (currentCandle + 55) * 1000;
+    // must not be counted alongside App 2 / App 3. New App 1 uses entry_ts
+    // (unix seconds) for the candle being predicted and created_at for the
+    // emission time — both updated here.
+    const app1Row = (routes[`${APP1}/api/history`] as any[])[0];
+    app1Row.entry_ts = currentCandle + 60;
+    app1Row.created_at = currentCandle + 55;
 
     const res = await aggregate();
     const p = findPair(res, "USDCOP_otc");
@@ -312,11 +330,12 @@ describe("candle history", () => {
   test("older candles keep their consensus instead of collapsing to none", async () => {
     routes = baseRoutes();
     const oldCandle = currentCandle - 20 * 60;
-    routes[`${APP1}/api/signals`] = {
-      signals: [
-        { symbol: "EURUSD_otc", direction: "CALL", signalAt: (oldCandle - 5) * 1000, entryTime: oldCandle * 1000, status: "WIN" },
-      ],
-    };
+    // New App 1 shape: bare array, entry_ts/created_at in seconds, result
+    // field for outcome. canonicalPair() collapses "EUR/USD OTC" to
+    // "EURUSD_otc", matching App 3's spelling.
+    routes[`${APP1}/api/history`] = [
+      { pair: "EUR/USD OTC", direction: "CALL", created_at: oldCandle - 5, entry_ts: oldCandle, confidence: 0.7, result: "WIN", source: "microstructure" },
+    ];
     routes[`${APP3}/api/signals`] = {
       signals: [{ asset: "EURUSD_otc", signal: "CALL", ctime: oldCandle, result: "correct" }],
     };
@@ -334,17 +353,19 @@ describe("candle history", () => {
 
   test("a signal emitted after its candle closed does not count", async () => {
     routes = baseRoutes();
-    routes[`${APP1}/api/signals`] = {
-      signals: [
-        {
-          symbol: "GBPJPY_otc",
-          direction: "CALL",
-          // Emitted 10 minutes AFTER the candle it claims to predict.
-          signalAt: (currentCandle + 600) * 1000,
-          entryTime: currentCandle * 1000,
-        },
-      ],
-    };
+    // New App 1 shape — bare array, entry_ts + created_at in seconds.
+    // Emitted 10 minutes AFTER the candle it claims to predict.
+    routes[`${APP1}/api/history`] = [
+      {
+        pair: "GBP/JPY OTC",
+        direction: "CALL",
+        created_at: currentCandle + 600,
+        entry_ts: currentCandle,
+        confidence: 0.55,
+        result: "PENDING",
+        source: "microstructure",
+      },
+    ];
     const res = await aggregate();
     const c = findPair(res, "GBPJPY_otc").latestCandle!;
 
@@ -379,8 +400,8 @@ describe("upstream robustness", () => {
 
   test("one app being down does not hide the others", async () => {
     routes = threeAppsAgreeing("CALL");
-    routes[`${APP1}/api/signals`] = { __status: 503 };
-    routes[`${APP1}/api/health`] = { __status: 503 };
+    routes[`${APP1}/api/history`] = { __status: 503 };
+    routes[`${APP1}/api/status`] = { __status: 503 };
 
     const res = await aggregate();
     const p = findPair(res, "USDCOP_otc");

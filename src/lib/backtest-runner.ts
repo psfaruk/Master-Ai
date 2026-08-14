@@ -124,7 +124,10 @@ export interface BacktestResult {
 }
 
 const SOURCES = {
-  app1: { name: "Minimum Pair", url: "https://minimum-pair-production.up.railway.app/api/signals" },
+  // New Minimum Pair app (FastAPI): bare JSON array of recent signals across
+  // all pairs. Same field semantics as the live aggregator (entry_ts = candle
+  // open, created_at = emission time, result = WIN/LOSS/PENDING).
+  app1: { name: "Minimum Pair", url: "https://minimum-pair-production.up.railway.app/api/history?limit=500" },
   app2: { name: "Binary Signal Terminal", url: "https://binary-signals-app-production.up.railway.app/api/share-signals" },
   app3: { name: "OTC Live Trading", url: "https://otc-live-trading-production.up.railway.app/api/signals?limit=500" },
   app3Live: { name: "OTC Live Trading", url: "https://otc-live-trading-production.up.railway.app/api/share-signals" },
@@ -141,17 +144,30 @@ function normalizeApp1(d: any): NormalizedSignal | null {
   const direction = parseDirection(pickField(d, DIRECTION_KEYS));
   if (!direction) return null;
 
-  const emittedAt = toUnixSeconds(pickField(d, ["signalAt", "signal_at", "createdAt", "ts"]));
-  const entrySec = toUnixSeconds(pickField(d, ["entryTime", "entry_time", "candleTime", "ctime"]));
-  const base = entrySec > 0 ? entrySec : emittedAt;
-  if (!(base > 0)) return null;
-  const candleTime = candleFloor(base) + getCandleOffsetSec("app1");
+  // New Minimum Pair app: entry_ts (unix seconds, candle open being predicted).
+  // Old app: entryTime (ms or s). toUnixSeconds() normalizes either unit so a
+  // millisecond value can no longer push the candle 53,000 years out.
+  const entrySec = toUnixSeconds(
+    pickField(d, ["entry_ts", "entryTime", "entry_time", "candleTime", "ctime"])
+  );
+  if (!(entrySec > 0)) return null;
+  const candleTime = candleFloor(entrySec) + getCandleOffsetSec("app1");
 
-  const status = pickField(d, ["status", "result", "outcome"]);
-  const s = String(status ?? "").toUpperCase();
+  // New app uses `result` (WIN/LOSS/PENDING). Old app used `status`
+  // (WIN/LOSS/DRAW/VOID/ACTIVE). Read both so the column survives either shape.
+  // Backtest only cares about WIN/LOSS; everything else (PENDING, ACTIVE,
+  // DRAW, VOID) becomes null — either graded later via candle close data or
+  // excluded from the win/loss count.
+  const resultRaw = pickField(d, ["result", "status", "outcome"]);
+  const s = String(resultRaw ?? "").toUpperCase();
   let outcome: 0 | 1 | null = null;
   if (s === "WIN" || s === "CORRECT") outcome = 1;
   else if (s === "LOSS" || s === "WRONG") outcome = 0;
+
+  // New app: created_at (unix seconds, emission time). Old app: signalAt.
+  const emittedAt = toUnixSeconds(
+    pickField(d, ["created_at", "signalAt", "signal_at", "createdAt", "ts"])
+  );
 
   return {
     source: "app1",
@@ -160,7 +176,7 @@ function normalizeApp1(d: any): NormalizedSignal | null {
     candleTime,
     direction,
     outcome,
-    rawStatus: status != null ? String(status) : null,
+    rawStatus: resultRaw != null ? String(resultRaw) : null,
   };
 }
 
