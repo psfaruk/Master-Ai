@@ -181,44 +181,67 @@ const filters = {
   freshSec: 0,
   search: "",
   favoritesOnly: false,
-  threeAgreeOnly: false,
 };
 
-wireDropdown("cat-trigger", "cat-menu", "cat-label", (v) => { filters.category = v; renderPairTable(); renderPerPairTable(); });
-wireDropdown("cat-trigger2", "cat-menu2", "cat-label2", (v) => { filters.category = v; renderPairTable(); renderPerPairTable(); });
-wireDropdown("level-trigger", "level-menu", "level-label", (v) => { filters.level = v; renderPairTable(); });
-wireDropdown("dir-trigger", "dir-menu", "dir-label", (v) => { filters.direction = v; renderPairTable(); });
-wireDropdown("agree-trigger", "agree-menu", "agree-label", (v) => { filters.agreeCount = parseInt(v, 10) || 0; renderPairTable(); });
-wireDropdown("app1-trigger", "app1-menu", "app1-label", (v) => { filters.app1Dir = v; renderPairTable(); });
-wireDropdown("app2-trigger", "app2-menu", "app2-label", (v) => { filters.app2Dir = v; renderPairTable(); });
-wireDropdown("app3-trigger", "app3-menu", "app3-label", (v) => { filters.app3Dir = v; renderPairTable(); });
-wireDropdown("wr60-trigger", "wr60-menu", "wr60-label", (v) => { filters.wr60Min = parseFloat(v) || 0; renderPairTable(); });
-wireDropdown("fresh-trigger", "fresh-menu", "fresh-label", (v) => { filters.freshSec = parseInt(v, 10) || 0; renderPairTable(); });
+// Sort state for the signals table (column → 'asc' | 'desc')
+const signalsSort = { column: "agree", dir: "desc" };
 
-$("search-input").addEventListener("input", (e) => { filters.search = e.target.value; renderPairTable(); });
-$("favorites-only").addEventListener("change", (e) => { filters.favoritesOnly = e.target.checked; renderPairTable(); });
-$("three-agree-only").addEventListener("change", (e) => { filters.threeAgreeOnly = e.target.checked; renderPairTable(); });
+wireDropdown("cat-trigger", "cat-menu", "cat-label", (v) => { filters.category = v; renderPairTable(); renderPerPairTable(); });
+wireDropdown("cat-trigger2", "cat-menu2", "cat-label2", (v) => { filters.category = v; renderPairTable(); renderPerPairTable(); renderActiveFilterTags(); });
+wireDropdown("level-trigger", "level-menu", "level-label", (v) => { filters.level = v; renderPairTable(); renderActiveFilterTags(); });
+wireDropdown("dir-trigger", "dir-menu", "dir-label", (v) => { filters.direction = v; renderPairTable(); renderActiveFilterTags(); });
+wireDropdown("agree-trigger", "agree-menu", "agree-label", (v) => { filters.agreeCount = parseInt(v, 10) || 0; renderPairTable(); renderActiveFilterTags(); });
+wireDropdown("app1-trigger", "app1-menu", "app1-label", (v) => { filters.app1Dir = v; renderPairTable(); renderActiveFilterTags(); });
+wireDropdown("app2-trigger", "app2-menu", "app2-label", (v) => { filters.app2Dir = v; renderPairTable(); renderActiveFilterTags(); });
+wireDropdown("app3-trigger", "app3-menu", "app3-label", (v) => { filters.app3Dir = v; renderPairTable(); renderActiveFilterTags(); });
+wireDropdown("wr60-trigger", "wr60-menu", "wr60-label", (v) => { filters.wr60Min = parseFloat(v) || 0; renderPairTable(); renderActiveFilterTags(); });
+wireDropdown("fresh-trigger", "fresh-menu", "fresh-label", (v) => { filters.freshSec = parseInt(v, 10) || 0; renderPairTable(); renderActiveFilterTags(); });
+
+// Signals-tab pair search (separate from top-bar search)
+$("filter-pair-sp")?.addEventListener("input", (e) => { filters.search = e.target.value; renderPairTable(); renderActiveFilterTags(); });
+// Top-bar search also drives the signals filter (for convenience)
+$("search-input").addEventListener("input", (e) => {
+  filters.search = e.target.value;
+  const sp = $("filter-pair-sp"); if (sp) sp.value = e.target.value;
+  renderPairTable(); renderActiveFilterTags();
+});
+$("favorites-only").addEventListener("change", (e) => { filters.favoritesOnly = e.target.checked; renderPairTable(); renderActiveFilterTags(); });
+
+// Sortable column headers — click to toggle sort
+$$(".sp-th.sortable").forEach((th) => {
+  th.addEventListener("click", () => {
+    const col = th.dataset.sort;
+    if (signalsSort.column === col) {
+      signalsSort.dir = signalsSort.dir === "asc" ? "desc" : "asc";
+    } else {
+      signalsSort.column = col;
+      signalsSort.dir = (col === "agree" || col === "wr60") ? "desc" : "asc";
+    }
+    renderPairTable();
+  });
+});
 
 // Clear-all-filters button — reset everything and re-render
 $("btn-clear-filters")?.addEventListener("click", () => {
   Object.assign(filters, {
     category: "", level: "", direction: "", agreeCount: 0,
     app1Dir: "", app2Dir: "", app3Dir: "", wr60Min: 0, freshSec: 0,
-    search: "", favoritesOnly: false, threeAgreeOnly: false,
+    search: "", favoritesOnly: false,
   });
   // Reset visible labels of all dropdowns
   const resets = [
-    ["cat-label2", "All markets"], ["level-label", "All levels"],
-    ["dir-label", "Both dir"], ["agree-label", "Any agree"],
-    ["app1-label", "App 1: any"], ["app2-label", "App 2: any"], ["app3-label", "App 3: any"],
-    ["wr60-label", "60-min WR: any"], ["fresh-label", "Freshness: any"],
+    ["cat-label2", "All"], ["level-label", "All"],
+    ["dir-label", "All"], ["agree-label", "Any"],
+    ["app1-label", "All"], ["app2-label", "All"], ["app3-label", "All"],
+    ["wr60-label", "Any"], ["fresh-label", "Any"],
   ];
   resets.forEach(([id, txt]) => { const el = $(id); if (el) el.textContent = txt; });
-  // Reset top-bar search + checkboxes
+  // Reset search inputs + checkbox
+  const sp = $("filter-pair-sp"); if (sp) sp.value = "";
   const searchInput = $("search-input"); if (searchInput) searchInput.value = "";
   const favOnly = $("favorites-only"); if (favOnly) favOnly.checked = false;
-  const threeAgreeOnly = $("three-agree-only"); if (threeAgreeOnly) threeAgreeOnly.checked = false;
   renderPairTable();
+  renderActiveFilterTags();
 });
 
 // ====== Adaptive polling ======
@@ -350,7 +373,7 @@ function renderConsensusHighlights(pairs) {
   $("home-meta").textContent = `${pairs.length} pairs · ${fmtTime(new Date(state.snapshot.timestamp), false)}`;
 }
 
-// ====== Per-pair table (Signals tab — new signal board layout) ======
+// ====== Per-pair table (Signals tab — SignalPro design) ======
 // State for which rows are expanded.
 const expandedPairs = new Set();
 
@@ -359,14 +382,12 @@ function renderPairTable() {
   const body = $("pair-table-body");
   let pairs = state.snapshot.pairs || [];
 
-  // ---- Client-side filters (mirrors backend /api/pairs filters, but
-  // operates on the snapshot data the client already has) ----
+  // ---- Client-side filters (mirrors backend /api/pairs filters) ----
   if (filters.category) pairs = pairs.filter((p) => p.category === filters.category);
   if (filters.level) pairs = pairs.filter((p) => p.consensus.level === filters.level);
   if (filters.direction) pairs = pairs.filter((p) => (p.consensus.direction || "") === filters.direction);
   if (filters.search) pairs = pairs.filter((p) => p.displayPair.toLowerCase().includes(filters.search.toLowerCase()));
   if (filters.favoritesOnly) pairs = pairs.filter((p) => state.favorites.has(p.pair));
-  if (filters.threeAgreeOnly) pairs = pairs.filter((p) => p.consensus.level === "3-agree");
   if (state.settings.hideConflicts) pairs = pairs.filter((p) => p.consensus.level !== "conflict");
   const minWr = parseFloat(state.settings.minWr) || 0;
   if (minWr > 0) pairs = pairs.filter((p) => p.winRate != null && p.winRate >= minWr);
@@ -376,8 +397,7 @@ function renderPairTable() {
     pairs = pairs.filter((p) => p.latestCandle && (now - p.latestCandle.candleTime) <= onlyFresh);
   }
 
-  // ---- Per-app prediction extraction (from latest_candle signals) ----
-  // Build a flat list with all the new columns the user requested.
+  // ---- Per-app prediction extraction ----
   const rows = pairs.map((p) => {
     const lc = p.latestCandle;
     const sigByApp = { app1: null, app2: null, app3: null };
@@ -410,12 +430,11 @@ function renderPairTable() {
     };
   });
 
-  // ---- agreeCount filter (≥N apps agreeing with final direction) ----
+  // ---- agreeCount filter ----
   if (filters.agreeCount > 0) {
     rows.splice(0, rows.length, ...rows.filter((r) => r.agreeCount >= filters.agreeCount));
   }
   // ---- per-app direction filters ----
-  // NONE means "missing" — useful to find pairs where an app is silent.
   const matchApp = (dir, filter) => {
     if (!filter) return true;
     if (filter === "NONE") return dir === null;
@@ -426,7 +445,7 @@ function renderPairTable() {
     matchApp(r.app2Dir, filters.app2Dir) &&
     matchApp(r.app3Dir, filters.app3Dir)
   ));
-  // ---- freshness filter (candle within last N seconds) ----
+  // ---- freshness filter ----
   if (filters.freshSec > 0) {
     const now = Math.floor(Date.now() / 1000);
     rows.splice(0, rows.length, ...rows.filter((r) => r.candleTime > 0 && (now - r.candleTime) <= filters.freshSec));
@@ -436,22 +455,49 @@ function renderPairTable() {
     rows.splice(0, rows.length, ...rows.filter((r) => r.winRate60Min != null && r.winRate60Min >= filters.wr60Min));
   }
 
+  // ---- Render stat cards (summary of filtered rows) ----
+  renderSignalStats(rows);
+
+  // ---- Sort according to signalsSort ----
+  const sortVal = (r) => {
+    switch (signalsSort.column) {
+      case "market": return r.pair.category;
+      case "candle": return r.candleTime;
+      case "pair": return r.pair.displayPair.toLowerCase();
+      case "agree": return r.agreeCount;
+      case "wr60": return r.winRate60Min ?? -1;
+      default: return r.agreeCount;
+    }
+  };
+  rows.sort((a, b) => {
+    const av = sortVal(a);
+    const bv = sortVal(b);
+    let cmp;
+    if (typeof av === "number" && typeof bv === "number") cmp = av - bv;
+    else cmp = String(av).localeCompare(String(bv));
+    return signalsSort.dir === "asc" ? cmp : -cmp;
+  });
+
+  // Update sort indicators on headers
+  $$(".sp-th.sortable").forEach((th) => {
+    th.classList.toggle("sorted", th.dataset.sort === signalsSort.column);
+    const icon = th.querySelector(".sort-icon");
+    if (icon) {
+      icon.className = "fas sort-icon " + (th.dataset.sort === signalsSort.column
+        ? (signalsSort.dir === "asc" ? "fa-sort-up" : "fa-sort-down")
+        : "fa-sort");
+    }
+  });
+
   if (rows.length === 0) {
-    body.innerHTML = '<tr><td colspan="12" class="placeholder">No pairs match the filter.</td></tr>';
-    $("signals-meta").textContent = "0 pairs";
+    body.innerHTML = `<tr><td colspan="11" class="sp-placeholder"><i class="fas fa-inbox" style="font-size:32px;display:block;margin-bottom:10px;opacity:0.3"></i>No pairs match the filter.</td></tr>`;
+    $("sp-table-count").innerHTML = "<strong>0</strong> pairs";
+    $("sp-table-meta").textContent = "cache —";
     return;
   }
 
-  // ---- Sort: agreeCount desc, then 60-min win rate desc, then pair name ----
-  rows.sort((a, b) => {
-    if (b.agreeCount !== a.agreeCount) return b.agreeCount - a.agreeCount;
-    const aw = a.winRate60Min ?? -1;
-    const bw = b.winRate60Min ?? -1;
-    if (bw !== aw) return bw - aw;
-    return a.pair.displayPair.localeCompare(b.pair.displayPair);
-  });
-
-  $("signals-meta").textContent = `${rows.length} pairs · cached ${state.snapshot.backtestCacheAgeSec?.toFixed(0) ?? "—"}s`;
+  $("sp-table-count").innerHTML = `<strong>${rows.length}</strong> pairs`;
+  $("sp-table-meta").textContent = `cache ${state.snapshot.backtestCacheAgeSec?.toFixed(0) ?? "—"}s`;
 
   // ---- Render rows + expandable detail rows ----
   const rowsHtml = rows.slice(0, 200).map((r) => {
@@ -461,49 +507,49 @@ function renderPairTable() {
 
     // App prediction badges (highlight if matches final)
     const appBadge = (dir) => {
-      if (!dir) return '<span class="app-pred app-pred--none">—</span>';
-      const agree = dir === r.finalDir && r.agreeCount >= 2 ? " app-pred--agree" : "";
-      return `<span class="app-pred app-pred--${dir}${agree}">${dir}</span>`;
+      if (!dir) return '<span class="sp-app-pred sp-app-pred--none">—</span>';
+      const agree = dir === r.finalDir && r.agreeCount >= 2 ? " sp-app-pred--agree" : "";
+      return `<span class="sp-app-pred sp-app-pred--${dir}${agree}">${dir}</span>`;
     };
 
-    // Agree count — show as "2/3" with colored dot
+    // Agree count — N/3 with colored dot
     const agreeCls = r.agreeCount >= 3 ? "3" : r.agreeCount === 2 ? "2" : r.agreeCount === 1 ? "1" : "0";
-    const agreeBadge = `<span class="agree-count agree-count--${agreeCls}"><span class="agree-count__dot"></span>${r.agreeCount}/3</span>`;
+    const agreeBadge = `<span class="sp-agree-badge sp-agree-badge--${agreeCls}"><span class="sp-agree-badge__dot"></span>${r.agreeCount}/3</span>`;
 
-    // Final prediction badge
+    // Final prediction + entry time (combined cell)
     const finalCls = r.finalDir ? r.finalDir : "none";
-    const finalBadge = `<span class="final-pred final-pred--${finalCls}">${r.finalDir || "—"}</span>`;
-
-    // Entry time (= candle UTC, when the candle opens)
+    const finalIcon = r.finalDir === "CALL" ? '<i class="fas fa-arrow-up"></i>' : r.finalDir === "PUT" ? '<i class="fas fa-arrow-down"></i>' : "";
+    const finalBadge = `<span class="sp-final-badge sp-final-badge--${finalCls}">${finalIcon} ${r.finalDir || "—"}</span>`;
     const entryTime = r.candleUtc;
+    const finalCell = `<div class="sp-final-cell">${finalBadge}<span class="sp-entry-time"><i class="far fa-clock"></i> ${entryTime}</span></div>`;
 
     // 60-min win rate bar
     const wr60 = r.winRate60Min;
-    const wr60Cls = wr60 == null ? "none" : wr60 >= 60 ? "good" : wr60 >= 45 ? "mid" : "low";
+    const wr60Cls = wr60 == null ? "none" : wr60 >= 60 ? "high" : wr60 >= 45 ? "mid" : "low";
     const wr60Txt = wr60 == null ? "—" : `${wr60.toFixed(0)}%`;
     const wr60Bar = wr60 == null
-      ? `<span class="wr60"><span class="wr60__pct wr60__pct--none">—</span></span>`
-      : `<span class="wr60">
-           <span class="wr60__bar"><span class="wr60__fill wr60__fill--${wr60Cls}" style="width:${Math.min(100, wr60)}%"></span></span>
-           <span class="wr60__pct wr60__pct--${wr60Cls}">${wr60Txt}</span>
-         </span>`;
+      ? `<div class="sp-winrate-cell"><span class="sp-winrate-val sp-winrate-val--none">—</span></div>`
+      : `<div class="sp-winrate-cell">
+           <div class="sp-winrate-bar"><div class="sp-winrate-fill sp-winrate-fill--${wr60Cls}" style="width:${Math.min(100, wr60)}%"></div></div>
+           <span class="sp-winrate-val sp-winrate-val--${wr60Cls}">${wr60Txt}</span>
+         </div>`;
 
-    const marketPill = `<span class="pill pill--${p.category}">${p.category.toUpperCase()}</span>`;
+    const marketBadge = `<span class="sp-badge-market sp-badge-${p.category}">${p.category.toUpperCase()}</span>`;
+    const candleBadge = `<span class="sp-badge-candle">${r.candleUtc}</span>`;
 
     const mainRow = `
       <tr data-pair="${escAttr(p.pair)}" class="${isExpanded ? "is-expanded" : ""}">
-        <td class="td-fav fav ${isFav ? "is-fav" : ""}" data-fav="${escAttr(p.pair)}">${isFav ? "★" : "☆"}</td>
-        <td>${marketPill}</td>
-        <td class="mono">${r.candleUtc}</td>
-        <td><strong>${escHtml(p.displayPair)}</strong></td>
+        <td class="td-fav fav ${isFav ? "is-fav" : ""}" data-fav="${escAttr(p.pair)}"><i class="fas fa-star"></i></td>
+        <td>${marketBadge}</td>
+        <td>${candleBadge}</td>
+        <td><span class="sp-pair-name">${escHtml(p.displayPair)}</span></td>
         <td>${appBadge(r.app1Dir)}</td>
         <td>${appBadge(r.app2Dir)}</td>
         <td>${appBadge(r.app3Dir)}</td>
         <td>${agreeBadge}</td>
-        <td>${finalBadge}</td>
-        <td class="entry-time">${entryTime}</td>
+        <td>${finalCell}</td>
         <td>${wr60Bar}</td>
-        <td class="td-expand"><span class="row-toggle">▸</span></td>
+        <td class="td-expand"><span class="sp-row-toggle"><i class="fas fa-chevron-right"></i></span></td>
       </tr>`;
 
     const detailRow = isExpanded ? renderDetailRow(r) : "";
@@ -515,16 +561,14 @@ function renderPairTable() {
   // ---- Wire row expand/collapse + fav click ----
   $$("#pair-table-body tr[data-pair]").forEach((row) => {
     row.addEventListener("click", (e) => {
-      // Fav click handled separately
-      if (e.target.classList.contains("fav")) {
-        const pair = e.target.dataset.fav;
+      if (e.target.closest(".fav")) {
+        const pair = e.target.closest(".fav").dataset.fav;
         toggleFavorite(pair);
-        e.target.classList.toggle("is-fav");
-        e.target.textContent = state.favorites.has(pair) ? "★" : "☆";
+        const favEl = e.target.closest(".fav");
+        favEl.classList.toggle("is-fav");
         e.stopPropagation();
         return;
       }
-      // Toggle expand
       const pair = row.dataset.pair;
       if (expandedPairs.has(pair)) expandedPairs.delete(pair);
       else expandedPairs.add(pair);
@@ -533,35 +577,115 @@ function renderPairTable() {
   });
 }
 
+function renderSignalStats(rows) {
+  const bar = $("sp-stats-bar");
+  if (!bar) return;
+  const total = rows.length;
+  const threeAgree = rows.filter((r) => r.agreeCount >= 3).length;
+  const twoAgree = rows.filter((r) => r.agreeCount === 2).length;
+  const conflicts = rows.filter((r) => r.pair.consensus.level === "conflict").length;
+  const callCount = rows.filter((r) => r.finalDir === "CALL").length;
+  const putCount = rows.filter((r) => r.finalDir === "PUT").length;
+  const withWr = rows.filter((r) => r.winRate60Min != null);
+  const avgWr = withWr.length > 0
+    ? (withWr.reduce((s, r) => s + r.winRate60Min, 0) / withWr.length).toFixed(0)
+    : null;
+  bar.innerHTML = `
+    <div class="sp-stat-card">
+      <div class="sp-stat-card__label"><i class="fas fa-layer-group"></i> Total Pairs</div>
+      <div class="sp-stat-card__value cyan">${total}</div>
+      <div class="sp-stat-card__sub">filtered</div>
+    </div>
+    <div class="sp-stat-card">
+      <div class="sp-stat-card__label"><i class="fas fa-check-circle"></i> 3-Agree</div>
+      <div class="sp-stat-card__value green">${threeAgree}</div>
+      <div class="sp-stat-card__sub">all apps agree</div>
+    </div>
+    <div class="sp-stat-card">
+      <div class="sp-stat-card__label"><i class="fas fa-check"></i> 2-Agree</div>
+      <div class="sp-stat-card__value cyan">${twoAgree}</div>
+      <div class="sp-stat-card__sub">two apps agree</div>
+    </div>
+    <div class="sp-stat-card">
+      <div class="sp-stat-card__label"><i class="fas fa-exclamation-triangle"></i> Conflicts</div>
+      <div class="sp-stat-card__value red">${conflicts}</div>
+      <div class="sp-stat-card__sub">split direction</div>
+    </div>
+    <div class="sp-stat-card">
+      <div class="sp-stat-card__label"><i class="fas fa-arrow-up"></i> CALL Signals</div>
+      <div class="sp-stat-card__value green">${callCount}</div>
+      <div class="sp-stat-card__sub">final = CALL</div>
+    </div>
+    <div class="sp-stat-card">
+      <div class="sp-stat-card__label"><i class="fas fa-arrow-down"></i> PUT Signals</div>
+      <div class="sp-stat-card__value red">${putCount}</div>
+      <div class="sp-stat-card__sub">final = PUT</div>
+    </div>
+    <div class="sp-stat-card">
+      <div class="sp-stat-card__label"><i class="fas fa-chart-line"></i> Avg Win Rate 60m</div>
+      <div class="sp-stat-card__value ${avgWr == null ? "" : (avgWr >= 60 ? "green" : avgWr >= 45 ? "orange" : "red")}">${avgWr == null ? "—" : avgWr + "%"}</div>
+      <div class="sp-stat-card__sub">${withWr.length} graded pairs</div>
+    </div>
+  `;
+}
+
+function renderActiveFilterTags() {
+  const container = $("sp-active-filters");
+  if (!container) return;
+  const tags = [];
+  if (filters.category) tags.push({ label: `Market: ${filters.category.toUpperCase()}`, clear: () => { filters.category = ""; const e = $("cat-label2"); if (e) e.textContent = "All"; } });
+  if (filters.level) tags.push({ label: `Level: ${filters.level}`, clear: () => { filters.level = ""; const e = $("level-label"); if (e) e.textContent = "All"; } });
+  if (filters.direction) tags.push({ label: `Final: ${filters.direction}`, clear: () => { filters.direction = ""; const e = $("dir-label"); if (e) e.textContent = "All"; } });
+  if (filters.agreeCount > 0) tags.push({ label: `Agree ≥ ${filters.agreeCount}`, clear: () => { filters.agreeCount = 0; const e = $("agree-label"); if (e) e.textContent = "Any"; } });
+  if (filters.app1Dir) tags.push({ label: `App 1: ${filters.app1Dir === "NONE" ? "missing" : filters.app1Dir}`, clear: () => { filters.app1Dir = ""; const e = $("app1-label"); if (e) e.textContent = "All"; } });
+  if (filters.app2Dir) tags.push({ label: `App 2: ${filters.app2Dir === "NONE" ? "missing" : filters.app2Dir}`, clear: () => { filters.app2Dir = ""; const e = $("app2-label"); if (e) e.textContent = "All"; } });
+  if (filters.app3Dir) tags.push({ label: `App 3: ${filters.app3Dir === "NONE" ? "missing" : filters.app3Dir}`, clear: () => { filters.app3Dir = ""; const e = $("app3-label"); if (e) e.textContent = "All"; } });
+  if (filters.wr60Min > 0) tags.push({ label: `60m WR ≥ ${filters.wr60Min}%`, clear: () => { filters.wr60Min = 0; const e = $("wr60-label"); if (e) e.textContent = "Any"; } });
+  if (filters.freshSec > 0) tags.push({ label: `Fresh ≤ ${filters.freshSec}s`, clear: () => { filters.freshSec = 0; const e = $("fresh-label"); if (e) e.textContent = "Any"; } });
+  if (filters.search) tags.push({ label: `Pair: "${filters.search}"`, clear: () => { filters.search = ""; const a = $("filter-pair-sp"); if (a) a.value = ""; const b = $("search-input"); if (b) b.value = ""; } });
+  if (filters.favoritesOnly) tags.push({ label: `★ Favorites only`, clear: () => { filters.favoritesOnly = false; const e = $("favorites-only"); if (e) e.checked = false; } });
+  if (tags.length === 0) { container.innerHTML = ""; return; }
+  container.innerHTML = tags.map((t, i) =>
+    `<span class="sp-active-tag">${escHtml(t.label)} <span class="sp-tag-remove" data-idx="${i}"><i class="fas fa-times"></i></span></span>`
+  ).join("");
+  $$(".sp-tag-remove", container).forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const idx = parseInt(el.dataset.idx, 10);
+      tags[idx].clear();
+      renderPairTable();
+      renderActiveFilterTags();
+    });
+  });
+}
+
 function renderDetailRow(r) {
   const p = r.pair;
-  // Per-app signal details — emitted time, confidence, strength, outcome
   const signals = ["app1", "app2", "app3"].map((appId) => {
     const s = r.sigByApp[appId];
     if (!s) {
       return `
-        <div class="detail-signal">
-          <span class="detail-signal__app">${appId}</span>
-          <span class="detail-signal__dir">—</span>
-          <span class="detail-signal__time">no signal</span>
-          <span class="detail-signal__meta"></span>
-          <span class="detail-signal__outcome detail-signal__outcome--unknown">—</span>
+        <div class="sp-detail-signal">
+          <span class="sp-detail-signal__app">${appId}</span>
+          <span class="sp-detail-signal__dir">—</span>
+          <span class="sp-detail-signal__time">no signal</span>
+          <span class="sp-detail-signal__meta"></span>
+          <span class="sp-detail-signal__outcome sp-detail-signal__outcome--unknown">—</span>
         </div>`;
     }
     const outcomeTxt = s.outcome == null ? "—" : s.outcome ? "WIN" : "LOSS";
     const outcomeCls = s.outcome == null ? "unknown" : s.outcome ? "WIN" : "LOSS";
     const conf = s.confidence != null ? `${(s.confidence * 100).toFixed(0)}%` : "—";
     return `
-      <div class="detail-signal">
-        <span class="detail-signal__app">${s.sourceName || appId}</span>
-        <span class="detail-signal__dir"><span class="dir dir--${s.direction || "null"}">${s.direction || "—"}</span></span>
-        <span class="detail-signal__time">${s.emittedUtc || "—"}</span>
-        <span class="detail-signal__meta">conf ${conf} · ${s.strength || "—"}${s.leadSec != null ? ` · lead ${s.leadSec > 0 ? "+" : ""}${s.leadSec}s` : ""}</span>
-        <span class="detail-signal__outcome detail-signal__outcome--${outcomeCls}">${outcomeTxt}</span>
+      <div class="sp-detail-signal">
+        <span class="sp-detail-signal__app">${escHtml(s.sourceName || appId)}</span>
+        <span class="sp-detail-signal__dir"><span class="sp-app-pred sp-app-pred--${s.direction || "none"}">${s.direction || "—"}</span></span>
+        <span class="sp-detail-signal__time">${s.emittedUtc || "—"}</span>
+        <span class="sp-detail-signal__meta">conf ${conf} · ${s.strength || "—"}${s.leadSec != null ? ` · lead ${s.leadSec > 0 ? "+" : ""}${s.leadSec}s` : ""}</span>
+        <span class="sp-detail-signal__outcome sp-detail-signal__outcome--${outcomeCls}">${outcomeTxt}</span>
       </div>`;
   }).join("");
 
-  // 6h win rate summary
   const ls = p.levelStats || {};
   const fmtLevel = (lvl) => {
     const s = ls[lvl];
@@ -570,43 +694,43 @@ function renderDetailRow(r) {
   };
 
   return `
-    <tr class="detail-row" data-pair-detail="${escAttr(p.pair)}">
-      <td colspan="12">
-        <div class="detail-row__inner">
-          <div class="detail-row__section">
-            <h4>Per-App Signal Breakdown (candle ${r.candleUtc} UTC)</h4>
-            <div class="detail-row__signals">${signals}</div>
+    <tr class="sp-detail-row" data-pair-detail="${escAttr(p.pair)}">
+      <td colspan="11">
+        <div class="sp-detail-inner">
+          <div class="sp-detail-section">
+            <h4><i class="fas fa-satellite-dish"></i> Per-App Signal Breakdown (candle ${r.candleUtc} UTC)</h4>
+            <div class="sp-detail-signals">${signals}</div>
           </div>
-          <div class="detail-row__section">
-            <h4>Win Rate (last 6 hours)</h4>
-            <div class="detail-row__signals">
-              <div class="detail-signal">
-                <span class="detail-signal__app">3-agree</span>
-                <span class="detail-signal__dir">${fmtLevel("3-agree")}</span>
-                <span class="detail-signal__time"></span>
-                <span class="detail-signal__meta"></span>
-                <span class="detail-signal__outcome detail-signal__outcome--unknown">—</span>
+          <div class="sp-detail-section">
+            <h4><i class="fas fa-chart-bar"></i> Win Rate (last 6 hours)</h4>
+            <div class="sp-detail-signals">
+              <div class="sp-detail-signal">
+                <span class="sp-detail-signal__app">3-agree</span>
+                <span class="sp-detail-signal__dir"></span>
+                <span class="sp-detail-signal__time"></span>
+                <span class="sp-detail-signal__meta">${fmtLevel("3-agree")}</span>
+                <span class="sp-detail-signal__outcome sp-detail-signal__outcome--unknown">—</span>
               </div>
-              <div class="detail-signal">
-                <span class="detail-signal__app">2-agree</span>
-                <span class="detail-signal__dir">${fmtLevel("2-agree")}</span>
-                <span class="detail-signal__time"></span>
-                <span class="detail-signal__meta"></span>
-                <span class="detail-signal__outcome detail-signal__outcome--unknown">—</span>
+              <div class="sp-detail-signal">
+                <span class="sp-detail-signal__app">2-agree</span>
+                <span class="sp-detail-signal__dir"></span>
+                <span class="sp-detail-signal__time"></span>
+                <span class="sp-detail-signal__meta">${fmtLevel("2-agree")}</span>
+                <span class="sp-detail-signal__outcome sp-detail-signal__outcome--unknown">—</span>
               </div>
-              <div class="detail-signal">
-                <span class="detail-signal__app">1-only</span>
-                <span class="detail-signal__dir">${fmtLevel("1-only")}</span>
-                <span class="detail-signal__time"></span>
-                <span class="detail-signal__meta"></span>
-                <span class="detail-signal__outcome detail-signal__outcome--unknown">—</span>
+              <div class="sp-detail-signal">
+                <span class="sp-detail-signal__app">1-only</span>
+                <span class="sp-detail-signal__dir"></span>
+                <span class="sp-detail-signal__time"></span>
+                <span class="sp-detail-signal__meta">${fmtLevel("1-only")}</span>
+                <span class="sp-detail-signal__outcome sp-detail-signal__outcome--unknown">—</span>
               </div>
-              <div class="detail-signal">
-                <span class="detail-signal__app">60-min</span>
-                <span class="detail-signal__dir">${r.winRate60Min == null ? "—" : r.winRate60Min.toFixed(0) + "%"}</span>
-                <span class="detail-signal__time"></span>
-                <span class="detail-signal__meta">${r.gradedTotal60Min} graded</span>
-                <span class="detail-signal__outcome detail-signal__outcome--unknown">—</span>
+              <div class="sp-detail-signal">
+                <span class="sp-detail-signal__app">60-min</span>
+                <span class="sp-detail-signal__dir"></span>
+                <span class="sp-detail-signal__time"></span>
+                <span class="sp-detail-signal__meta">${r.winRate60Min == null ? "—" : r.winRate60Min.toFixed(0) + "%"} · ${r.gradedTotal60Min} graded</span>
+                <span class="sp-detail-signal__outcome sp-detail-signal__outcome--unknown">—</span>
               </div>
             </div>
           </div>

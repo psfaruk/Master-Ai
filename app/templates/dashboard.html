@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#0a0e17">
   <title>Master-Ai · Live Signal Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/dashboard.css">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='24' font-size='24'%3E📊%3C/text%3E%3C/svg%3E">
 </head>
@@ -133,101 +137,135 @@
 
     <!-- ============ SIGNALS ============ -->
     <section id="tab-signals" class="tab-panel">
-      <!-- Comprehensive filter bar — all columns filterable -->
-      <div class="panel filter-panel">
-        <div class="panel__header">
-          <h2>Filters</h2>
-          <div class="filter-bar">
+      <!-- Background grid + glow effects (scoped to signals tab) -->
+      <div class="sp-grid"></div>
+      <div class="sp-glow sp-glow-1"></div>
+      <div class="sp-glow sp-glow-2"></div>
+
+      <!-- Stats bar — summary counts -->
+      <div class="sp-stats-bar" id="sp-stats-bar">
+        <!-- Populated by JS — renderSignalStats() -->
+      </div>
+
+      <!-- Filter section — comprehensive, all columns filterable -->
+      <section class="sp-filter-section">
+        <div class="sp-filter-row">
+          <div class="sp-filter-group">
+            <div class="sp-filter-label">Market Type</div>
             <div class="dropdown">
-              <button class="dropdown__trigger" id="cat-trigger2" type="button">
-                <span id="cat-label2">All markets</span>
+              <button class="dropdown__trigger sp-filter-trigger" id="cat-trigger2" type="button">
+                <span id="cat-label2">All</span>
                 <span class="dropdown__caret">▾</span>
               </button>
               <ul class="dropdown__menu" id="cat-menu2" role="menu">
-                <li role="menuitem" data-value="">All markets</li>
-                <li role="menuitem" data-value="otc">OTC only</li>
-                <li role="menuitem" data-value="real">Real only</li>
+                <li role="menuitem" data-value="">All</li>
+                <li role="menuitem" data-value="otc">OTC</li>
+                <li role="menuitem" data-value="real">Real</li>
               </ul>
             </div>
+          </div>
+          <div class="sp-filter-group">
+            <div class="sp-filter-label">Candle (UTC)</div>
             <div class="dropdown">
-              <button class="dropdown__trigger" id="level-trigger" type="button">
-                <span id="level-label">All levels</span>
+              <button class="dropdown__trigger sp-filter-trigger" id="level-trigger" type="button">
+                <span id="level-label">All</span>
                 <span class="dropdown__caret">▾</span>
               </button>
               <ul class="dropdown__menu" id="level-menu" role="menu">
-                <li role="menuitem" data-value="">All levels</li>
+                <li role="menuitem" data-value="">All</li>
                 <li role="menuitem" data-value="3-agree">3-agree</li>
                 <li role="menuitem" data-value="2-agree">2-agree</li>
                 <li role="menuitem" data-value="conflict">Conflict</li>
                 <li role="menuitem" data-value="1-only">Single</li>
               </ul>
             </div>
+          </div>
+          <div class="sp-filter-group">
+            <div class="sp-filter-label">Pair Name</div>
+            <input type="text" class="sp-filter-input search" id="filter-pair-sp" placeholder="Search pair..." autocomplete="off">
+          </div>
+          <div class="sp-filter-group">
+            <div class="sp-filter-label">App 1 Prediction</div>
             <div class="dropdown">
-              <button class="dropdown__trigger" id="dir-trigger" type="button">
-                <span id="dir-label">Both dir</span>
-                <span class="dropdown__caret">▾</span>
-              </button>
-              <ul class="dropdown__menu" id="dir-menu" role="menu">
-                <li role="menuitem" data-value="">Both directions</li>
-                <li role="menuitem" data-value="CALL">CALL only</li>
-                <li role="menuitem" data-value="PUT">PUT only</li>
-              </ul>
-            </div>
-            <div class="dropdown">
-              <button class="dropdown__trigger" id="agree-trigger" type="button">
-                <span id="agree-label">Any agree</span>
-                <span class="dropdown__caret">▾</span>
-              </button>
-              <ul class="dropdown__menu" id="agree-menu" role="menu">
-                <li role="menuitem" data-value="0">Any agreement</li>
-                <li role="menuitem" data-value="1">≥1 agree</li>
-                <li role="menuitem" data-value="2">≥2 agree</li>
-                <li role="menuitem" data-value="3">3 agree only</li>
-              </ul>
-            </div>
-            <div class="dropdown">
-              <button class="dropdown__trigger" id="app1-trigger" type="button">
-                <span id="app1-label">App 1: any</span>
+              <button class="dropdown__trigger sp-filter-trigger narrow" id="app1-trigger" type="button">
+                <span id="app1-label">All</span>
                 <span class="dropdown__caret">▾</span>
               </button>
               <ul class="dropdown__menu" id="app1-menu" role="menu">
-                <li role="menuitem" data-value="">App 1: any</li>
-                <li role="menuitem" data-value="CALL">App 1: CALL</li>
-                <li role="menuitem" data-value="PUT">App 1: PUT</li>
-                <li role="menuitem" data-value="NONE">App 1: missing</li>
+                <li role="menuitem" data-value="">All</li>
+                <li role="menuitem" data-value="CALL">CALL</li>
+                <li role="menuitem" data-value="PUT">PUT</li>
+                <li role="menuitem" data-value="NONE">Missing</li>
               </ul>
             </div>
+          </div>
+          <div class="sp-filter-group">
+            <div class="sp-filter-label">App 2 Prediction</div>
             <div class="dropdown">
-              <button class="dropdown__trigger" id="app2-trigger" type="button">
-                <span id="app2-label">App 2: any</span>
+              <button class="dropdown__trigger sp-filter-trigger narrow" id="app2-trigger" type="button">
+                <span id="app2-label">All</span>
                 <span class="dropdown__caret">▾</span>
               </button>
               <ul class="dropdown__menu" id="app2-menu" role="menu">
-                <li role="menuitem" data-value="">App 2: any</li>
-                <li role="menuitem" data-value="CALL">App 2: CALL</li>
-                <li role="menuitem" data-value="PUT">App 2: PUT</li>
-                <li role="menuitem" data-value="NONE">App 2: missing</li>
+                <li role="menuitem" data-value="">All</li>
+                <li role="menuitem" data-value="CALL">CALL</li>
+                <li role="menuitem" data-value="PUT">PUT</li>
+                <li role="menuitem" data-value="NONE">Missing</li>
               </ul>
             </div>
+          </div>
+          <div class="sp-filter-group">
+            <div class="sp-filter-label">App 3 Prediction</div>
             <div class="dropdown">
-              <button class="dropdown__trigger" id="app3-trigger" type="button">
-                <span id="app3-label">App 3: any</span>
+              <button class="dropdown__trigger sp-filter-trigger narrow" id="app3-trigger" type="button">
+                <span id="app3-label">All</span>
                 <span class="dropdown__caret">▾</span>
               </button>
               <ul class="dropdown__menu" id="app3-menu" role="menu">
-                <li role="menuitem" data-value="">App 3: any</li>
-                <li role="menuitem" data-value="CALL">App 3: CALL</li>
-                <li role="menuitem" data-value="PUT">App 3: PUT</li>
-                <li role="menuitem" data-value="NONE">App 3: missing</li>
+                <li role="menuitem" data-value="">All</li>
+                <li role="menuitem" data-value="CALL">CALL</li>
+                <li role="menuitem" data-value="PUT">PUT</li>
+                <li role="menuitem" data-value="NONE">Missing</li>
               </ul>
             </div>
+          </div>
+          <div class="sp-filter-group">
+            <div class="sp-filter-label">Agree 2/3</div>
             <div class="dropdown">
-              <button class="dropdown__trigger" id="wr60-trigger" type="button">
-                <span id="wr60-label">60-min WR: any</span>
+              <button class="dropdown__trigger sp-filter-trigger narrow" id="agree-trigger" type="button">
+                <span id="agree-label">Any</span>
+                <span class="dropdown__caret">▾</span>
+              </button>
+              <ul class="dropdown__menu" id="agree-menu" role="menu">
+                <li role="menuitem" data-value="0">Any</li>
+                <li role="menuitem" data-value="2">≥ 2 agree</li>
+                <li role="menuitem" data-value="3">3 agree</li>
+              </ul>
+            </div>
+          </div>
+          <div class="sp-filter-group">
+            <div class="sp-filter-label">Final Prediction</div>
+            <div class="dropdown">
+              <button class="dropdown__trigger sp-filter-trigger narrow" id="dir-trigger" type="button">
+                <span id="dir-label">All</span>
+                <span class="dropdown__caret">▾</span>
+              </button>
+              <ul class="dropdown__menu" id="dir-menu" role="menu">
+                <li role="menuitem" data-value="">All</li>
+                <li role="menuitem" data-value="CALL">CALL</li>
+                <li role="menuitem" data-value="PUT">PUT</li>
+              </ul>
+            </div>
+          </div>
+          <div class="sp-filter-group">
+            <div class="sp-filter-label">Win Rate (60m)</div>
+            <div class="dropdown">
+              <button class="dropdown__trigger sp-filter-trigger" id="wr60-trigger" type="button">
+                <span id="wr60-label">Any</span>
                 <span class="dropdown__caret">▾</span>
               </button>
               <ul class="dropdown__menu" id="wr60-menu" role="menu">
-                <li role="menuitem" data-value="0">Any win rate</li>
+                <li role="menuitem" data-value="0">Any</li>
                 <li role="menuitem" data-value="50">≥ 50%</li>
                 <li role="menuitem" data-value="55">≥ 55%</li>
                 <li role="menuitem" data-value="60">≥ 60%</li>
@@ -235,9 +273,12 @@
                 <li role="menuitem" data-value="70">≥ 70%</li>
               </ul>
             </div>
+          </div>
+          <div class="sp-filter-group">
+            <div class="sp-filter-label">Freshness</div>
             <div class="dropdown">
-              <button class="dropdown__trigger" id="fresh-trigger" type="button">
-                <span id="fresh-label">Freshness: any</span>
+              <button class="dropdown__trigger sp-filter-trigger" id="fresh-trigger" type="button">
+                <span id="fresh-label">Any</span>
                 <span class="dropdown__caret">▾</span>
               </button>
               <ul class="dropdown__menu" id="fresh-menu" role="menu">
@@ -247,46 +288,50 @@
                 <li role="menuitem" data-value="300">≤ 5 min</li>
               </ul>
             </div>
-            <label class="checkbox">
+          </div>
+          <div class="sp-filter-actions">
+            <label class="sp-checkbox">
               <input type="checkbox" id="favorites-only">
-              <span>★ Favorites</span>
+              <span><i class="fas fa-star"></i> Favorites</span>
             </label>
-            <label class="checkbox">
-              <input type="checkbox" id="three-agree-only">
-              <span>Only 3-agree</span>
-            </label>
-            <button class="btn btn--ghost btn--sm" id="btn-clear-filters" type="button">Clear</button>
+            <button class="sp-btn sp-btn-reset" id="btn-clear-filters" type="button">
+              <i class="fas fa-undo"></i> Reset
+            </button>
           </div>
         </div>
-      </div>
+        <!-- Active filter tags -->
+        <div class="sp-active-filters" id="sp-active-filters"></div>
+      </section>
 
-      <div class="panel">
-        <div class="panel__header">
-          <h2>Signal Board</h2>
-          <span class="panel__meta" id="signals-meta">—</span>
+      <!-- Excel-like table -->
+      <div class="sp-table-section">
+        <div class="sp-table-info">
+          <div class="sp-table-count" id="sp-table-count">— pairs</div>
+          <div class="sp-table-meta" id="sp-table-meta">cache —</div>
         </div>
-        <div class="panel__body panel__body--scroll">
-          <table class="pair-table pair-table--signalboard">
-            <thead>
-              <tr>
-                <th class="th-fav">★</th>
-                <th>Market</th>
-                <th>Candle (UTC)</th>
-                <th>Pair</th>
-                <th>App 1</th>
-                <th>App 2</th>
-                <th>App 3</th>
-                <th>Agree</th>
-                <th>Final</th>
-                <th>Entry (UTC)</th>
-                <th>Win Rate 60min</th>
-                <th class="th-expand"></th>
-              </tr>
-            </thead>
-            <tbody id="pair-table-body">
-              <tr><td colspan="12" class="placeholder">Loading…</td></tr>
-            </tbody>
-          </table>
+        <div class="sp-table-wrapper">
+          <div class="sp-table-scroll">
+            <table class="sp-table">
+              <thead>
+                <tr>
+                  <th class="sp-th sp-th-fav"><i class="fas fa-star"></i></th>
+                  <th class="sp-th sortable" data-sort="market">Market <i class="fas fa-sort sort-icon"></i></th>
+                  <th class="sp-th sortable" data-sort="candle">Candle (UTC) <i class="fas fa-sort sort-icon"></i></th>
+                  <th class="sp-th sortable" data-sort="pair">Pair <i class="fas fa-sort sort-icon"></i></th>
+                  <th class="sp-th">App 1</th>
+                  <th class="sp-th">App 2</th>
+                  <th class="sp-th">App 3</th>
+                  <th class="sp-th sortable" data-sort="agree">Agree <i class="fas fa-sort sort-icon"></i></th>
+                  <th class="sp-th">Final + Entry</th>
+                  <th class="sp-th sortable" data-sort="wr60">Win Rate 60min <i class="fas fa-sort sort-icon"></i></th>
+                  <th class="sp-th sp-th-expand"></th>
+                </tr>
+              </thead>
+              <tbody id="pair-table-body">
+                <tr><td colspan="11" class="sp-placeholder">Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </section>
