@@ -1,21 +1,25 @@
 # Master-Ai — Python edition
 # FastAPI + httpx + asyncio, mirror of the original Next.js/TypeScript dashboard.
+#
+# All versions are pinned for reproducible Railway builds. When bumping,
+# verify locally with `docker build .` before deploying.
 
-# Web framework
+# Web framework — FastAPI + ASGI server.
+# `uvicorn[standard]` pulls in `httptools` (C-based HTTP parser) and `uvloop`
+# (C-based event loop) which are much faster than the pure-Python fallbacks.
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
+
+# Template engine for the dashboard UI.
 jinja2==3.1.5
 itsdangerous==2.2.0
 
-# Async HTTP client (replaces fetch() in Node)
+# Async HTTP client — replaces Node's `fetch()`. Used by every module that
+# talks to the 3 upstream Quotex signal apps.
 httpx==0.28.1
 
-# Pydantic ships with FastAPI — pin to v2 for performance
+# Pydantic v2 — bundled with FastAPI 0.100+ but we pin it for stability.
 pydantic==2.10.4
 
-# Tests
-pytest==8.3.4
-pytest-asyncio==0.25.2
-
-# Misc
+# Misc utilities.
 python-dateutil==2.9.0.post0

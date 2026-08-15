@@ -1,13 +1,26 @@
-# nixpacks build configuration for Railway.
-# Tells Railway how to install Python deps and start the FastAPI app.
+# nixpacks build configuration (used by Railway as an alternative to the
+# Dockerfile). The Dockerfile is preferred because it pins the Python
+# version deterministically — this nixpacks config is a fallback for hosts
+# that don't support custom Dockerfiles.
 
+# Use the Python provider explicitly so nixpacks doesn't autodetect Node.js
+# (the original repo had a package.json that confused it).
 providers = ["python"]
 
 [phases.setup]
+# Pin Python 3.12 explicitly — nixpacks' default Python is sometimes 3.10 or
+# 3.11 depending on the host's nixpkgs revision, which broke uvicorn's
+# `httptools` / `uvloop` wheels.
 nixPkgs = ["python312"]
 
+# Tell nixpacks this is NOT a Node project even if it ever sees one.
+nixpacks = { nodeVersion = "false" }
+
 [phases.install]
-cmds = ["pip install -r requirements.txt"]
+# --no-cache-dir keeps the layer small; we run as root inside the
+# nixpacks builder container so --root-user-action=ignore is safe.
+cmds = ["pip install --no-cache-dir -r requirements.txt"]
 
 [start]
+# ${PORT:-8000} so local nixpacks runs work without a PORT env var.
 cmd = "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"

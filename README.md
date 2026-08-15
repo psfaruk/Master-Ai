@@ -51,7 +51,7 @@ Master-Ai/
 ## Run locally
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -67,6 +67,7 @@ endpoints directly:
 ## Tests
 
 ```bash
+pip install -r requirements.txt -r requirements-dev.txt
 python -m pytest tests/ -v
 ```
 
@@ -100,11 +101,48 @@ PORT=8000
 railway up
 ```
 
-The included `railway.json` + `nixpacks.toml` configure the build:
+The build uses a **Dockerfile** (preferred — pins Python 3.12 exactly and
+deterministically):
 
-1. Install Python 3.12.
-2. `pip install -r requirements.txt`.
-3. Start: `uvicorn main:app --host 0.0.0.0 --port $PORT`.
+1. `python:3.12-slim` base image
+2. `pip install -r requirements.txt` (cached layer)
+3. `uvicorn main:app --host 0.0.0.0 --port $PORT`
+4. Healthcheck on `/health` (Railway probes this to know when ready)
+
+A `nixpacks.toml` fallback is also included for hosts that don't support
+custom Dockerfiles — it pins Python 3.12 via `nixPkgs = ["python312"]` and
+tells nixpacks this is a Python project (NOT Node, even if the repo ever
+contained a `package.json`).
+
+### Why Dockerfile over nixpacks?
+
+A previous deployment accidentally ran the **Next.js** app instead of the
+Python port because nixpacks autodetected Node from a stale `package.json`
+and built the wrong image. The Dockerfile eliminates this ambiguity — the
+base image and the start command are both explicit.
+
+### Local Docker
+
+```bash
+docker build -t master-ai .
+docker run -p 8000:8000 -e PORT=8000 master-ai
+```
+
+## Development
+
+```bash
+# Install runtime + test deps
+pip install -r requirements.txt -r requirements-dev.txt
+
+# Run tests
+python -m pytest tests/ -v
+
+# Lint (no unused imports, no undefined names)
+pyflakes app/ main.py tests/
+
+# Run the dev server with auto-reload
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
 
 ## How it works
 

@@ -1,0 +1,13 @@
+# Build context — only send these to Docker, not the whole working dir.
+# Keeps the build context tiny and cache-friendly.
+
+app
+main.py
+requirements.txt
+tests
+README.md
+Dockerfile
+.dockerignore
+Procfile
+railway.json
+nixpacks.toml
