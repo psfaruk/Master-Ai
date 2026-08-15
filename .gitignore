@@ -1,74 +1,32 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.coverage
+htmlcov/
 
-# dependencies
-node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
-# This project uses bun.lock; ignore the npm-generated lockfile so it
-# doesn't get committed by accident when contributors use npm locally.
-package-lock.json
+# Virtual envs
+.venv/
+venv/
+env/
 
-# testing
-/coverage
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
-# misc
+# OS
 .DS_Store
-*.pem
+Thumbs.db
 
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
+# Build artifacts
+*.egg-info/
+dist/
+build/
 
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
-.vercel
-
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-local-*
-.claude
-.z-ai-config
+# Logs
 *.log
-dev.log
-dev.out.log
-test
-prompt
-
-server.log
-# Skills directory
-/skills/
-# Railway / build artifacts
-.railway/
-railway.log
-
-# Mini-service logs
-/mini-services/signal-pusher/log.txt
-/mini-services/signal-pusher/watchdog.log
-
-# Z scripts internal
-/.zscripts/
-
-# Download / upload temp
-/download/
-/upload/
-
-# Backtest output
-backtest_result.json

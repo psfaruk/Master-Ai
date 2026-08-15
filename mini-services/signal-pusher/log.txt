@@ -1,8 +1,0 @@
-$ bash run.sh
-[signal-pusher] starting bun index.ts (PID 6229)...
-[2026-08-10T16:01:51.720Z] Signal Pusher WebSocket server running on port 3003
-[2026-08-10T16:01:51.720Z] Pushing every 5000ms (freshness window: 1800s)
-[2026-08-10T16:01:52.131Z] health changed: app1:ok:1:0:1|app2:ok:1:0:1|app3:ok:1:0:1
-[2026-08-10T16:01:52.131Z] pushed: 15 pairs, 3A=3, 2A=4, conflict=7, 1-only=1 | apps: app1=ok,app2=ok,app3=ok
-[2026-08-10T16:01:55.230Z] client connected: _o_5-OtA9ABukB46AAAB
-[2026-08-10T16:01:56.992Z] pushed: 15 pairs, 3A=3, 2A=4, conflict=7, 1-only=1 | apps: app1=ok,app2=ok,app3=ok

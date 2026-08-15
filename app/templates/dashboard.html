@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Master-Ai · Signal Dashboard</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='24' font-size='24'%3E📊%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar__brand">
+      <span class="topbar__logo">📊</span>
+      <div>
+        <h1>Master-Ai</h1>
+        <p class="topbar__subtitle">Quotex signal aggregator · Python edition</p>
+      </div>
+    </div>
+    <div class="topbar__status" id="status-pill">
+      <span class="pulse"></span>
+      <span id="status-text">connecting…</span>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button data-tab="home" class="tab tab--active">Home</button>
+    <button data-tab="chart" class="tab">Chart &amp; Signal</button>
+    <button data-tab="history" class="tab">History</button>
+    <button data-tab="diag" class="tab">Diagnostics</button>
+  </nav>
+
+  <main class="content">
+    <!-- ============ HOME ============ -->
+    <section id="tab-home" class="tab-panel tab-panel--active">
+      <div class="card-grid" id="app-cards">
+        <div class="card card--skeleton">
+          <div class="skeleton skeleton--title"></div>
+          <div class="skeleton skeleton--line"></div>
+          <div class="skeleton skeleton--line"></div>
+        </div>
+        <div class="card card--skeleton">
+          <div class="skeleton skeleton--title"></div>
+          <div class="skeleton skeleton--line"></div>
+          <div class="skeleton skeleton--line"></div>
+        </div>
+        <div class="card card--skeleton">
+          <div class="skeleton skeleton--title"></div>
+          <div class="skeleton skeleton--line"></div>
+          <div class="skeleton skeleton--line"></div>
+        </div>
+      </div>
+
+      <div class="summary-stats" id="summary-stats">
+        <div class="stat stat--3agree">
+          <span class="stat__label">3-Bot Agree</span>
+          <span class="stat__value" id="stat-3agree">—</span>
+        </div>
+        <div class="stat stat--2agree">
+          <span class="stat__label">2-Bot Agree</span>
+          <span class="stat__value" id="stat-2agree">—</span>
+        </div>
+        <div class="stat stat--conflict">
+          <span class="stat__label">Conflicts</span>
+          <span class="stat__value" id="stat-conflict">—</span>
+        </div>
+        <div class="stat stat--single">
+          <span class="stat__label">Single Only</span>
+          <span class="stat__value" id="stat-single">—</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel__header">
+          <h2>Consensus Highlights</h2>
+          <span class="panel__meta" id="home-meta">—</span>
+        </div>
+        <div class="panel__body" id="consensus-highlights">
+          <p class="placeholder">Loading consensus…</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CHART & SIGNAL ============ -->
+    <section id="tab-chart" class="tab-panel">
+      <div class="panel">
+        <div class="panel__header">
+          <h2>Per-Pair Signals</h2>
+          <div class="filter-bar">
+            <select id="filter-level">
+              <option value="">All levels</option>
+              <option value="3-agree">3-agree</option>
+              <option value="2-agree">2-agree</option>
+              <option value="conflict">Conflict</option>
+              <option value="1-only">Single</option>
+            </select>
+            <input type="text" id="filter-pair" placeholder="Filter pair…">
+          </div>
+        </div>
+        <div class="panel__body panel__body--scroll">
+          <table class="pair-table">
+            <thead>
+              <tr>
+                <th>Pair</th>
+                <th>Category</th>
+                <th>Consensus</th>
+                <th>Direction</th>
+                <th>Apps</th>
+                <th>Candle (UTC)</th>
+              </tr>
+            </thead>
+            <tbody id="pair-table-body">
+              <tr><td colspan="6" class="placeholder">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ HISTORY ============ -->
+    <section id="tab-history" class="tab-panel">
+      <div class="panel">
+        <div class="panel__header">
+          <h2>Backtest</h2>
+          <button class="btn btn--ghost" id="btn-run-backtest">Run backtest</button>
+        </div>
+        <div class="panel__body" id="backtest-content">
+          <p class="placeholder">Click "Run backtest" to fetch a fresh verdict.</p>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel__header">
+          <h2>Per-Pair History</h2>
+          <select id="history-pair"><option value="">Select a pair…</option></select>
+        </div>
+        <div class="panel__body" id="pair-history">
+          <p class="placeholder">Pick a pair to see its candle history.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ DIAGNOSTICS ============ -->
+    <section id="tab-diag" class="tab-panel">
+      <div class="panel">
+        <div class="panel__header">
+          <h2>Alignment Diagnostics</h2>
+          <button class="btn btn--ghost" id="btn-refresh-diag">Refresh</button>
+        </div>
+        <div class="panel__body" id="diag-content">
+          <p class="placeholder">Loading diagnostics…</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Master-Ai v{{ version }}</span>
+    <span id="footer-clock">—</span>
+  </footer>
+
+  <script src="/static/dashboard.js" defer></script>
+</body>
+</html>

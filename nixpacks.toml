@@ -1,31 +1,13 @@
-# Nixpacks configuration for Railway
-# Builds the Next.js app with standalone output and runs it.
+# nixpacks build configuration for Railway.
+# Tells Railway how to install Python deps and start the FastAPI app.
+
+providers = ["python"]
 
 [phases.setup]
-nixPkgs = ["nodejs_20", "bun"]
+nixPkgs = ["python312"]
 
 [phases.install]
-cmds = [
-  "echo 'Installing dependencies with bun...'",
-  "bun install --frozen-lockfile"
-]
-
-[phases.build]
-cmds = [
-  "echo 'Building Next.js app...'",
-  # Next.js build with standalone output produces .next/standalone/server.js.
-  # IMPORTANT: standalone mode does NOT automatically copy static assets —
-  # we must manually copy .next/static (CSS + JS chunks) and public/ into
-  # the standalone bundle, otherwise the production server serves unstyled HTML.
-  "bun run build",
-  "cp -r .next/static .next/standalone/.next/",
-  "cp -r public .next/standalone/ 2>/dev/null || true"
-]
+cmds = ["pip install -r requirements.txt"]
 
 [start]
-cmd = "node .next/standalone/server.js"
-
-[variables]
-NODE_ENV = "production"
-PORT = "{{ PORT }}"
-HOSTNAME = "0.0.0.0"
+cmd = "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"

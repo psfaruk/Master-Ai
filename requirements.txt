@@ -1,0 +1,21 @@
+# Master-Ai — Python edition
+# FastAPI + httpx + asyncio, mirror of the original Next.js/TypeScript dashboard.
+
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+jinja2==3.1.5
+itsdangerous==2.2.0
+
+# Async HTTP client (replaces fetch() in Node)
+httpx==0.28.1
+
+# Pydantic ships with FastAPI — pin to v2 for performance
+pydantic==2.10.4
+
+# Tests
+pytest==8.3.4
+pytest-asyncio==0.25.2
+
+# Misc
+python-dateutil==2.9.0.post0
