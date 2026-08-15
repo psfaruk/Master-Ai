@@ -561,6 +561,195 @@ html, body {
 }
 .btn--ghost:hover { background: var(--bg-card-hover); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn--sm { padding: 5px 10px; font-size: 11px; }
+
+/* ====== SIGNAL BOARD (new Signals tab table) ====== */
+.filter-panel .panel__header { padding: 12px 14px; }
+.filter-panel .filter-bar { gap: 6px; }
+
+.pair-table--signalboard { width: 100%; border-collapse: collapse; }
+.pair-table--signalboard th {
+  font-size: 10px;
+  padding: 8px 6px;
+  white-space: nowrap;
+}
+.pair-table--signalboard td {
+  padding: 8px 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.pair-table--signalboard .th-fav { width: 28px; text-align: center; }
+.pair-table--signalboard .th-expand { width: 32px; text-align: center; }
+.pair-table--signalboard .td-fav { text-align: center; }
+.pair-table--signalboard .td-expand { text-align: center; cursor: pointer; }
+.pair-table--signalboard .row-toggle {
+  display: inline-block;
+  width: 18px; height: 18px;
+  border-radius: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  transition: transform 0.15s, background 0.15s;
+}
+.pair-table--signalboard tr.is-expanded .row-toggle {
+  background: var(--blue);
+  color: white;
+  transform: rotate(90deg);
+}
+
+/* Per-app prediction badge — compact CALL/PUT/— cell */
+.app-pred {
+  display: inline-block;
+  min-width: 38px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  letter-spacing: 0.03em;
+  font-family: var(--font-mono);
+}
+.app-pred--CALL { background: rgba(16, 185, 129, 0.2); color: var(--emerald); }
+.app-pred--PUT  { background: rgba(239, 68, 68, 0.2); color: var(--red); }
+.app-pred--none { background: rgba(138, 147, 167, 0.12); color: var(--text-muted); }
+.app-pred--agree { box-shadow: 0 0 0 1px currentColor inset; }
+
+/* Agree count cell — shows "2/3" or "1/3" with color */
+.agree-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+.agree-count__dot {
+  width: 6px; height: 6px; border-radius: 50%;
+}
+.agree-count--3 .agree-count__dot { background: var(--emerald); }
+.agree-count--2 .agree-count__dot { background: var(--blue); }
+.agree-count--1 .agree-count__dot { background: var(--text-muted); }
+.agree-count--0 .agree-count__dot { background: var(--red); }
+
+/* Final prediction badge — bigger, prominent */
+.final-pred {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.final-pred--CALL { background: var(--emerald); color: white; }
+.final-pred--PUT  { background: var(--red); color: white; }
+.final-pred--none { background: rgba(138, 147, 167, 0.2); color: var(--text-dim); }
+
+/* Entry time — monospace, slightly muted */
+.entry-time {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* Win rate 60min — compact bar + percentage */
+.wr60 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 80px;
+}
+.wr60__bar {
+  flex: 1;
+  height: 6px;
+  background: rgba(138, 147, 167, 0.15);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+.wr60__fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.wr60__fill--good { background: var(--emerald); }
+.wr60__fill--mid  { background: var(--amber); }
+.wr60__fill--low  { background: var(--red); }
+.wr60__fill--none { background: var(--text-muted); }
+.wr60__pct {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 36px;
+  text-align: right;
+}
+.wr60__pct--good { color: var(--emerald); }
+.wr60__pct--mid  { color: var(--amber); }
+.wr60__pct--low  { color: var(--red); }
+.wr60__pct--none { color: var(--text-muted); }
+.wr60__graded {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+/* Expandable detail row — sits below the parent row, full width */
+.pair-table--signalboard tr.detail-row td {
+  padding: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.detail-row__inner {
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.detail-row__section h4 {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+.detail-row__signals {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.detail-signal {
+  display: grid;
+  grid-template-columns: 60px 60px 50px 1fr 80px;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  background: var(--bg-card);
+  border-radius: var(--radius-xs);
+  font-size: 11px;
+}
+.detail-signal__app { font-weight: 600; }
+.detail-signal__dir { font-weight: 600; font-family: var(--font-mono); }
+.detail-signal__time { font-family: var(--font-mono); color: var(--text-dim); }
+.detail-signal__meta { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); }
+.detail-signal__outcome {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 3px;
+  text-align: center;
+}
+.detail-signal__outcome--WIN { background: rgba(16, 185, 129, 0.2); color: var(--emerald); }
+.detail-signal__outcome--LOSS { background: rgba(239, 68, 68, 0.2); color: var(--red); }
+.detail-signal__outcome--unknown { background: rgba(138, 147, 167, 0.15); color: var(--text-dim); }
+
+@media (max-width: 720px) {
+  .detail-row__inner { grid-template-columns: 1fr; gap: 12px; }
+  .detail-signal { grid-template-columns: 50px 50px 1fr 70px; }
+  .detail-signal__meta { display: none; }
+}
 
 /* ====== DRAWER (pair detail) ====== */
 .drawer-overlay {
@@ -737,6 +926,30 @@ a { color: var(--blue); }
 @media (max-width: 420px) {
   .pair-table th:nth-child(6), .pair-table td:nth-child(6) { display: none; } /* apps */
   .pair-table th:nth-child(9), .pair-table td:nth-child(9) { display: none; } /* lead */
+}
+
+/* Signal board responsive — hide less critical columns on small screens */
+@media (max-width: 980px) {
+  /* Hide entry time on tablet — same as candle time */
+  .pair-table--signalboard th:nth-child(10),
+  .pair-table--signalboard td:nth-child(10) { display: none; }
+}
+@media (max-width: 720px) {
+  /* Hide market type and candle UTC on phone */
+  .pair-table--signalboard th:nth-child(2),
+  .pair-table--signalboard td:nth-child(2),
+  .pair-table--signalboard th:nth-child(3),
+  .pair-table--signalboard td:nth-child(3) { display: none; }
+}
+@media (max-width: 560px) {
+  /* Hide app2 prediction on small phone */
+  .pair-table--signalboard th:nth-child(6),
+  .pair-table--signalboard td:nth-child(6) { display: none; }
+}
+@media (max-width: 420px) {
+  /* Hide win rate 60min bar — keep just text via detail row */
+  .pair-table--signalboard th:nth-child(11),
+  .pair-table--signalboard td:nth-child(11) { display: none; }
 }
 
 /* Light theme adjustments */

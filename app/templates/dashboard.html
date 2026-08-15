@@ -133,10 +133,22 @@
 
     <!-- ============ SIGNALS ============ -->
     <section id="tab-signals" class="tab-panel">
-      <div class="panel">
-        <div class="panel__header panel__header--wrap">
-          <h2>Per-Pair Signals</h2>
+      <!-- Comprehensive filter bar — all columns filterable -->
+      <div class="panel filter-panel">
+        <div class="panel__header">
+          <h2>Filters</h2>
           <div class="filter-bar">
+            <div class="dropdown">
+              <button class="dropdown__trigger" id="cat-trigger2" type="button">
+                <span id="cat-label2">All markets</span>
+                <span class="dropdown__caret">▾</span>
+              </button>
+              <ul class="dropdown__menu" id="cat-menu2" role="menu">
+                <li role="menuitem" data-value="">All markets</li>
+                <li role="menuitem" data-value="otc">OTC only</li>
+                <li role="menuitem" data-value="real">Real only</li>
+              </ul>
+            </div>
             <div class="dropdown">
               <button class="dropdown__trigger" id="level-trigger" type="button">
                 <span id="level-label">All levels</span>
@@ -152,13 +164,87 @@
             </div>
             <div class="dropdown">
               <button class="dropdown__trigger" id="dir-trigger" type="button">
-                <span id="dir-label">Both</span>
+                <span id="dir-label">Both dir</span>
                 <span class="dropdown__caret">▾</span>
               </button>
               <ul class="dropdown__menu" id="dir-menu" role="menu">
                 <li role="menuitem" data-value="">Both directions</li>
                 <li role="menuitem" data-value="CALL">CALL only</li>
                 <li role="menuitem" data-value="PUT">PUT only</li>
+              </ul>
+            </div>
+            <div class="dropdown">
+              <button class="dropdown__trigger" id="agree-trigger" type="button">
+                <span id="agree-label">Any agree</span>
+                <span class="dropdown__caret">▾</span>
+              </button>
+              <ul class="dropdown__menu" id="agree-menu" role="menu">
+                <li role="menuitem" data-value="0">Any agreement</li>
+                <li role="menuitem" data-value="1">≥1 agree</li>
+                <li role="menuitem" data-value="2">≥2 agree</li>
+                <li role="menuitem" data-value="3">3 agree only</li>
+              </ul>
+            </div>
+            <div class="dropdown">
+              <button class="dropdown__trigger" id="app1-trigger" type="button">
+                <span id="app1-label">App 1: any</span>
+                <span class="dropdown__caret">▾</span>
+              </button>
+              <ul class="dropdown__menu" id="app1-menu" role="menu">
+                <li role="menuitem" data-value="">App 1: any</li>
+                <li role="menuitem" data-value="CALL">App 1: CALL</li>
+                <li role="menuitem" data-value="PUT">App 1: PUT</li>
+                <li role="menuitem" data-value="NONE">App 1: missing</li>
+              </ul>
+            </div>
+            <div class="dropdown">
+              <button class="dropdown__trigger" id="app2-trigger" type="button">
+                <span id="app2-label">App 2: any</span>
+                <span class="dropdown__caret">▾</span>
+              </button>
+              <ul class="dropdown__menu" id="app2-menu" role="menu">
+                <li role="menuitem" data-value="">App 2: any</li>
+                <li role="menuitem" data-value="CALL">App 2: CALL</li>
+                <li role="menuitem" data-value="PUT">App 2: PUT</li>
+                <li role="menuitem" data-value="NONE">App 2: missing</li>
+              </ul>
+            </div>
+            <div class="dropdown">
+              <button class="dropdown__trigger" id="app3-trigger" type="button">
+                <span id="app3-label">App 3: any</span>
+                <span class="dropdown__caret">▾</span>
+              </button>
+              <ul class="dropdown__menu" id="app3-menu" role="menu">
+                <li role="menuitem" data-value="">App 3: any</li>
+                <li role="menuitem" data-value="CALL">App 3: CALL</li>
+                <li role="menuitem" data-value="PUT">App 3: PUT</li>
+                <li role="menuitem" data-value="NONE">App 3: missing</li>
+              </ul>
+            </div>
+            <div class="dropdown">
+              <button class="dropdown__trigger" id="wr60-trigger" type="button">
+                <span id="wr60-label">60-min WR: any</span>
+                <span class="dropdown__caret">▾</span>
+              </button>
+              <ul class="dropdown__menu" id="wr60-menu" role="menu">
+                <li role="menuitem" data-value="0">Any win rate</li>
+                <li role="menuitem" data-value="50">≥ 50%</li>
+                <li role="menuitem" data-value="55">≥ 55%</li>
+                <li role="menuitem" data-value="60">≥ 60%</li>
+                <li role="menuitem" data-value="65">≥ 65%</li>
+                <li role="menuitem" data-value="70">≥ 70%</li>
+              </ul>
+            </div>
+            <div class="dropdown">
+              <button class="dropdown__trigger" id="fresh-trigger" type="button">
+                <span id="fresh-label">Freshness: any</span>
+                <span class="dropdown__caret">▾</span>
+              </button>
+              <ul class="dropdown__menu" id="fresh-menu" role="menu">
+                <li role="menuitem" data-value="0">Any age</li>
+                <li role="menuitem" data-value="60">≤ 1 min</li>
+                <li role="menuitem" data-value="120">≤ 2 min</li>
+                <li role="menuitem" data-value="300">≤ 5 min</li>
               </ul>
             </div>
             <label class="checkbox">
@@ -169,27 +255,36 @@
               <input type="checkbox" id="three-agree-only">
               <span>Only 3-agree</span>
             </label>
+            <button class="btn btn--ghost btn--sm" id="btn-clear-filters" type="button">Clear</button>
           </div>
         </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel__header">
+          <h2>Signal Board</h2>
+          <span class="panel__meta" id="signals-meta">—</span>
+        </div>
         <div class="panel__body panel__body--scroll">
-          <table class="pair-table pair-table--interactive">
+          <table class="pair-table pair-table--signalboard">
             <thead>
               <tr>
-                <th>★</th>
-                <th>Pair</th>
-                <th>Cat</th>
-                <th>Level</th>
-                <th>Dir</th>
-                <th>Apps</th>
-                <th>Signal Time (UTC)</th>
+                <th class="th-fav">★</th>
+                <th>Market</th>
                 <th>Candle (UTC)</th>
-                <th>Lead</th>
-                <th>Win Rate</th>
-                <th>Graded</th>
+                <th>Pair</th>
+                <th>App 1</th>
+                <th>App 2</th>
+                <th>App 3</th>
+                <th>Agree</th>
+                <th>Final</th>
+                <th>Entry (UTC)</th>
+                <th>Win Rate 60min</th>
+                <th class="th-expand"></th>
               </tr>
             </thead>
             <tbody id="pair-table-body">
-              <tr><td colspan="11" class="placeholder">Loading…</td></tr>
+              <tr><td colspan="12" class="placeholder">Loading…</td></tr>
             </tbody>
           </table>
         </div>

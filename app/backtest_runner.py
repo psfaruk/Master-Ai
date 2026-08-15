@@ -630,6 +630,16 @@ async def run_backtest() -> Dict[str, Any]:
             p.levels["2-agree"].win +
             p.levels["1-only"].win
         )
+        # ---- 60-minute win rate ----
+        # Filter this pair's cluster history to only the last 60 minutes,
+        # then grade the ones that have a known outcome.
+        sixty_min_ago = now - 3600
+        recent = [c for c in p.history if c.ts >= sixty_min_ago]
+        recent_graded = [c for c in recent if c.outcome is not None]
+        recent_wins = sum(1 for c in recent_graded if c.outcome == 1)
+        recent_losses = sum(1 for c in recent_graded if c.outcome == 0)
+        recent_graded_total = len(recent_graded)
+        recent_win_rate = round((recent_wins / recent_graded_total) * 100, 1) if recent_graded_total > 0 else None
         return {
             "pair": p.pair,
             "displayPair": p.display_pair,
@@ -637,6 +647,10 @@ async def run_backtest() -> Dict[str, Any]:
             "levels": {k: level_to_dict(v) for k, v in p.levels.items()},
             "winRate": round((graded_wins / graded_total) * 100, 1) if graded_total > 0 else None,
             "gradedTotal": graded_total,
+            "winRate60Min": recent_win_rate,
+            "gradedTotal60Min": recent_graded_total,
+            "wins60Min": recent_wins,
+            "losses60Min": recent_losses,
             "history": [cluster_to_dict(c) for c in p.history],
         }
 
@@ -654,9 +668,9 @@ async def run_backtest() -> Dict[str, Any]:
 
 
 def get_per_pair_winrate_lookup(cached: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """Build a pair-key → {winRate, gradedTotal, levels} lookup from a
-    cached backtest result. Used by the snapshot serializer to enrich
-    each pair with win-rate info without re-running the backtest."""
+    """Build a pair-key → {winRate, gradedTotal, levels, winRate60Min, ...}
+    lookup from a cached backtest result. Used by the snapshot serializer to
+    enrich each pair with win-rate info without re-running the backtest."""
     out: Dict[str, Dict[str, Any]] = {}
     if not cached:
         return out
@@ -665,5 +679,9 @@ def get_per_pair_winrate_lookup(cached: Optional[Dict[str, Any]]) -> Dict[str, D
             "winRate": p.get("winRate"),
             "gradedTotal": p.get("gradedTotal", 0),
             "levels": p.get("levels", {}),
+            "winRate60Min": p.get("winRate60Min"),
+            "gradedTotal60Min": p.get("gradedTotal60Min", 0),
+            "wins60Min": p.get("wins60Min", 0),
+            "losses60Min": p.get("losses60Min", 0),
         }
     return out

@@ -27,7 +27,7 @@ Diagnostics:
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
@@ -231,10 +231,37 @@ async def get_pairs(
     category: str = Query(default=""),
     level: str = Query(default=""),
     direction: str = Query(default=""),
+    agree_count: int = Query(default=0, ge=0, le=3),
+    app1_dir: str = Query(default=""),
+    app2_dir: str = Query(default=""),
+    app3_dir: str = Query(default=""),
+    min_winrate_60min: float = Query(default=0.0, ge=0.0, le=100.0),
+    candle_fresh_sec: int = Query(default=0, ge=0, le=600),
     q: str = Query(default=""),
 ):
     """Lightweight per-pair listing with filters. Reads from the cached
-    snapshot — cheap, returns in <50ms even with hundreds of pairs."""
+    snapshot — cheap, returns in <50ms even with hundreds of pairs.
+
+    Each pair row carries the new flat column structure:
+      - marketType       (otc | real)
+      - candleUtc        (HH:MM UTC of the latest candle this signal is for)
+      - pair / displayPair
+      - app1Prediction   (CALL | PUT | null when missing)
+      - app2Prediction   (CALL | PUT | null)
+      - app3Prediction   (CALL | PUT | null)
+      - agreeCount       (1 | 2 | 3 — how many apps agree on the final dir)
+      - agreeLevel       (3-agree | 2-agree | conflict | 1-only)
+      - finalPrediction  (consensus direction)
+      - entryTimeUtc     (HH:MM UTC — when to enter, = candle open)
+      - winRate60Min     (last-60-minute win rate, from cached backtest)
+      - gradedTotal60Min (how many graded clusters in the last 60 min)
+      - signals          (full per-app signal list — shown in expandable row)
+
+    Filters: category, level, direction, agree_count, app{1,2,3}_dir,
+    min_winrate_60min (exclude pairs with WR below this in last 60 min),
+    candle_fresh_sec (only pairs with a candle newer than now - this),
+    q (pair name substring).
+    """
     start_poller()
     snap_data = get_snapshot()
     snapshot = snap_data["snapshot"]
@@ -247,6 +274,7 @@ async def get_pairs(
 
     out: List[Dict[str, Any]] = []
     for p in snapshot.pairs:
+        # ---- Filters ----
         if category and p.category != category:
             continue
         if level and p.consensus.level != level:
@@ -255,23 +283,113 @@ async def get_pairs(
             continue
         if q and q.lower() not in p.display_pair.lower():
             continue
-        wr = winrate_lookup.get(p.pair, {})
+
         latest = p.latest_candle
+        # Build a per-app prediction lookup from the latest candle's signals.
+        app_pred: Dict[str, Optional[str]] = {"app1": None, "app2": None, "app3": None}
+        app_signal_detail: Dict[str, Optional[Dict[str, Any]]] = {
+            "app1": None, "app2": None, "app3": None,
+        }
+        if latest:
+            for s in latest.signals:
+                if s.source in app_pred and app_pred[s.source] is None:
+                    app_pred[s.source] = s.direction
+                    app_signal_detail[s.source] = {
+                        "source": s.source,
+                        "sourceName": s.source_name,
+                        "direction": s.direction,
+                        "confidence": s.confidence,
+                        "strength": s.strength,
+                        "emittedAt": s.timestamp,
+                        "emittedUtc": _fmt_hms(s.timestamp) if s.timestamp > 0 else None,
+                        "candleTime": s.candle_time,
+                        "candleUtc": _fmt_hm(s.candle_time) if s.candle_time > 0 else None,
+                        "leadSec": (s.candle_time - s.timestamp) if s.timestamp > 0 else None,
+                        "ageSec": s.age_sec,
+                        "outcome": s.outcome,
+                        "strategy": s.strategy,
+                        "reasons": s.reasons,
+                        "validForCandle": s.valid_for_candle,
+                        "fresh": s.fresh,
+                        "cached": s.cached,
+                    }
+
+        # ---- agree_count filter ----
+        final_dir = p.consensus.direction
+        agreeing_count = sum(1 for v in app_pred.values() if v == final_dir) if final_dir else 0
+        if agree_count and agreeing_count < agree_count:
+            continue
+
+        # ---- per-app direction filters ----
+        if app1_dir and (app_pred["app1"] or "") != app1_dir:
+            continue
+        if app2_dir and (app_pred["app2"] or "") != app2_dir:
+            continue
+        if app3_dir and (app_pred["app3"] or "") != app3_dir:
+            continue
+
+        # ---- candle freshness filter ----
+        candle_time = latest.candle_time if latest else 0
+        if candle_fresh_sec and candle_time > 0:
+            if (now_sec - candle_time) > candle_fresh_sec:
+                continue
+
+        # ---- win rate 60min filter ----
+        wr = winrate_lookup.get(p.pair, {})
+        wr60 = wr.get("winRate60Min")
+        if min_winrate_60min > 0:
+            if wr60 is None or wr60 < min_winrate_60min:
+                continue
+
+        entry_time_utc = _fmt_hm(candle_time) if candle_time > 0 else None
+
         out.append({
             "pair": p.pair,
             "displayPair": p.display_pair,
             "category": p.category,
+            "marketType": p.category,  # alias for clarity in UI
+            "candleTime": candle_time,
+            "candleUtc": entry_time_utc,
+            "entryTimeUtc": entry_time_utc,  # entry = candle open
+            # Per-app predictions (flat columns)
+            "app1Prediction": app_pred["app1"],
+            "app2Prediction": app_pred["app2"],
+            "app3Prediction": app_pred["app3"],
+            # Agreement
+            "agreeCount": agreeing_count,
+            "agreeLevel": p.consensus.level,
+            "agreeingApps": p.consensus.agreeing_apps,
+            "disagreeingApps": p.consensus.disagreeing_apps,
+            "missingApps": p.consensus.missing_apps,
+            # Final
+            "finalPrediction": final_dir,
             "consensus": _serialize_consensus(p.consensus),
+            # Win rate (60 min + 6h)
+            "winRate60Min": wr60,
+            "gradedTotal60Min": wr.get("gradedTotal60Min", 0),
+            "wins60Min": wr.get("wins60Min", 0),
+            "losses60Min": wr.get("losses60Min", 0),
+            "winRate": wr.get("winRate"),
+            "gradedTotal": wr.get("gradedTotal", 0),
+            "levelStats": wr.get("levels", {}),
+            # Other stats
             "freshCount": p.fresh_count,
             "callCount": p.call_count,
             "putCount": p.put_count,
             "neutralCount": p.neutral_count,
+            # Full per-app signal details (for the expandable row)
+            "signals": list(app_signal_detail.values()),
             "latestCandle": _serialize_candle_consensus(latest) if latest else None,
-            "winRate": wr.get("winRate"),
-            "gradedTotal": wr.get("gradedTotal", 0),
-            "levelStats": wr.get("levels", {}),
             "now": now_sec,
         })
+
+    # Sort: 3-agree first, then by 60-min win rate desc, then by pair name
+    level_rank = {"3-agree": 0, "2-agree": 1, "conflict": 2, "1-only": 3, "none": 4}
+    out.sort(key=lambda x: (
+        level_rank.get(x.get("agreeLevel") or "none", 5),
+        -(x.get("winRate60Min") or -1),
+        x.get("displayPair") or "",
+    ))
 
     return _json({
         "items": out,
@@ -696,6 +814,12 @@ def _serialize_pair(p, *, winrate_lookup: Optional[Dict[str, Dict[str, Any]]] = 
         "winRate": wr.get("winRate"),
         "gradedTotal": wr.get("gradedTotal", 0),
         "levelStats": wr.get("levels", {}),
+        # 60-minute win rate (last-60-minute rolling window from cached
+        # backtest cluster history). Surfaced on the Signals tab row.
+        "winRate60Min": wr.get("winRate60Min"),
+        "gradedTotal60Min": wr.get("gradedTotal60Min", 0),
+        "wins60Min": wr.get("wins60Min", 0),
+        "losses60Min": wr.get("losses60Min", 0),
     }
     return out
 

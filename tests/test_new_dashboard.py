@@ -474,3 +474,309 @@ def test_backtest_status_returns_summary_when_cached(monkeypatch):
     assert data["totalSignals"] == 1022
     assert data["totalClusters"] == 758
     assert data["perPairCount"] == 1
+
+
+# ---------------------------------------------------------------------------
+# New Signals-tab column structure — /api/pairs returns per-app predictions,
+# agreeCount, finalPrediction, entryTimeUtc, winRate60Min
+# ---------------------------------------------------------------------------
+
+
+def test_pairs_returns_per_app_predictions_as_columns(monkeypatch):
+    """Each pair row must carry app1Prediction, app2Prediction, app3Prediction
+    as flat columns (CALL | PUT | None)."""
+    candle_time = 1700000000
+    pair = _FakePair(
+        pair="USDBDT_otc",
+        display_pair="USD/BDT OTC",
+        category="otc",
+        consensus=_FakeConsensus("3-agree", "CALL", agreeing=["app1", "app2", "app3"]),
+        latest_candle=_FakeCandleConsensus(
+            pair="USDBDT_otc",
+            candle_time=candle_time,
+            signals=[
+                _FakeSignal("app1", "USDBDT_otc", "CALL", candle_time - 5, candle_time),
+                _FakeSignal("app2", "USDBDT_otc", "CALL", candle_time - 3, candle_time),
+                _FakeSignal("app3", "USDBDT_otc", "CALL", candle_time - 1, candle_time),
+            ],
+            consensus=_FakeConsensus("3-agree", "CALL"),
+        ),
+    )
+    _stub_snapshot(monkeypatch, [pair])
+    from fastapi.testclient import TestClient
+    from main import app as fastapi_app
+    client = TestClient(fastapi_app)
+
+    r = client.get("/api/pairs")
+    assert r.status_code == 200
+    item = r.json()["items"][0]
+    # New flat columns
+    assert item["app1Prediction"] == "CALL"
+    assert item["app2Prediction"] == "CALL"
+    assert item["app3Prediction"] == "CALL"
+    assert item["marketType"] == "otc"
+    assert item["agreeCount"] == 3
+    assert item["agreeLevel"] == "3-agree"
+    assert item["finalPrediction"] == "CALL"
+    # Entry time = candle open UTC, formatted as HH:MM
+    assert item["entryTimeUtc"] is not None and ":" in item["entryTimeUtc"]
+    # Per-app signal details for expandable row
+    assert isinstance(item["signals"], list)
+    assert len(item["signals"]) == 3
+
+
+def test_pairs_returns_none_for_missing_app_prediction(monkeypatch):
+    """When an app has no signal for the latest candle, its prediction
+    column must be None (not '—' or empty string)."""
+    candle_time = 1700000000
+    pair = _FakePair(
+        pair="USDBDT_otc",
+        display_pair="USD/BDT OTC",
+        category="otc",
+        consensus=_FakeConsensus("1-only", "CALL", agreeing=["app1"]),
+        latest_candle=_FakeCandleConsensus(
+            pair="USDBDT_otc",
+            candle_time=candle_time,
+            signals=[
+                _FakeSignal("app1", "USDBDT_otc", "CALL", candle_time - 5, candle_time),
+                # app2 and app3 missing
+            ],
+            consensus=_FakeConsensus("1-only", "CALL"),
+        ),
+    )
+    _stub_snapshot(monkeypatch, [pair])
+    from fastapi.testclient import TestClient
+    from main import app as fastapi_app
+    client = TestClient(fastapi_app)
+
+    r = client.get("/api/pairs")
+    item = r.json()["items"][0]
+    assert item["app1Prediction"] == "CALL"
+    assert item["app2Prediction"] is None
+    assert item["app3Prediction"] is None
+    # agreeCount counts how many apps have a signal matching the final dir
+    assert item["agreeCount"] == 1
+
+
+def test_pairs_winrate_60min_is_passed_through_from_backtest(monkeypatch):
+    """winRate60Min should come from the cached backtest lookup."""
+    candle_time = 1700000000
+    pair = _FakePair(
+        pair="USDBDT_otc",
+        display_pair="USD/BDT OTC",
+        category="otc",
+        consensus=_FakeConsensus("3-agree", "CALL"),
+        latest_candle=_FakeCandleConsensus(
+            pair="USDBDT_otc",
+            candle_time=candle_time,
+            signals=[_FakeSignal("app1", "USDBDT_otc", "CALL", candle_time - 5, candle_time)],
+            consensus=_FakeConsensus("3-agree", "CALL"),
+        ),
+    )
+    # Override the stub to also provide a winrate lookup with 60-min data.
+    import app.api.routes as routes
+    snapshot = _FakeSnapshot(pairs=[pair], apps=[_FakeApp()])
+    monkeypatch.setattr(routes, "get_snapshot", lambda: {"snapshot": snapshot, "age_ms": 100})
+    monkeypatch.setattr(routes, "start_poller", lambda: None)
+    monkeypatch.setattr(routes, "get_or_refresh_backtest", _noop_coro)
+    monkeypatch.setattr(routes, "get_cached_backtest", lambda: {"perPair": [
+        {"pair": "USDBDT_otc", "winRate": 50.0, "gradedTotal": 40,
+         "winRate60Min": 66.7, "gradedTotal60Min": 10, "wins60Min": 6, "losses60Min": 4,
+         "levels": {}},
+    ]})
+    monkeypatch.setattr(routes, "get_backtest_cache_age_sec", lambda: 5.0)
+
+    from fastapi.testclient import TestClient
+    from main import app as fastapi_app
+    client = TestClient(fastapi_app)
+
+    r = client.get("/api/pairs")
+    item = r.json()["items"][0]
+    assert item["winRate60Min"] == 66.7
+    assert item["gradedTotal60Min"] == 10
+    assert item["wins60Min"] == 6
+    assert item["losses60Min"] == 4
+    assert item["winRate"] == 50.0
+
+
+def test_pairs_filters_by_agree_count(monkeypatch):
+    """agree_count query param filters pairs with at least N apps agreeing
+    with the final direction."""
+    candle_time = 1700000000
+    pair_3agree = _FakePair(
+        pair="USDBDT_otc", display_pair="USD/BDT OTC", category="otc",
+        consensus=_FakeConsensus("3-agree", "CALL"),
+        latest_candle=_FakeCandleConsensus(
+            pair="USDBDT_otc", candle_time=candle_time,
+            signals=[
+                _FakeSignal("app1", "USDBDT_otc", "CALL", candle_time, candle_time),
+                _FakeSignal("app2", "USDBDT_otc", "CALL", candle_time, candle_time),
+                _FakeSignal("app3", "USDBDT_otc", "CALL", candle_time, candle_time),
+            ],
+            consensus=_FakeConsensus("3-agree", "CALL"),
+        ),
+    )
+    pair_1only = _FakePair(
+        pair="USDCOP_otc", display_pair="USD/COP OTC", category="otc",
+        consensus=_FakeConsensus("1-only", "PUT"),
+        latest_candle=_FakeCandleConsensus(
+            pair="USDCOP_otc", candle_time=candle_time,
+            signals=[
+                _FakeSignal("app1", "USDCOP_otc", "PUT", candle_time, candle_time),
+                _FakeSignal("app2", "USDCOP_otc", "CALL", candle_time, candle_time),
+                _FakeSignal("app3", "USDCOP_otc", "CALL", candle_time, candle_time),
+            ],
+            consensus=_FakeConsensus("1-only", "PUT"),
+        ),
+    )
+    _stub_snapshot(monkeypatch, [pair_3agree, pair_1only])
+    from fastapi.testclient import TestClient
+    from main import app as fastapi_app
+    client = TestClient(fastapi_app)
+
+    # agree_count=3 should only return the 3-agree pair
+    r = client.get("/api/pairs?agree_count=3")
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert len(items) == 1
+    assert items[0]["pair"] == "USDBDT_otc"
+    assert items[0]["agreeCount"] == 3
+
+
+def test_pairs_filters_by_per_app_direction(monkeypatch):
+    """app1_dir / app2_dir / app3_dir query params filter by per-app
+    prediction."""
+    candle_time = 1700000000
+    pair_call = _FakePair(
+        pair="USDBDT_otc", display_pair="USD/BDT OTC", category="otc",
+        consensus=_FakeConsensus("1-only", "CALL"),
+        latest_candle=_FakeCandleConsensus(
+            pair="USDBDT_otc", candle_time=candle_time,
+            signals=[_FakeSignal("app1", "USDBDT_otc", "CALL", candle_time, candle_time)],
+            consensus=_FakeConsensus("1-only", "CALL"),
+        ),
+    )
+    pair_put = _FakePair(
+        pair="USDCOP_otc", display_pair="USD/COP OTC", category="otc",
+        consensus=_FakeConsensus("1-only", "PUT"),
+        latest_candle=_FakeCandleConsensus(
+            pair="USDCOP_otc", candle_time=candle_time,
+            signals=[_FakeSignal("app1", "USDCOP_otc", "PUT", candle_time, candle_time)],
+            consensus=_FakeConsensus("1-only", "PUT"),
+        ),
+    )
+    _stub_snapshot(monkeypatch, [pair_call, pair_put])
+    from fastapi.testclient import TestClient
+    from main import app as fastapi_app
+    client = TestClient(fastapi_app)
+
+    r = client.get("/api/pairs?app1_dir=CALL")
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert len(items) == 1
+    assert items[0]["app1Prediction"] == "CALL"
+
+
+def test_pairs_filters_by_min_winrate_60min(monkeypatch):
+    """min_winrate_60min excludes pairs whose 60-min win rate is below the
+    threshold (or unknown)."""
+    candle_time = 1700000000
+    pair_high = _FakePair(
+        pair="USDBDT_otc", display_pair="USD/BDT OTC", category="otc",
+        consensus=_FakeConsensus("1-only", "CALL"),
+        latest_candle=_FakeCandleConsensus(
+            pair="USDBDT_otc", candle_time=candle_time,
+            signals=[_FakeSignal("app1", "USDBDT_otc", "CALL", candle_time, candle_time)],
+            consensus=_FakeConsensus("1-only", "CALL"),
+        ),
+    )
+    pair_low = _FakePair(
+        pair="USDCOP_otc", display_pair="USD/COP OTC", category="otc",
+        consensus=_FakeConsensus("1-only", "CALL"),
+        latest_candle=_FakeCandleConsensus(
+            pair="USDCOP_otc", candle_time=candle_time,
+            signals=[_FakeSignal("app1", "USDCOP_otc", "CALL", candle_time, candle_time)],
+            consensus=_FakeConsensus("1-only", "CALL"),
+        ),
+    )
+    import app.api.routes as routes
+    snapshot = _FakeSnapshot(pairs=[pair_high, pair_low], apps=[_FakeApp()])
+    monkeypatch.setattr(routes, "get_snapshot", lambda: {"snapshot": snapshot, "age_ms": 100})
+    monkeypatch.setattr(routes, "start_poller", lambda: None)
+    monkeypatch.setattr(routes, "get_or_refresh_backtest", _noop_coro)
+    monkeypatch.setattr(routes, "get_cached_backtest", lambda: {"perPair": [
+        {"pair": "USDBDT_otc", "winRate60Min": 70.0, "gradedTotal60Min": 10, "wins60Min": 7, "losses60Min": 3, "levels": {}},
+        {"pair": "USDCOP_otc", "winRate60Min": 30.0, "gradedTotal60Min": 10, "wins60Min": 3, "losses60Min": 7, "levels": {}},
+    ]})
+    monkeypatch.setattr(routes, "get_backtest_cache_age_sec", lambda: 5.0)
+
+    from fastapi.testclient import TestClient
+    from main import app as fastapi_app
+    client = TestClient(fastapi_app)
+
+    r = client.get("/api/pairs?min_winrate_60min=50")
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert len(items) == 1
+    assert items[0]["pair"] == "USDBDT_otc"
+
+
+def test_pairs_sorted_by_agreecount_then_winrate60(monkeypatch):
+    """Pairs should be sorted: agreeCount desc, then 60-min win rate desc,
+    then by display pair name asc."""
+    candle_time = 1700000000
+    p_a = _FakePair(
+        pair="AAA_otc", display_pair="AAA OTC", category="otc",
+        consensus=_FakeConsensus("1-only", "CALL"),
+        latest_candle=_FakeCandleConsensus(
+            pair="AAA_otc", candle_time=candle_time,
+            signals=[_FakeSignal("app1", "AAA_otc", "CALL", candle_time, candle_time)],
+            consensus=_FakeConsensus("1-only", "CALL"),
+        ),
+    )
+    p_b = _FakePair(
+        pair="BBB_otc", display_pair="BBB OTC", category="otc",
+        consensus=_FakeConsensus("3-agree", "CALL"),
+        latest_candle=_FakeCandleConsensus(
+            pair="BBB_otc", candle_time=candle_time,
+            signals=[
+                _FakeSignal("app1", "BBB_otc", "CALL", candle_time, candle_time),
+                _FakeSignal("app2", "BBB_otc", "CALL", candle_time, candle_time),
+                _FakeSignal("app3", "BBB_otc", "CALL", candle_time, candle_time),
+            ],
+            consensus=_FakeConsensus("3-agree", "CALL"),
+        ),
+    )
+    _stub_snapshot(monkeypatch, [p_a, p_b])
+    from fastapi.testclient import TestClient
+    from main import app as fastapi_app
+    client = TestClient(fastapi_app)
+
+    r = client.get("/api/pairs")
+    items = r.json()["items"]
+    # BBB (3-agree) should come first
+    assert items[0]["pair"] == "BBB_otc"
+    assert items[1]["pair"] == "AAA_otc"
+
+
+# ---------------------------------------------------------------------------
+# 60-minute win rate computation in backtest_runner
+# ---------------------------------------------------------------------------
+
+
+def test_get_per_pair_winrate_lookup_passes_60min_fields(monkeypatch):
+    """get_per_pair_winrate_lookup must propagate winRate60Min / gradedTotal60Min
+    from the cached backtest result."""
+    cached = {
+        "perPair": [
+            {"pair": "USDBDT_otc", "winRate": 50.0, "gradedTotal": 40,
+             "winRate60Min": 66.7, "gradedTotal60Min": 10, "wins60Min": 6, "losses60Min": 4,
+             "levels": {}},
+        ]
+    }
+    out = get_per_pair_winrate_lookup(cached)
+    assert "USDBDT_otc" in out
+    assert out["USDBDT_otc"]["winRate60Min"] == 66.7
+    assert out["USDBDT_otc"]["gradedTotal60Min"] == 10
+    assert out["USDBDT_otc"]["wins60Min"] == 6
+    assert out["USDBDT_otc"]["losses60Min"] == 4
