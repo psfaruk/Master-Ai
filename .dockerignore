@@ -1,13 +1,34 @@
-# Build context — only send these to Docker, not the whole working dir.
-# Keeps the build context tiny and cache-friendly.
+# Build context — keep it small so the Dockerfile's COPY . . step is fast.
+# We only need the runtime application files; tests and dev tooling are not
+# shipped to the production container.
 
-app
-main.py
-requirements.txt
-tests
-README.md
-Dockerfile
-.dockerignore
-Procfile
-railway.json
-nixpacks.toml
+# Exclude Python caches and venvs that may exist locally.
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.venv
+venv
+env
+
+# Exclude editor and OS cruft.
+.vscode
+.idea
+*.swp
+.DS_Store
+
+# Exclude dev-only files.
+requirements-dev.txt
+.github
+.git
+.gitignore
+
+# What we DO need (everything else):
+#   app/                  — the FastAPI application
+#   main.py               — entrypoint
+#   requirements.txt      — pinned deps
+#   Dockerfile
+#   railway.json
+#   nixpacks.toml
+#   Procfile
+#   README.md
