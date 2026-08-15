@@ -61,6 +61,7 @@ const state = {
   clockTimer: null,
   lastPollAt: 0,
   drawerPair: null,
+  healthAlertDismissed: false,
 };
 
 const FEED_LIMIT = () => parseInt(state.settings.feedSize, 10) || 50;
@@ -293,12 +294,68 @@ function setStatus(kind, text) {
 // ====== Master render ======
 function render() {
   if (!state.snapshot) return;
+  renderHealthAlert(state.snapshot.apps);
   renderHeroStats(state.snapshot.summary);
   renderAppCards(state.snapshot.apps);
   renderConsensusHighlights(state.snapshot.pairs);
   renderPairTable();
   renderBacktestStatus();
   // Signal feed is polled separately for finer cadence.
+}
+
+// ====== App health alert bar ======
+// Shows a prominent warning at the top of the content area when any of the
+// 3 source apps is in a bad state (token_expired / disconnected / down).
+// Helps the user understand WHY a column might be empty — it's an upstream
+// auth/connection issue, not a bug in the dashboard.
+function renderHealthAlert(apps) {
+  const alertEl = $("app-health-alert");
+  const msgEl = $("app-health-msg");
+  if (!alertEl || !msgEl) return;
+
+  // If the user dismissed it this session, don't show again until a
+  // different app goes bad.
+  if (state.healthAlertDismissed) {
+    // Re-show only if a NEW app went bad since dismissal.
+    const stillBad = apps.some((a) => _isAppUnhealthy(a));
+    if (!stillBad) state.healthAlertDismissed = false;
+    if (state.healthAlertDismissed) { alertEl.hidden = true; return; }
+  }
+
+  const badApps = apps.filter((a) => _isAppUnhealthy(a));
+  if (badApps.length === 0) {
+    alertEl.hidden = true;
+    state.healthAlertDismissed = false;
+    return;
+  }
+
+  const parts = badApps.map((a) => {
+    const status = a.health || "down";
+    return `<span class="alert-app-name">${escHtml(a.name)}</span>` +
+           `<span class="alert-app-status alert-app-status--${status}">${escHtml(status.replace("_", " "))}</span>` +
+           (a.detail ? ` <span style="color:var(--text-dim)">(${escHtml(a.detail)})</span>` : "");
+  });
+  const fixHints = badApps.map((a) => {
+    if (a.health === "token_expired") {
+      return `<strong>${escHtml(a.name)}</strong>: Quotex session token has expired. The app is online but NOT connected to Quotex — it can only serve cached history, no live signals. Fix: log in to Quotex in the source app's browser, or set a fresh <code>QUOTEX_SESSION_TOKEN</code> / <code>QUOTEX_USER_TOKEN</code> env var on Railway and redeploy.`;
+    }
+    if (a.health === "disconnected") {
+      return `<strong>${escHtml(a.name)}</strong>: the app is running but not connected to its signal source. Fix: check the source app's logs on Railway — the Quotex WebSocket may have dropped.`;
+    }
+    if (a.health === "down") {
+      return `<strong>${escHtml(a.name)}</strong>: the app is not responding. Fix: check Railway — the service may be sleeping, crashed, or out of memory.`;
+    }
+    return `<strong>${escHtml(a.name)}</strong>: health = ${escHtml(a.health || "unknown")}.`;
+  });
+
+  msgEl.innerHTML = parts.join(" · ") +
+    `<span class="alert-fix">${fixHints.join("<br>")}</span>`;
+  alertEl.hidden = false;
+}
+
+function _isAppUnhealthy(a) {
+  const h = a.health || "unknown";
+  return h === "token_expired" || h === "disconnected" || h === "down";
 }
 
 // ====== Hero stats ======
@@ -1344,6 +1401,13 @@ function escAttr(s) {
 }
 
 // ====== Boot ======
+// Wire the health-alert dismiss button — hides the bar until an app
+// transitions from bad→good→bad again.
+$("health-alert-close")?.addEventListener("click", () => {
+  $("app-health-alert").hidden = true;
+  state.healthAlertDismissed = true;
+});
+
 applySettings();
 startPolling();
 refreshBacktestStatus();

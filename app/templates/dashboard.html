@@ -59,6 +59,18 @@
   <!-- ===================== MAIN CONTENT ===================== -->
   <main class="content">
 
+    <!-- ===================== APP HEALTH ALERT BAR ===================== -->
+    <!-- Shows a prominent warning when any source app is down / token expired /
+         disconnected. Hidden when all 3 apps are healthy. Populated by JS. -->
+    <div id="app-health-alert" class="health-alert" hidden>
+      <div class="health-alert__icon"><i class="fas fa-exclamation-triangle"></i></div>
+      <div class="health-alert__body">
+        <div class="health-alert__title">Source app issue detected</div>
+        <div class="health-alert__msg" id="app-health-msg">—</div>
+      </div>
+      <button class="health-alert__close" id="health-alert-close" type="button" aria-label="Dismiss"><i class="fas fa-times"></i></button>
+    </div>
+
     <!-- ============ HOME ============ -->
     <section id="tab-home" class="tab-panel tab-panel--active">
       <div class="hero-row">
