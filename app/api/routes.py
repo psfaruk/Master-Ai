@@ -1,14 +1,27 @@
-"""FastAPI routes — the five JSON endpoints the original Next.js app exposed.
+"""FastAPI routes for the Master-Ai dashboard.
 
-- ``GET /api/aggregated``  — unified snapshot + per-pair consensus
-- ``GET /api/candles``     — per-pair OHLC candle history
-- ``GET /api/backtest``    — consensus accuracy backtest
-- ``GET /api/snapshot``     — cached aggregated snapshot (cheap read)
-- ``GET /api/diag``         — alignment diagnostics
+JSON endpoints (all under /api, all carry Cache-Control: no-store + CORS *):
 
-Every response carries ``Cache-Control: no-store`` and
-``Access-Control-Allow-Origin: *`` to match the original behavior (the
-dashboard is a separate static client).
+Aggregation:
+  - GET /api/aggregated          — unified snapshot + per-pair consensus (verbose)
+  - GET /api/snapshot            — cached aggregated snapshot (cheap read; the
+                                   dashboard polls this)
+
+Signals:
+  - GET /api/signal-feed         — flat chronological list of the freshest
+                                   signals across all 3 apps, with emitted-at
+                                   + candle-time + lead/lag in seconds
+  - GET /api/pairs               — full per-pair breakdown incl. win rate
+  - GET /api/pair/{pair}         — single-pair detail: latest candles,
+                                   per-app signals, win rate, candle history
+
+History / Backtest:
+  - GET /api/candles?pair=...    — per-pair OHLC candle history
+  - GET /api/backtest            — run (or read cached) consensus backtest
+  - GET /api/backtest/status     — backtest cache age + last-run summary
+
+Diagnostics:
+  - GET /api/diag                — alignment diagnostics
 """
 
 from __future__ import annotations
@@ -21,11 +34,19 @@ from fastapi.responses import JSONResponse
 
 from ..app2_cache import (
     get_app2_cache_stats,
+    get_all_cached_app2_signals,
     poll_app2_now,
     start_app2_cache_poller,
 )
-from ..backtest_runner import run_backtest
+from ..backtest_runner import (
+    get_backtest_cache_age_sec,
+    get_cached_backtest,
+    get_or_refresh_backtest,
+    get_per_pair_winrate_lookup,
+    run_backtest,
+)
 from ..candle_fetcher import (
+    get_candle,
     get_candles_for_pair,
     get_candle_cache_stats,
     refresh_candles,
@@ -88,7 +109,254 @@ async def get_aggregated(
 
 
 # ---------------------------------------------------------------------------
-# /api/candles
+# /api/snapshot  — cached aggregated snapshot, enriched with per-pair win rate
+# ---------------------------------------------------------------------------
+
+
+@router.get("/snapshot")
+async def get_snapshot_route(
+    request: Request,
+    refresh: int = Query(default=0),
+):
+    """Latest cached aggregated snapshot. The background poller (started on
+    first request) refreshes the cache adaptively, so this is a cheap read
+    even when many clients poll frequently.
+
+    Pass ``?refresh=1`` to force a fresh poll before returning.
+
+    Enriched with per-pair win-rate info from the cached backtest (60s TTL).
+    """
+    start_poller()
+    if refresh == 1:
+        await refresh_snapshot()
+
+    snap_data = get_snapshot()
+    snapshot = snap_data["snapshot"]
+    age_ms = snap_data["age_ms"]
+    if snapshot is None:
+        return _json(
+            {"error": "no_snapshot_yet", "message": "First poll still running, retry in a moment."},
+            status=503,
+        )
+
+    # Trigger a background backtest refresh if stale — non-blocking. The
+    # result populates the per-pair win-rate lookup below on the NEXT poll.
+    await get_or_refresh_backtest()
+    winrate_lookup = get_per_pair_winrate_lookup(get_cached_backtest())
+
+    out = _serialize_aggregated(snapshot, winrate_lookup=winrate_lookup)
+    out["ageMs"] = age_ms
+    out["backtestCacheAgeSec"] = round(get_backtest_cache_age_sec(), 1)
+    out["now"] = int(datetime.now(timezone.utc).timestamp())
+    return _json(out)
+
+
+# ---------------------------------------------------------------------------
+# /api/signal-feed  — flat chronological list of freshest signals across
+# all 3 apps, with emitted-at + candle-time + lead/lag timing.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/signal-feed")
+async def get_signal_feed(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=300),
+):
+    """Flat chronological list of the freshest signals across all 3 apps.
+
+    Each item carries enough timing info for the UI to show:
+      - emittedAtUtc (HH:MM:SS) — when the source app emitted the signal
+      - candleUtc    (HH:MM)    — which candle the signal is FOR
+      - leadSec  (candle - emit; positive = prediction, negative = during candle)
+      - lagSec   (now - candle; positive = candle in the past, negative = future)
+      - status   (prediction | live | stale | look-ahead)
+    """
+    start_poller()
+    snap_data = get_snapshot()
+    snapshot = snap_data["snapshot"]
+    if snapshot is None:
+        return _json({"error": "no_snapshot_yet"}, status=503)
+
+    now_sec = int(datetime.now(timezone.utc).timestamp())
+
+    flat: List[Dict[str, Any]] = []
+    for pair in snapshot.pairs:
+        if not pair.latest_candle:
+            continue
+        for s in pair.latest_candle.signals:
+            lead = s.candle_time - s.timestamp if s.timestamp > 0 else None
+            lag = now_sec - s.candle_time
+            flat.append({
+                "pair": pair.pair,
+                "displayPair": pair.display_pair,
+                "category": pair.category,
+                "source": s.source,
+                "sourceName": s.source_name,
+                "direction": s.direction,
+                "confidence": s.confidence,
+                "strength": s.strength,
+                "emittedAt": s.timestamp,
+                "emittedUtc": _fmt_hms(s.timestamp) if s.timestamp > 0 else None,
+                "candleTime": s.candle_time,
+                "candleUtc": _fmt_hm(s.candle_time) if s.candle_time > 0 else None,
+                "ageSec": s.age_sec,
+                "leadSec": lead,
+                "lagSec": lag,
+                "fresh": s.fresh,
+                "cached": s.cached,
+                "outcome": s.outcome,
+                "strategy": s.strategy,
+                "reasons": s.reasons,
+                "validForCandle": s.valid_for_candle,
+                "consensusLevel": pair.consensus.level,
+                "consensusDirection": pair.consensus.direction,
+            })
+
+    flat.sort(key=lambda x: (x.get("emittedAt") or 0), reverse=True)
+    return _json({
+        "items": flat[:limit],
+        "total": len(flat),
+        "now": now_sec,
+    })
+
+
+# ---------------------------------------------------------------------------
+# /api/pairs  — full per-pair breakdown incl. win rate (from cached backtest)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/pairs")
+async def get_pairs(
+    request: Request,
+    category: str = Query(default=""),
+    level: str = Query(default=""),
+    direction: str = Query(default=""),
+    q: str = Query(default=""),
+):
+    """Lightweight per-pair listing with filters. Reads from the cached
+    snapshot — cheap, returns in <50ms even with hundreds of pairs."""
+    start_poller()
+    snap_data = get_snapshot()
+    snapshot = snap_data["snapshot"]
+    if snapshot is None:
+        return _json({"error": "no_snapshot_yet"}, status=503)
+
+    await get_or_refresh_backtest()
+    winrate_lookup = get_per_pair_winrate_lookup(get_cached_backtest())
+    now_sec = int(datetime.now(timezone.utc).timestamp())
+
+    out: List[Dict[str, Any]] = []
+    for p in snapshot.pairs:
+        if category and p.category != category:
+            continue
+        if level and p.consensus.level != level:
+            continue
+        if direction and (p.consensus.direction or "") != direction:
+            continue
+        if q and q.lower() not in p.display_pair.lower():
+            continue
+        wr = winrate_lookup.get(p.pair, {})
+        latest = p.latest_candle
+        out.append({
+            "pair": p.pair,
+            "displayPair": p.display_pair,
+            "category": p.category,
+            "consensus": _serialize_consensus(p.consensus),
+            "freshCount": p.fresh_count,
+            "callCount": p.call_count,
+            "putCount": p.put_count,
+            "neutralCount": p.neutral_count,
+            "latestCandle": _serialize_candle_consensus(latest) if latest else None,
+            "winRate": wr.get("winRate"),
+            "gradedTotal": wr.get("gradedTotal", 0),
+            "levelStats": wr.get("levels", {}),
+            "now": now_sec,
+        })
+
+    return _json({
+        "items": out,
+        "total": len(out),
+        "now": now_sec,
+        "backtestCacheAgeSec": round(get_backtest_cache_age_sec(), 1),
+    })
+
+
+# ---------------------------------------------------------------------------
+# /api/pair/{pair}  — single-pair detail (signals + candles + win rate)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/pair/{pair}")
+async def get_pair_detail(
+    pair: str,
+    request: Request,
+    candle_limit: int = Query(default=60, ge=1, le=300),
+):
+    """Single-pair drilldown — used by the Signals tab row-tap drawer."""
+    start_poller()
+    start_candle_poller()
+    snap_data = get_snapshot()
+    snapshot = snap_data["snapshot"]
+
+    # Look up the pair in the snapshot if available (gives us consensus).
+    pair_obj = None
+    if snapshot is not None:
+        for p in snapshot.pairs:
+            if p.pair == pair:
+                pair_obj = p
+                break
+
+    await get_or_refresh_backtest()
+    winrate_lookup = get_per_pair_winrate_lookup(get_cached_backtest())
+    wr = winrate_lookup.get(pair, {})
+    now_sec = int(datetime.now(timezone.utc).timestamp())
+
+    # Per-pair signal history from the app2 cache (gives emitted-at times).
+    cached_app2 = [c for c in get_all_cached_app2_signals() if c.pair == pair]
+    cached_app2.sort(key=lambda c: c.candle_time, reverse=True)
+
+    candles = get_candles_for_pair(pair, candle_limit)
+    if not candles:
+        try:
+            await refresh_candles()
+        except Exception:
+            pass
+        candles = get_candles_for_pair(pair, candle_limit)
+
+    return _json({
+        "pair": pair,
+        "displayPair": pair_obj.display_pair if pair_obj else pair,
+        "category": pair_obj.category if pair_obj else ("otc" if pair.endswith("_otc") else "real"),
+        "consensus": _serialize_consensus(pair_obj.consensus) if pair_obj else None,
+        "freshCount": pair_obj.fresh_count if pair_obj else 0,
+        "callCount": pair_obj.call_count if pair_obj else 0,
+        "putCount": pair_obj.put_count if pair_obj else 0,
+        "neutralCount": pair_obj.neutral_count if pair_obj else 0,
+        "signals": [_serialize_signal(s) for s in (pair_obj.signals if pair_obj else [])],
+        "latestCandle": _serialize_candle_consensus(pair_obj.latest_candle) if pair_obj and pair_obj.latest_candle else None,
+        "candles": [_serialize_candle(c) for c in candles[:candle_limit]],
+        "app2History": [
+            {
+                "candleTime": c.candle_time,
+                "candleUtc": _fmt_hm(c.candle_time),
+                "direction": c.signal,
+                "firstSeenSec": c.first_seen_sec,
+                "firstSeenUtc": _fmt_hms(c.first_seen_sec) if c.first_seen_sec > 0 else None,
+                "leadSec": c.candle_time - c.first_seen_sec if c.first_seen_sec > 0 else None,
+                "buyerPct": c.buyer_pct,
+                "sellerPct": c.seller_pct,
+            }
+            for c in cached_app2[:candle_limit]
+        ],
+        "winRate": wr.get("winRate"),
+        "gradedTotal": wr.get("gradedTotal", 0),
+        "levelStats": wr.get("levels", {}),
+        "now": now_sec,
+    })
+
+
+# ---------------------------------------------------------------------------
+# /api/candles  — per-pair OHLC candle history
 # ---------------------------------------------------------------------------
 
 
@@ -127,14 +395,18 @@ async def get_candles(
 
 
 # ---------------------------------------------------------------------------
-# /api/backtest
+# /api/backtest  — run or read cached consensus backtest
 # ---------------------------------------------------------------------------
 
 
 @router.get("/backtest")
 async def get_backtest(request: Request):
     """Runs a live backtest against the 3 source apps' historical signal
-    data, computes consensus accuracy, and returns the structured result."""
+    data, computes consensus accuracy, and returns the structured result.
+
+    Also writes the result to the backtest cache so subsequent snapshot
+    polls can read per-pair win rates without re-running.
+    """
     try:
         result = await run_backtest()
         return _json(result)
@@ -142,42 +414,26 @@ async def get_backtest(request: Request):
         return _json({"error": "backtest_failed", "message": str(e)}, status=500)
 
 
-# ---------------------------------------------------------------------------
-# /api/snapshot
-# ---------------------------------------------------------------------------
+@router.get("/backtest/status")
+async def get_backtest_status(request: Request):
+    """Cheap status check — backtest cache age + verdict + total signals.
 
-
-@router.get("/snapshot")
-async def get_snapshot_route(
-    request: Request,
-    refresh: int = Query(default=0),
-):
-    """Latest cached aggregated snapshot. The background poller (started on
-    first request) refreshes the cache adaptively, so this is a cheap read
-    even when many clients poll frequently.
-
-    Pass ``?refresh=1`` to force a fresh poll before returning.
-    """
-    start_poller()
-    if refresh == 1:
-        await refresh_snapshot()
-
-    snap_data = get_snapshot()
-    snapshot = snap_data["snapshot"]
-    age_ms = snap_data["age_ms"]
-    if snapshot is None:
-        return _json(
-            {"error": "no_snapshot_yet", "message": "First poll still running, retry in a moment."},
-            status=503,
-        )
-
-    out = _serialize_aggregated(snapshot)
-    out["ageMs"] = age_ms
-    return _json(out)
+    Used by the History tab header so we can show "last backtest 47s ago"
+    without re-running it."""
+    cached = get_cached_backtest()
+    return _json({
+        "cacheAgeSec": round(get_backtest_cache_age_sec(), 1),
+        "hasResult": cached is not None,
+        "verdict": cached.get("verdict") if cached else None,
+        "totalSignals": cached.get("totalSignals") if cached else 0,
+        "totalClusters": cached.get("totalClusters") if cached else 0,
+        "perPairCount": len(cached.get("perPair", [])) if cached else 0,
+        "timestamp": cached.get("timestamp") if cached else None,
+    })
 
 
 # ---------------------------------------------------------------------------
-# /api/diag
+# /api/diag  — alignment diagnostics (engineer-facing; hidden from main nav)
 # ---------------------------------------------------------------------------
 
 
@@ -256,9 +512,6 @@ async def get_diag(
         })
 
     # ---- Candle offset between apps ----
-    # "newest candle per pair" is computed once per app and reused across
-    # the three pairwise comparisons — the old code redefined the helper
-    # inside the loop, which was wasteful and read awkwardly.
     newest_by_app = {
         app_id: _newest_candle_by_pair(per_app[app_id].signals)
         for app_id in APPS
@@ -352,18 +605,49 @@ async def get_diag(
 # ---------------------------------------------------------------------------
 
 
-def _serialize_aggregated(agg) -> dict:
+def _fmt_hm(ts: int) -> str:
+    if not ts or ts <= 0:
+        return "—"
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%H:%M")
+
+
+def _fmt_hms(ts: int) -> str:
+    if not ts or ts <= 0:
+        return "—"
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%H:%M:%S")
+
+
+def _signal_timing_status(lead_sec: int, lag_sec: int) -> str:
+    """Classify a signal's timing for the UI:
+    - 'prediction'  — emitted before its candle (lead > 0)
+    - 'live'        — emitted during its candle (-60 <= lead <= 0)
+    - 'look-ahead'  — emitted after candle closed (lead < -60 — suspicious!)
+    - 'stale'       — candle is well in the past (lag > 120)
+    """
+    if lead_sec is None:
+        return "unknown"
+    if lead_sec < -CANDLE_SEC - 5:
+        return "look-ahead"
+    if lead_sec > 0:
+        return "prediction"
+    if lag_sec > 120:
+        return "stale"
+    return "live"
+
+
+def _serialize_aggregated(agg, *, winrate_lookup: Optional[Dict[str, Dict[str, Any]]] = None) -> dict:
+    winrate_lookup = winrate_lookup or {}
     return {
         "timestamp": agg.timestamp,
         "freshnessWindowSec": agg.freshness_window_sec,
         "apps": [_serialize_app(a) for a in agg.apps],
-        "pairs": [_serialize_pair(p) for p in agg.pairs],
+        "pairs": [_serialize_pair(p, winrate_lookup=winrate_lookup) for p in agg.pairs],
         "summary": {
             "totalPairs": agg.summary["totalPairs"],
-            "threeBotAgree": [_serialize_pair(p) for p in agg.summary["threeBotAgree"]],
-            "twoBotAgree": [_serialize_pair(p) for p in agg.summary["twoBotAgree"]],
-            "conflicts": [_serialize_pair(p) for p in agg.summary["conflicts"]],
-            "singleOnly": [_serialize_pair(p) for p in agg.summary["singleOnly"]],
+            "threeBotAgree": [_serialize_pair(p, winrate_lookup=winrate_lookup) for p in agg.summary["threeBotAgree"]],
+            "twoBotAgree": [_serialize_pair(p, winrate_lookup=winrate_lookup) for p in agg.summary["twoBotAgree"]],
+            "conflicts": [_serialize_pair(p, winrate_lookup=winrate_lookup) for p in agg.summary["conflicts"]],
+            "singleOnly": [_serialize_pair(p, winrate_lookup=winrate_lookup) for p in agg.summary["singleOnly"]],
             "pairsByDirection": agg.summary["pairsByDirection"],
         },
     }
@@ -391,8 +675,10 @@ def _serialize_app(a) -> dict:
     }
 
 
-def _serialize_pair(p) -> dict:
-    return {
+def _serialize_pair(p, *, winrate_lookup: Optional[Dict[str, Dict[str, Any]]] = None) -> dict:
+    winrate_lookup = winrate_lookup or {}
+    wr = winrate_lookup.get(p.pair, {})
+    out = {
         "pair": p.pair,
         "displayPair": p.display_pair,
         "category": p.category,
@@ -404,7 +690,14 @@ def _serialize_pair(p) -> dict:
         "putCount": p.put_count,
         "neutralCount": p.neutral_count,
         "consensus": _serialize_consensus(p.consensus),
+        # Per-pair win rate from the cached backtest (60s TTL). None when no
+        # graded data is available yet (cold start / pair never had a closed
+        # candle in the lookback window).
+        "winRate": wr.get("winRate"),
+        "gradedTotal": wr.get("gradedTotal", 0),
+        "levelStats": wr.get("levels", {}),
     }
+    return out
 
 
 def _serialize_candle_consensus(c) -> dict:
@@ -434,6 +727,7 @@ def _serialize_consensus(c) -> dict:
 
 
 def _serialize_signal(s) -> dict:
+    lead = s.candle_time - s.timestamp if s.timestamp > 0 else None
     return {
         "source": s.source,
         "sourceName": s.source_name,
@@ -443,7 +737,10 @@ def _serialize_signal(s) -> dict:
         "confidence": s.confidence,
         "strength": s.strength,
         "timestamp": s.timestamp,
+        "emittedUtc": _fmt_hms(s.timestamp) if s.timestamp > 0 else None,
         "candleTime": s.candle_time,
+        "candleUtc": _fmt_hm(s.candle_time) if s.candle_time > 0 else None,
+        "leadSec": lead,
         "ageSec": s.age_sec,
         "outcome": s.outcome,
         "strategy": s.strategy,
@@ -455,14 +752,16 @@ def _serialize_signal(s) -> dict:
 
 
 def _serialize_signal_sample(s) -> dict:
+    lead = s.candle_time - s.timestamp
     return {
         "pair": s.pair,
         "direction": s.direction,
         "candleTime": s.candle_time,
-        "candleUtc": datetime.fromtimestamp(s.candle_time, tz=timezone.utc).strftime("%H:%M"),
+        "candleUtc": _fmt_hm(s.candle_time),
         "emittedAt": s.timestamp,
-        "emittedUtc": datetime.fromtimestamp(s.timestamp, tz=timezone.utc).strftime("%H:%M:%S") if s.timestamp > 0 else None,
-        "leadSec": s.candle_time - s.timestamp,
+        "emittedUtc": _fmt_hms(s.timestamp) if s.timestamp > 0 else None,
+        "leadSec": lead,
+        "timingStatus": _signal_timing_status(lead, 0),
         "validForCandle": s.valid_for_candle,
         "fresh": s.fresh,
         "cached": s.cached,
@@ -473,10 +772,12 @@ def _serialize_candle(c) -> dict:
     return {
         "pair": c.pair,
         "candleTime": c.candle_time,
+        "candleUtc": _fmt_hm(c.candle_time),
         "open": c.open,
         "high": c.high,
         "low": c.low,
         "close": c.close,
+        "diff": (c.close - c.open) if (c.close is not None and c.open is not None) else None,
         "result": c.result,
         "app3Direction": c.app3_direction,
         "fetchedAt": c.fetched_at,

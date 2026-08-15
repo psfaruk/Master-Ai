@@ -2,36 +2,84 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Master-Ai · Signal Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0e17">
+  <title>Master-Ai · Live Signal Dashboard</title>
   <link rel="stylesheet" href="/static/dashboard.css">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='24' font-size='24'%3E📊%3C/text%3E%3C/svg%3E">
 </head>
-<body>
+<body data-theme="dark" data-tz="utc" data-lang="en">
+  <!-- ===================== TOP BAR ===================== -->
   <header class="topbar">
-    <div class="topbar__brand">
+    <div class="topbar__brand" data-nav="home" role="button" tabindex="0">
       <span class="topbar__logo">📊</span>
-      <div>
+      <div class="topbar__title">
         <h1>Master-Ai</h1>
-        <p class="topbar__subtitle">Quotex signal aggregator · Python edition</p>
+        <p class="topbar__subtitle">Quotex signal aggregator</p>
       </div>
     </div>
-    <div class="topbar__status" id="status-pill">
-      <span class="pulse"></span>
-      <span id="status-text">connecting…</span>
+
+    <div class="topbar__center">
+      <div class="clock" id="clock-utc" title="UTC time">
+        <span class="clock__label">UTC</span>
+        <span class="clock__time" id="clock-utc-time">—</span>
+      </div>
+      <div class="clock" id="clock-local" title="Your local time">
+        <span class="clock__label">Local</span>
+        <span class="clock__time" id="clock-local-time">—</span>
+      </div>
+    </div>
+
+    <div class="topbar__actions">
+      <div class="dropdown">
+        <button class="dropdown__trigger" id="cat-trigger" type="button">
+          <span id="cat-label">All pairs</span>
+          <span class="dropdown__caret">▾</span>
+        </button>
+        <ul class="dropdown__menu" id="cat-menu" role="menu">
+          <li role="menuitem" data-value="">All pairs</li>
+          <li role="menuitem" data-value="otc">OTC only</li>
+          <li role="menuitem" data-value="real">Real only</li>
+        </ul>
+      </div>
+      <div class="search">
+        <input type="search" id="search-input" placeholder="Search pair…" autocomplete="off">
+      </div>
+      <div class="topbar__status" id="status-pill" title="Data feed status">
+        <span class="pulse"></span>
+        <span id="status-text">connecting…</span>
+      </div>
     </div>
   </header>
 
-  <nav class="tabs" id="tabs">
-    <button data-tab="home" class="tab tab--active">Home</button>
-    <button data-tab="chart" class="tab">Chart &amp; Signal</button>
-    <button data-tab="history" class="tab">History</button>
-    <button data-tab="diag" class="tab">Diagnostics</button>
-  </nav>
-
+  <!-- ===================== MAIN CONTENT ===================== -->
   <main class="content">
+
     <!-- ============ HOME ============ -->
     <section id="tab-home" class="tab-panel tab-panel--active">
+      <div class="hero-row">
+        <div class="hero hero--3agree">
+          <div class="hero__label">3-Bot Agree</div>
+          <div class="hero__value" id="stat-3agree">—</div>
+          <div class="hero__sub" id="stat-3agree-sub">across all pairs</div>
+        </div>
+        <div class="hero hero--2agree">
+          <div class="hero__label">2-Bot Agree</div>
+          <div class="hero__value" id="stat-2agree">—</div>
+          <div class="hero__sub" id="stat-2agree-sub">across all pairs</div>
+        </div>
+        <div class="hero hero--conflict">
+          <div class="hero__label">Conflicts</div>
+          <div class="hero__value" id="stat-conflict">—</div>
+          <div class="hero__sub">split direction</div>
+        </div>
+        <div class="hero hero--single">
+          <div class="hero__label">Single Only</div>
+          <div class="hero__value" id="stat-single">—</div>
+          <div class="hero__sub">only one source</div>
+        </div>
+      </div>
+
       <div class="card-grid" id="app-cards">
         <div class="card card--skeleton">
           <div class="skeleton skeleton--title"></div>
@@ -50,66 +98,98 @@
         </div>
       </div>
 
-      <div class="summary-stats" id="summary-stats">
-        <div class="stat stat--3agree">
-          <span class="stat__label">3-Bot Agree</span>
-          <span class="stat__value" id="stat-3agree">—</span>
+      <div class="grid-2col">
+        <div class="panel">
+          <div class="panel__header">
+            <h2>Top Signals</h2>
+            <span class="panel__meta" id="home-meta">—</span>
+          </div>
+          <div class="panel__body" id="consensus-highlights">
+            <p class="placeholder">Loading consensus…</p>
+          </div>
         </div>
-        <div class="stat stat--2agree">
-          <span class="stat__label">2-Bot Agree</span>
-          <span class="stat__value" id="stat-2agree">—</span>
-        </div>
-        <div class="stat stat--conflict">
-          <span class="stat__label">Conflicts</span>
-          <span class="stat__value" id="stat-conflict">—</span>
-        </div>
-        <div class="stat stat--single">
-          <span class="stat__label">Single Only</span>
-          <span class="stat__value" id="stat-single">—</span>
+
+        <div class="panel">
+          <div class="panel__header">
+            <h2>Live Signal Feed</h2>
+            <span class="panel__meta">real-time</span>
+          </div>
+          <div class="panel__body panel__body--scroll" id="home-signal-feed">
+            <p class="placeholder">Loading feed…</p>
+          </div>
         </div>
       </div>
 
       <div class="panel">
         <div class="panel__header">
-          <h2>Consensus Highlights</h2>
-          <span class="panel__meta" id="home-meta">—</span>
+          <h2>Consensus Accuracy (last 6 hours)</h2>
+          <span class="panel__meta" id="backtest-status">—</span>
         </div>
-        <div class="panel__body" id="consensus-highlights">
-          <p class="placeholder">Loading consensus…</p>
+        <div class="panel__body" id="home-backtest">
+          <p class="placeholder">Run a backtest to see per-level accuracy.</p>
         </div>
       </div>
     </section>
 
-    <!-- ============ CHART & SIGNAL ============ -->
-    <section id="tab-chart" class="tab-panel">
+    <!-- ============ SIGNALS ============ -->
+    <section id="tab-signals" class="tab-panel">
       <div class="panel">
-        <div class="panel__header">
+        <div class="panel__header panel__header--wrap">
           <h2>Per-Pair Signals</h2>
           <div class="filter-bar">
-            <select id="filter-level">
-              <option value="">All levels</option>
-              <option value="3-agree">3-agree</option>
-              <option value="2-agree">2-agree</option>
-              <option value="conflict">Conflict</option>
-              <option value="1-only">Single</option>
-            </select>
-            <input type="text" id="filter-pair" placeholder="Filter pair…">
+            <div class="dropdown">
+              <button class="dropdown__trigger" id="level-trigger" type="button">
+                <span id="level-label">All levels</span>
+                <span class="dropdown__caret">▾</span>
+              </button>
+              <ul class="dropdown__menu" id="level-menu" role="menu">
+                <li role="menuitem" data-value="">All levels</li>
+                <li role="menuitem" data-value="3-agree">3-agree</li>
+                <li role="menuitem" data-value="2-agree">2-agree</li>
+                <li role="menuitem" data-value="conflict">Conflict</li>
+                <li role="menuitem" data-value="1-only">Single</li>
+              </ul>
+            </div>
+            <div class="dropdown">
+              <button class="dropdown__trigger" id="dir-trigger" type="button">
+                <span id="dir-label">Both</span>
+                <span class="dropdown__caret">▾</span>
+              </button>
+              <ul class="dropdown__menu" id="dir-menu" role="menu">
+                <li role="menuitem" data-value="">Both directions</li>
+                <li role="menuitem" data-value="CALL">CALL only</li>
+                <li role="menuitem" data-value="PUT">PUT only</li>
+              </ul>
+            </div>
+            <label class="checkbox">
+              <input type="checkbox" id="favorites-only">
+              <span>★ Favorites</span>
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="three-agree-only">
+              <span>Only 3-agree</span>
+            </label>
           </div>
         </div>
         <div class="panel__body panel__body--scroll">
-          <table class="pair-table">
+          <table class="pair-table pair-table--interactive">
             <thead>
               <tr>
+                <th>★</th>
                 <th>Pair</th>
-                <th>Category</th>
-                <th>Consensus</th>
-                <th>Direction</th>
+                <th>Cat</th>
+                <th>Level</th>
+                <th>Dir</th>
                 <th>Apps</th>
+                <th>Signal Time (UTC)</th>
                 <th>Candle (UTC)</th>
+                <th>Lead</th>
+                <th>Win Rate</th>
+                <th>Graded</th>
               </tr>
             </thead>
             <tbody id="pair-table-body">
-              <tr><td colspan="6" class="placeholder">Loading…</td></tr>
+              <tr><td colspan="11" class="placeholder">Loading…</td></tr>
             </tbody>
           </table>
         </div>
@@ -118,45 +198,260 @@
 
     <!-- ============ HISTORY ============ -->
     <section id="tab-history" class="tab-panel">
-      <div class="panel">
-        <div class="panel__header">
-          <h2>Backtest</h2>
-          <button class="btn btn--ghost" id="btn-run-backtest">Run backtest</button>
-        </div>
-        <div class="panel__body" id="backtest-content">
-          <p class="placeholder">Click "Run backtest" to fetch a fresh verdict.</p>
+      <div class="history-tabs">
+        <button class="history-tab history-tab--active" data-subtab="backtest">Backtest</button>
+        <button class="history-tab" data-subtab="perpair">Per-Pair Stats</button>
+        <button class="history-tab" data-subtab="drilldown">Pair Drilldown</button>
+      </div>
+
+      <!-- Backtest sub-tab -->
+      <div class="history-panel history-panel--active" id="history-backtest">
+        <div class="panel">
+          <div class="panel__header">
+            <h2>Consensus Accuracy Backtest</h2>
+            <div class="filter-bar">
+              <span class="panel__meta" id="bt-cache-age">—</span>
+              <button class="btn btn--ghost" id="btn-run-backtest">Run fresh backtest</button>
+            </div>
+          </div>
+          <div class="panel__body" id="backtest-content">
+            <p class="placeholder">Click "Run fresh backtest" to fetch a verdict, or wait for the auto-cached result to appear.</p>
+          </div>
         </div>
       </div>
 
-      <div class="panel">
-        <div class="panel__header">
-          <h2>Per-Pair History</h2>
-          <select id="history-pair"><option value="">Select a pair…</option></select>
+      <!-- Per-pair stats sub-tab -->
+      <div class="history-panel" id="history-perpair">
+        <div class="panel">
+          <div class="panel__header">
+            <h2>Per-Pair Win Rate</h2>
+            <span class="panel__meta" id="perpair-meta">—</span>
+          </div>
+          <div class="panel__body panel__body--scroll">
+            <table class="pair-table pair-table--interactive">
+              <thead>
+                <tr>
+                  <th>★</th>
+                  <th>Pair</th>
+                  <th>Cat</th>
+                  <th>Overall W/L</th>
+                  <th>Win %</th>
+                  <th>3-agree W/L</th>
+                  <th>2-agree W/L</th>
+                  <th>1-only W/L</th>
+                </tr>
+              </thead>
+              <tbody id="perpair-table-body">
+                <tr><td colspan="8" class="placeholder">Loading per-pair stats…</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
-        <div class="panel__body" id="pair-history">
-          <p class="placeholder">Pick a pair to see its candle history.</p>
+      </div>
+
+      <!-- Pair drilldown sub-tab -->
+      <div class="history-panel" id="history-drilldown">
+        <div class="panel">
+          <div class="panel__header">
+            <h2>Pair Drilldown</h2>
+            <div class="filter-bar">
+              <select id="drilldown-pair"><option value="">Select a pair…</option></select>
+            </div>
+          </div>
+          <div class="panel__body" id="drilldown-content">
+            <p class="placeholder">Pick a pair to see its candle history + per-app signal breakdown.</p>
+          </div>
         </div>
       </div>
     </section>
 
-    <!-- ============ DIAGNOSTICS ============ -->
-    <section id="tab-diag" class="tab-panel">
-      <div class="panel">
-        <div class="panel__header">
-          <h2>Alignment Diagnostics</h2>
-          <button class="btn btn--ghost" id="btn-refresh-diag">Refresh</button>
+    <!-- ============ SETTINGS ============ -->
+    <section id="tab-settings" class="tab-panel">
+      <div class="grid-2col">
+
+        <div class="panel">
+          <div class="panel__header"><h2>General</h2></div>
+          <div class="panel__body">
+            <div class="setting-row">
+              <label for="set-theme">Theme</label>
+              <select id="set-theme">
+                <option value="dark">Dark (default)</option>
+                <option value="light">Light</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <label for="set-lang">Language</label>
+              <select id="set-lang">
+                <option value="en">English</option>
+                <option value="bn">বাংলা (Bangla)</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <label for="set-tz">Clock display</label>
+              <select id="set-tz">
+                <option value="utc">UTC only</option>
+                <option value="local">Local only</option>
+                <option value="both" selected>Both UTC + Local</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <label for="set-timefmt">Time format</label>
+              <select id="set-timefmt">
+                <option value="24" selected>24-hour</option>
+                <option value="12">12-hour (AM/PM)</option>
+              </select>
+            </div>
+          </div>
         </div>
-        <div class="panel__body" id="diag-content">
-          <p class="placeholder">Loading diagnostics…</p>
+
+        <div class="panel">
+          <div class="panel__header"><h2>Real-time Refresh</h2></div>
+          <div class="panel__body">
+            <div class="setting-row">
+              <label for="set-poll">Polling mode</label>
+              <select id="set-poll">
+                <option value="adaptive" selected>Adaptive (burst 1s, idle 3s)</option>
+                <option value="1">Every 1 second (aggressive)</option>
+                <option value="3">Every 3 seconds</option>
+                <option value="5">Every 5 seconds</option>
+                <option value="10">Every 10 seconds (battery saver)</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <label for="set-feed-size">Signal feed size</label>
+              <select id="set-feed-size">
+                <option value="20">20 items</option>
+                <option value="50" selected>50 items</option>
+                <option value="100">100 items</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <label for="set-sound">Sound on 3-agree</label>
+              <input type="checkbox" id="set-sound">
+            </div>
+            <div class="setting-row">
+              <label for="set-notify">Browser notifications</label>
+              <input type="checkbox" id="set-notify">
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel__header"><h2>Trading Filters</h2></div>
+          <div class="panel__body">
+            <div class="setting-row">
+              <label for="set-min-wr">Min win rate %</label>
+              <input type="number" id="set-min-wr" min="0" max="100" step="1" value="0">
+            </div>
+            <div class="setting-row">
+              <label for="set-only-fresh">Hide signals older than (sec)</label>
+              <input type="number" id="set-only-fresh" min="0" max="600" step="5" value="0">
+            </div>
+            <div class="setting-row">
+              <label for="set-hide-conflicts">Hide conflicts</label>
+              <input type="checkbox" id="set-hide-conflicts">
+            </div>
+            <div class="setting-row">
+              <label>Favorites</label>
+              <div id="favorites-list" class="favorites-list"><span class="placeholder">No favorites yet — tap ★ next to a pair.</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel__header"><h2>App Candle Offsets</h2></div>
+          <div class="panel__body">
+            <p class="hint">Per-app candle offset, in whole candles. Set this only if /api/diag reports a consistent non-zero offset between two apps.</p>
+            <div class="setting-row">
+              <label for="set-off1">App 1 (Minimum Pair)</label>
+              <select id="set-off1">
+                <option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option>
+                <option value="0" selected>0 (default)</option>
+                <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <label for="set-off2">App 2 (Binary Signal)</label>
+              <select id="set-off2">
+                <option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option>
+                <option value="0" selected>0 (default)</option>
+                <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <label for="set-off3">App 3 (OTC Live)</label>
+              <select id="set-off3">
+                <option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option>
+                <option value="0" selected>0 (default)</option>
+                <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+              </select>
+            </div>
+            <p class="hint">Note: changing offsets here is informational only — to actually apply offsets server-side, set the APP1/2/3_CANDLE_OFFSET environment variables on Railway.</p>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel__header"><h2>Diagnostics</h2></div>
+          <div class="panel__body">
+            <p class="hint">Engineer-facing alignment diagnostics. Hidden from the main navigation but kept here for power users.</p>
+            <button class="btn btn--ghost" id="btn-refresh-diag">Load diagnostics</button>
+            <div id="diag-content" style="margin-top:12px;"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel__header"><h2>Data &amp; About</h2></div>
+          <div class="panel__body">
+            <div class="setting-row">
+              <button class="btn btn--ghost" id="btn-clear-cache">Clear local cache</button>
+              <button class="btn btn--ghost" id="btn-reset-settings">Reset settings</button>
+            </div>
+            <div class="setting-row about-row">
+              <span>Master-Ai v<span id="version">{{ version }}</span></span>
+              <span>Python · FastAPI · httpx</span>
+              <span><a href="https://github.com/psfaruk/Master-Ai" target="_blank" rel="noopener">GitHub</a></span>
+            </div>
+          </div>
         </div>
       </div>
     </section>
   </main>
 
-  <footer class="footer">
-    <span>Master-Ai v{{ version }}</span>
-    <span id="footer-clock">—</span>
-  </footer>
+  <!-- ===================== PAIR DRAWER (slide-up modal) ===================== -->
+  <div class="drawer-overlay" id="drawer-overlay" hidden>
+    <aside class="drawer" id="pair-drawer" role="dialog" aria-modal="true">
+      <header class="drawer__header">
+        <div>
+          <h2 id="drawer-title">Pair detail</h2>
+          <p class="drawer__sub" id="drawer-sub">—</p>
+        </div>
+        <button class="drawer__close" id="drawer-close" aria-label="Close">✕</button>
+      </header>
+      <div class="drawer__body" id="drawer-body">
+        <p class="placeholder">Loading…</p>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ===================== BOTTOM NAV ===================== -->
+  <nav class="bottomnav">
+    <button class="bottomnav__item bottomnav__item--active" data-tab="home">
+      <span class="bottomnav__icon">🏠</span>
+      <span class="bottomnav__label">Home</span>
+    </button>
+    <button class="bottomnav__item" data-tab="signals">
+      <span class="bottomnav__icon">📡</span>
+      <span class="bottomnav__label">Signals</span>
+    </button>
+    <button class="bottomnav__item" data-tab="history">
+      <span class="bottomnav__icon">📊</span>
+      <span class="bottomnav__label">History</span>
+    </button>
+    <button class="bottomnav__item" data-tab="settings">
+      <span class="bottomnav__icon">⚙</span>
+      <span class="bottomnav__label">Settings</span>
+    </button>
+  </nav>
 
   <script src="/static/dashboard.js" defer></script>
 </body>

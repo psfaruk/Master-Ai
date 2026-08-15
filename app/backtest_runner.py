@@ -17,10 +17,24 @@ Per-pair breakdown:
   The ``per_pair`` field holds per-pair per-level stats and the per-pair
   cluster history. The UI uses this to render a pair selector + a
   "show me only 2-agree signals for this pair" filter.
+
+Caching:
+  A live dashboard needs per-pair win-rate on every poll, but the backtest
+  itself takes ~2-4 s (it hits 3 upstreams and grades every candle). To
+  bridge that, we cache the last successful result for ``CACHE_TTL_SEC``
+  seconds. Callers either get the cached snapshot (fast) or trigger a
+  background refresh (which updates the cache for the NEXT caller).
+
+  ``get_cached_backtest()`` returns the latest cached result (or None).
+  ``run_backtest()`` always runs a fresh one (used by /api/backtest).
+  ``get_or_refresh_backtest()`` returns cached, refreshes in background
+  if stale — used by the snapshot poller so the per-pair win rate is
+  always available on the dashboard.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -49,6 +63,11 @@ logger = logging.getLogger("master-ai.backtest_runner")
 
 # How far back the backtest looks.
 LOOKBACK_SEC = 6 * 3600
+
+# Cache TTL — the snapshot poller runs every ~3s; a 60s TTL means we
+# refresh the backtest ~once per minute, which is plenty for a rolling
+# 6h window.
+CACHE_TTL_SEC = 60.0
 
 # Match "draw" / "void" in any case — used to exclude resolved-but-neutral
 # signals from the win/loss count.
@@ -120,6 +139,75 @@ class PairStat:
     category: str  # "otc" | "real"
     levels: Dict[str, LevelStat]
     history: List[ClassifiedCluster]
+
+
+# ---------------------------------------------------------------------------
+# In-memory cache so the live snapshot can read per-pair win rates without
+# paying the full backtest cost on every poll.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class BacktestCache:
+    result: Optional[Dict[str, Any]] = None
+    fetched_at: float = 0.0  # unix seconds
+    refresh_in_progress: bool = False
+    refresh_task: Optional[asyncio.Task] = None
+
+
+_cache: Optional[BacktestCache] = None
+
+
+def _get_cache() -> BacktestCache:
+    global _cache
+    if _cache is None:
+        _cache = BacktestCache()
+    return _cache
+
+
+def get_cached_backtest() -> Optional[Dict[str, Any]]:
+    """Return the latest cached backtest result, or None if never run."""
+    return _get_cache().result
+
+
+def get_backtest_cache_age_sec() -> float:
+    c = _get_cache()
+    if c.fetched_at <= 0:
+        return -1.0
+    return max(0.0, time.time() - c.fetched_at)
+
+
+async def get_or_refresh_backtest() -> Optional[Dict[str, Any]]:
+    """Return cached backtest if fresh; trigger a background refresh if stale.
+
+    The snapshot poller calls this on every tick so the dashboard always
+    shows a per-pair win rate. Refresh runs in the background — callers
+    get the previous cached value immediately and the next poll picks up
+    the fresh one.
+    """
+    c = _get_cache()
+    age = time.time() - c.fetched_at if c.fetched_at > 0 else float("inf")
+    if c.result is not None and age < CACHE_TTL_SEC:
+        return c.result
+    # Stale (or never run). Trigger a refresh in the background if one
+    # isn't already running, but return whatever we have so the snapshot
+    # doesn't block for ~3s.
+    if not c.refresh_in_progress:
+        c.refresh_in_progress = True
+        c.refresh_task = asyncio.create_task(_refresh_in_background())
+    return c.result
+
+
+async def _refresh_in_background() -> None:
+    c = _get_cache()
+    try:
+        result = await run_backtest()
+        c.result = result
+        c.fetched_at = time.time()
+    except Exception as e:
+        logger.warning("[backtest-cache] background refresh failed: %s", e)
+    finally:
+        c.refresh_in_progress = False
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +413,13 @@ def _display_pair_local(canonical: str) -> str:
     return display_pair_from_asset(canonical)
 
 
+def _level_win_rate(s: LevelStat) -> Optional[float]:
+    graded = s.win + s.loss
+    if graded == 0:
+        return None
+    return round((s.win / graded) * 100, 1)
+
+
 # ---------------------------------------------------------------------------
 # Main runner
 # ---------------------------------------------------------------------------
@@ -514,7 +609,9 @@ async def run_backtest() -> Dict[str, Any]:
         }
 
     def level_to_dict(s: LevelStat) -> dict:
-        return asdict(s)
+        d = asdict(s)
+        d["winRate"] = _level_win_rate(s)
+        return d
 
     def source_to_dict(s: SourceStat) -> dict:
         return asdict(s)
@@ -523,11 +620,23 @@ async def run_backtest() -> Dict[str, Any]:
         return asdict(c)
 
     def pair_to_dict(p: PairStat) -> dict:
+        graded_total = (
+            p.levels["3-agree"].win + p.levels["3-agree"].loss +
+            p.levels["2-agree"].win + p.levels["2-agree"].loss +
+            p.levels["1-only"].win + p.levels["1-only"].loss
+        )
+        graded_wins = (
+            p.levels["3-agree"].win +
+            p.levels["2-agree"].win +
+            p.levels["1-only"].win
+        )
         return {
             "pair": p.pair,
             "displayPair": p.display_pair,
             "category": p.category,
-            "levels": {k: asdict(v) for k, v in p.levels.items()},
+            "levels": {k: level_to_dict(v) for k, v in p.levels.items()},
+            "winRate": round((graded_wins / graded_total) * 100, 1) if graded_total > 0 else None,
+            "gradedTotal": graded_total,
             "history": [cluster_to_dict(c) for c in p.history],
         }
 
@@ -542,3 +651,19 @@ async def run_backtest() -> Dict[str, Any]:
         "sampleTwoAgree": [cluster_to_dict(c) for c in sample_two_agree],
         "verdict": verdict,
     }
+
+
+def get_per_pair_winrate_lookup(cached: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Build a pair-key → {winRate, gradedTotal, levels} lookup from a
+    cached backtest result. Used by the snapshot serializer to enrich
+    each pair with win-rate info without re-running the backtest."""
+    out: Dict[str, Dict[str, Any]] = {}
+    if not cached:
+        return out
+    for p in cached.get("perPair", []):
+        out[p["pair"]] = {
+            "winRate": p.get("winRate"),
+            "gradedTotal": p.get("gradedTotal", 0),
+            "levels": p.get("levels", {}),
+        }
+    return out

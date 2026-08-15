@@ -29,24 +29,97 @@ Master-Ai/
 │   ├── signal_normalize.py  # canonical pair keys, timestamp parsing, candle alignment
 │   ├── http_fetcher.py      # httpx wrapper with timeout + retry
 │   ├── app2_cache.py        # App 2 historical signal cache + poller
-│   ├── candle_fetcher.py    # App 3 OHLC candle cache + gradeSignal()
+│   ├── candle_fetcher.py     # App 3 OHLC candle cache + gradeSignal()
 │   ├── signal_aggregator.py # 3-app aggregator + consensus classifier
-│   ├── backtest_runner.py   # consensus backtest + per-pair win rate
+│   ├── backtest_runner.py   # consensus backtest + per-pair win rate (cached 60s)
 │   ├── snapshot_poller.py   # adaptive background poller
 │   ├── api/
 │   │   ├── __init__.py
-│   │   └── routes.py        # /api/{aggregated,candles,backtest,snapshot,diag}
+│   │   └── routes.py        # /api/{snapshot, aggregated, signal-feed, pairs,
+│   │                       #         pair/{pair}, candles, backtest, backtest/status, diag}
 │   ├── templates/
-│   │   └── dashboard.html
+│   │   └── dashboard.html   # bottom-nav + dropdowns + drawer
 │   └── static/
-│       ├── dashboard.css
-│       └── dashboard.js
+│       ├── dashboard.css    # mobile-first, dark/light themes
+│       └── dashboard.js     # adaptive polling, settings persistence
 └── tests/
     ├── conftest.py
     ├── test_signal_normalize.py
     ├── test_candle_fetcher.py
-    └── test_signal_aggregator.py
+    ├── test_signal_aggregator.py
+    └── test_new_dashboard.py  # endpoints + per-pair win rate + timing
 ```
+
+## Dashboard sitemap
+
+The dashboard is a single-page app with **bottom navigation** (mobile-first,
+thumb-reachable):
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ TOP BAR: Brand | UTC clock + Local clock | Category ▾ Search Status │
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│ HOME — 4 hero stats (3-agree/2-agree/conflict/single)        │
+│        3 app status cards (latency, uptime, streams)         │
+│        Top Signals panel + Live Signal Feed panel             │
+│        Consensus Accuracy backtest summary                   │
+│                                                              │
+│ SIGNALS — filter bar (Level ▾ Direction ▾ ★ Favorites        │
+│           Only-3-agree ☐) + per-pair table with              │
+│           Signal Time UTC, Candle UTC, Lead, Win Rate, Graded │
+│           Row-tap → drawer with candle chart + per-app       │
+│           signal breakdown + per-pair win rate                │
+│                                                              │
+│ HISTORY — sub-tabs: Backtest | Per-Pair Stats | Pair         │
+│           Drilldown. Cached backtest + manual rerun.          │
+│                                                              │
+│ SETTINGS — General (theme, language, timezone, time format)  │
+│            Real-time Refresh (polling mode, feed size,        │
+│            sound, notifications)                              │
+│            Trading Filters (min win rate, fresh-only,        │
+│            hide conflicts, favorites)                         │
+│            App Candle Offsets (App 1/2/3 -3..+3)             │
+│            Diagnostics (engineer-facing, hidden from main nav)│
+│            Data & About (clear cache, reset, version, GitHub)│
+│                                                              │
+├──────────────────────────────────────────────────────────────┤
+│ BOTTOM NAV: 🏠 Home  📡 Signals  📊 History  ⚙ Settings       │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Dropdowns
+
+- **Top bar**: Category (All / OTC / Real) — global filter
+- **Signals tab**: Level (All / 3-agree / 2-agree / Conflict / Single),
+  Direction (Both / CALL / PUT)
+- **History tab**: sub-tab switch, pair drilldown picker
+- **Settings tab**: Theme, Language, Clock display, Time format,
+  Polling mode, Feed size, App 1/2/3 candle offsets
+
+### Real-time updates
+
+The client mirrors the server's adaptive polling cadence:
+- **Burst** (1s) during the first 12s of each candle (new signals arriving)
+- **Idle** (3s) for the rest of the minute
+
+Override this in Settings → Real-time Refresh → Polling mode.
+
+### Per-pair win rate
+
+Every pair in the snapshot now carries `winRate`, `gradedTotal`, and
+per-level stats from the cached backtest (60s TTL). The backtest runs in
+the background — the snapshot endpoint returns the cached value without
+blocking.
+
+### Signal source timing
+
+Each signal shows:
+- `emittedUtc` (HH:MM:SS UTC) — when the source app emitted it
+- `candleUtc` (HH:MM UTC) — which candle it is FOR
+- `leadSec` (candle - emit; positive = prediction, negative = during candle)
+- color-coded status: prediction (green) / live (blue) / stale (gray) /
+  look-ahead (red, suspicious)
 
 ## Run locally
 
@@ -58,11 +131,19 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 Then open <http://localhost:8000> for the dashboard, or hit the JSON
 endpoints directly:
 
-- `GET /api/aggregated` — unified snapshot + per-pair consensus
+- `GET /api/snapshot` — cached aggregated snapshot + per-pair win rate
+  (the dashboard polls this)
+- `GET /api/aggregated` — full unified snapshot (verbose)
+- `GET /api/signal-feed?limit=N` — flat chronological list of freshest
+  signals with emitted-at + candle-time + lead/lag timing
+- `GET /api/pairs?category=&level=&direction=&q=` — filtered per-pair
+  listing with win rate
+- `GET /api/pair/{pair}?candle_limit=N` — single-pair drilldown:
+  signals + candles + app2 history + win rate
 - `GET /api/candles?pair=USDCOP_otc&limit=60` — per-pair candle history
-- `GET /api/backtest` — consensus accuracy backtest
-- `GET /api/snapshot` — cached aggregated snapshot (cheap read)
-- `GET /api/diag` — alignment diagnostics
+- `GET /api/backtest` — run fresh backtest (writes to cache)
+- `GET /api/backtest/status` — cache age + verdict summary (cheap)
+- `GET /api/diag` — alignment diagnostics (engineer-facing)
 
 ## Tests
 
@@ -71,14 +152,15 @@ pip install -r requirements.txt -r requirements-dev.txt
 python -m pytest tests/ -v
 ```
 
-The suite mirrors the original TypeScript tests:
+The suite covers:
 
 - `test_signal_normalize.py` — canonical pair keys, timestamp normalization,
   wall-clock string parsing across timezones, look-ahead rejection.
 - `test_candle_fetcher.py` — WIN/LOSS/DRAW grading logic.
 - `test_signal_aggregator.py` — integration tests with the 3 upstreams
-  faked, verifying cross-app alignment, NEUTRAL handling, App 2 fallback to
-  cached candles when live fails, etc.
+  faked, verifying cross-app alignment, NEUTRAL handling, App 2 fallback.
+- `test_new_dashboard.py` — new endpoints, per-pair win rate enrichment,
+  signal timing fields, backtest cache, pair filters.
 
 ## Environment variables
 
@@ -158,9 +240,6 @@ pip install -r requirements.txt -r requirements-dev.txt
 # Run tests
 python -m pytest tests/ -v
 
-# Lint (no unused imports, no undefined names)
-pyflakes app/ main.py tests/
-
 # Run the dev server with auto-reload
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
@@ -185,3 +264,7 @@ The adaptive snapshot poller (`snapshot_poller.py`) refreshes the cache every
 800ms during the first 12s of each candle (when new signals are arriving)
 and every 3s for the remainder of the minute — the original TS app's
 solution to the "signals appear 27-32s late" complaint.
+
+The backtest runner (`backtest_runner.py`) caches its result for 60s so the
+snapshot endpoint can read per-pair win rates without paying the ~3s
+backtest cost on every poll.
