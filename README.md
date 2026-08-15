@@ -121,6 +121,18 @@ Python port because nixpacks autodetected Node from a stale `package.json`
 and built the wrong image. The Dockerfile eliminates this ambiguity — the
 base image and the start command are both explicit.
 
+### Why no build-essential?
+
+The first Dockerfile attempt installed `build-essential` to compile
+`httptools` / `uvloop` (from `uvicorn[standard]`). Railway's smallest plan
+OOMs during that step — `runc run failed: container process is already dead`.
+
+The fix: every dependency ships pre-built Linux x86_64 wheels on PyPI. The
+Dockerfile uses `pip install --only-binary=:all:` to force pip to download
+wheels (and fail loudly if any package lacks one). `requirements.txt` uses
+plain `uvicorn` (no `[standard]` extras) — the bottleneck is the 3 upstream
+HTTP fetches, not the HTTP parser, so the perf hit is negligible.
+
 ### Local Docker
 
 ```bash

@@ -1,14 +1,18 @@
 # Master-Ai — Python edition
 # FastAPI + httpx + asyncio, mirror of the original Next.js/TypeScript dashboard.
 #
-# All versions are pinned for reproducible Railway builds. When bumping,
-# verify locally with `docker build .` before deploying.
+# All versions are pinned for reproducible Railway builds. Every package here
+# ships pre-built Linux x86_64 wheels on PyPI — no C compilation needed, so
+# the Dockerfile does NOT install build-essential (which OOMs Railway's
+# smallest plan).
 
 # Web framework — FastAPI + ASGI server.
-# `uvicorn[standard]` pulls in `httptools` (C-based HTTP parser) and `uvloop`
-# (C-based event loop) which are much faster than the pure-Python fallbacks.
+# Plain `uvicorn` (not `uvicorn[standard]`) — the `standard` extras pull in
+# `httptools` and `uvloop` which sometimes need to compile against glibc.
+# Plain uvicorn falls back to h11+asyncio which is plenty fast for this
+# workload (the bottleneck is the 3 upstream HTTP fetches, not the parser).
 fastapi==0.115.6
-uvicorn[standard]==0.34.0
+uvicorn==0.34.0
 
 # Template engine for the dashboard UI.
 jinja2==3.1.5

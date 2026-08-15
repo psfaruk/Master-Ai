@@ -1,38 +1,30 @@
 # Deterministic build for Railway / any container host.
-# Uses python:3.12-slim so the Python version is pinned exactly, and we
-# install deps into a virtualenv so the runtime image is minimal.
+#
+# Uses python:3.12-slim so the Python version is pinned exactly.
+# Designed to NOT need build-essential — we install only pre-built wheels,
+# which means the build fits in Railway's smallest plan (512MB RAM).
+#
+# If a future dep ever needs to compile C extensions, add a builder stage
+# with `build-essential` there — but keep the runtime stage slim.
 
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim
 
-# Build deps that some Python packages need at install time.
-#   build-essential — for C extensions (uvicorn's `standard` extras pull in
-#     `httptools` / `uvloop` which compile against the system toolchain)
-#   curl — used by Railway's healthcheck probes
+# curl is needed for Railway's HEALTHCHECK probe.
+# We do NOT install build-essential: pure-Python wheels + uvicorn's bundled
+# wheels (httptools, uvloop) cover everything we need.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential curl \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Install dependencies first so this layer is cached when only the code
-# changes. We use --no-cache-dir to keep the image small.
+# changes. --no-cache-dir keeps the layer small; --only-binary=:all: forces
+# pip to use pre-built wheels and fail loudly instead of trying to compile
+# (which would OOM on small plans).
 COPY requirements.txt .
 RUN python -m pip install --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
-
-# --- Runtime stage ---
-FROM python:3.12-slim
-
-# curl is needed for Railway's healthcheck probes.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
-# Copy installed packages from the builder stage.
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+    && pip install --no-cache-dir --only-binary=:all: -r requirements.txt
 
 # Copy the application code.
 COPY . .
