@@ -862,6 +862,19 @@ async def aggregate_signals(freshness_window_sec: int = 600) -> AggregatedRespon
         return_exceptions=True,
     )
 
+    # Log per-app fetch results at INFO level — this is the #1 way to debug
+    # "data is not coming" complaints. Without it the user only sees
+    # health=ok in the snapshot, with no clue WHY signals=0.
+    for app_id, r in zip(("app1", "app2", "app3"), results_fetch):
+        if isinstance(r, Exception):
+            logger.error("[aggregate] %s fetch raised: %s", app_id, r)
+        else:
+            fresh = sum(1 for s in r.signals if s.fresh)
+            logger.info(
+                "[aggregate] %s: health=%s raw=%d norm=%d fresh=%d detail=%s",
+                app_id, r.health, r.raw_count, len(r.signals), fresh, r.detail or r.error or "-",
+            )
+
     r1, r2, r3 = [
         r if isinstance(r, NormalizeResult)
         else NormalizeResult(health="down", error=str(r), detail=f"fetch raised: {r}")
