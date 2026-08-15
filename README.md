@@ -121,17 +121,26 @@ Python port because nixpacks autodetected Node from a stale `package.json`
 and built the wrong image. The Dockerfile eliminates this ambiguity — the
 base image and the start command are both explicit.
 
-### Why no build-essential?
+### Why no apt-get?
 
-The first Dockerfile attempt installed `build-essential` to compile
-`httptools` / `uvloop` (from `uvicorn[standard]`). Railway's smallest plan
-OOMs during that step — `runc run failed: container process is already dead`.
+The Dockerfile makes zero `apt-get install` calls. Two build failures in a
+row on Railway pushed us here:
 
-The fix: every dependency ships pre-built Linux x86_64 wheels on PyPI. The
-Dockerfile uses `pip install --only-binary=:all:` to force pip to download
-wheels (and fail loudly if any package lacks one). `requirements.txt` uses
-plain `uvicorn` (no `[standard]` extras) — the bottleneck is the 3 upstream
-HTTP fetches, not the HTTP parser, so the perf hit is negligible.
+1. `build-essential` → OOM (compiling httptools/uvloop killed the container)
+2. Plain `apt-get update` → also OOM'd/timed out (the Debian `trixie`
+   package index is ~10MB and downloading+parsing it on Railway's smallest
+   plan exceeded the build budget — `runc run failed: container process is
+   already dead`)
+
+The slim `python:3.12-slim` base image has everything we already need:
+Python 3.12, pip, the standard library. Anything else (TLS certs, HTTP
+client, framework) comes from PyPI as pre-built wheels.
+
+For TLS verification specifically we depend on **`certifi`** rather than
+the OS `ca-certificates` package — `app/http_fetcher.py` builds an
+`ssl.SSLContext` from `certifi.where()` and passes it to httpx explicitly.
+This makes upstream HTTPS calls work even in minimal images that don't
+ship `ca-certificates`.
 
 ### Local Docker
 

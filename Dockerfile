@@ -1,27 +1,26 @@
-# Deterministic build for Railway / any container host.
+# Minimal deterministic build for Railway / any container host.
 #
-# Uses python:3.12-slim so the Python version is pinned exactly.
-# Designed to NOT need build-essential — we install only pre-built wheels,
-# which means the build fits in Railway's smallest plan (512MB RAM).
+# Design goals:
+#   - NO apt-get (the Debian trixie package index is ~10MB and times out /
+#     OOMs on Railway's smallest plan during build).
+#   - NO build-essential (compiling httptools/uvloop OOMs the build).
+#   - Everything must ship as a pre-built Linux x86_64 wheel.
 #
-# If a future dep ever needs to compile C extensions, add a builder stage
-# with `build-essential` there — but keep the runtime stage slim.
+# python:3.12-slim already ships:
+#   - ca-certificates at /etc/ssl/certs/ca-certificates.crt
+#     → httpx can verify TLS to upstream apps out of the box.
+#   - No curl, but we don't need it: Railway probes /health via its own
+#     external HTTP probe (configured in railway.json), not via a Docker
+#     HEALTHCHECK. So no in-container HTTP client is required.
 
 FROM python:3.12-slim
-
-# curl is needed for Railway's HEALTHCHECK probe.
-# We do NOT install build-essential: pure-Python wheels + uvicorn's bundled
-# wheels (httptools, uvloop) cover everything we need.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Install dependencies first so this layer is cached when only the code
-# changes. --no-cache-dir keeps the layer small; --only-binary=:all: forces
-# pip to use pre-built wheels and fail loudly instead of trying to compile
-# (which would OOM on small plans).
+# changes. --no-cache-dir keeps the layer small; --only-binary=:all:
+# forces pip to use pre-built wheels and fail loudly instead of trying to
+# compile (which would OOM on small plans).
 COPY requirements.txt .
 RUN python -m pip install --upgrade pip \
     && pip install --no-cache-dir --only-binary=:all: -r requirements.txt
@@ -37,9 +36,10 @@ ENV PORT=8000 \
 
 EXPOSE 8000
 
-# Healthcheck — Railway will use this to know when the container is ready.
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -fsS "http://127.0.0.1:${PORT:-8000}/health" || exit 1
+# No Docker HEALTHCHECK — Railway probes /health externally via the
+# healthcheckPath set in railway.json. Adding one here would require
+# installing curl, which requires apt-get, which fails on Railway's
+# smallest plan.
 
 # Run uvicorn directly — no extra shell wrapper needed.
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]

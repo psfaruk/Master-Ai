@@ -22,6 +22,12 @@ itsdangerous==2.2.0
 # talks to the 3 upstream Quotex signal apps.
 httpx==0.28.1
 
+# TLS root certificates — httpx uses this for TLS verification when the
+# base Docker image (python:3.12-slim) doesn't ship ca-certificates. We
+# install it explicitly so we never have to `apt-get install ca-certificates`
+# (which is what was timing out the Railway build).
+certifi==2024.12.14
+
 # Pydantic v2 — bundled with FastAPI 0.100+ but we pin it for stability.
 pydantic==2.10.4
 
