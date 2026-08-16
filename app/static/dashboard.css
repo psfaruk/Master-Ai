@@ -56,6 +56,7 @@ html, body {
   font-size: 14px;
   line-height: 1.5;
   min-height: 100vh;
+  overflow-x: hidden;
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
 }
@@ -853,6 +854,14 @@ a { color: var(--blue); }
   padding: 0 0 calc(var(--bottomnav-h) + 16px);
   max-width: none;
   position: relative;
+  /* The .sp-glow ambient background blobs below are deliberately
+     oversized and offset past this section's edges (that's what makes
+     them look like a soft glow instead of a hard-edged circle). Without
+     clipping them here, they silently make the WHOLE PAGE ~120px wider
+     than the viewport on phones — the page then scrolls horizontally to
+     show that empty blurred margin, which reads as broken layout /
+     "extra empty space on the side". */
+  overflow-x: hidden;
 }
 
 /* Background grid + glow — scoped to signals tab only */
