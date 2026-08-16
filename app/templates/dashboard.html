@@ -353,12 +353,33 @@
 
     <!-- ============ HISTORY ============ -->
     <section id="tab-history" class="tab-panel">
-      <div class="history-tabs">
-        <button class="history-tab history-tab--active" data-subtab="backtest">Backtest</button>
-        <button class="history-tab" data-subtab="perpair">Per-Pair Stats</button>
-        <button class="history-tab" data-subtab="apppair">App Pair Leaders</button>
-        <button class="history-tab" data-subtab="drilldown">Pair Drilldown</button>
+      <!-- Folder-menu landing view — tap a card to open that function -->
+      <div class="folder-grid" id="history-folder-grid">
+        <button class="folder-card" data-folder="backtest" type="button">
+          <span class="folder-card__icon folder-card__icon--blue"><i class="fas fa-chart-line"></i></span>
+          <span class="folder-card__title">Backtest</span>
+          <span class="folder-card__desc">Consensus accuracy over the last 6 hours</span>
+        </button>
+        <button class="folder-card" data-folder="perpair" type="button">
+          <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-table-list"></i></span>
+          <span class="folder-card__title">Per-Pair Stats</span>
+          <span class="folder-card__desc">Win rate per pair, by app combination</span>
+        </button>
+        <button class="folder-card" data-folder="apppair" type="button">
+          <span class="folder-card__icon folder-card__icon--violet"><i class="fas fa-users"></i></span>
+          <span class="folder-card__title">App Pair Leaders</span>
+          <span class="folder-card__desc">Which pair of apps performs best, and where</span>
+        </button>
+        <button class="folder-card" data-folder="drilldown" type="button">
+          <span class="folder-card__icon folder-card__icon--amber"><i class="fas fa-magnifying-glass-chart"></i></span>
+          <span class="folder-card__title">Pair Drilldown</span>
+          <span class="folder-card__desc">Candle history + signals for one pair</span>
+        </button>
       </div>
+
+      <!-- Detail view — hidden until a folder card above is tapped -->
+      <div class="folder-detail" id="history-folder-detail" hidden>
+        <button class="folder-back" id="history-folder-back" type="button"><i class="fas fa-arrow-left"></i> Back to History</button>
 
       <!-- Backtest sub-tab -->
       <div class="history-panel history-panel--active" id="history-backtest">
@@ -387,24 +408,26 @@
             <span class="panel__meta" id="perpair-meta">—</span>
           </div>
           <div class="panel__body panel__body--scroll">
-            <table class="pair-table pair-table--interactive">
-              <thead>
-                <tr>
-                  <th>★</th>
-                  <th>Pair</th>
-                  <th>Cat</th>
-                  <th>Overall W/L</th>
-                  <th>Win %</th>
-                  <th>app1+app2</th>
-                  <th>app1+app3</th>
-                  <th>app2+app3</th>
-                  <th>all-3</th>
-                </tr>
-              </thead>
-              <tbody id="perpair-table-body">
-                <tr><td colspan="9" class="placeholder">Loading per-pair stats…</td></tr>
-              </tbody>
-            </table>
+            <div class="table-scroll">
+              <table class="pair-table pair-table--interactive">
+                <thead>
+                  <tr>
+                    <th>★</th>
+                    <th>Pair</th>
+                    <th>Cat</th>
+                    <th>Overall W/L</th>
+                    <th>Win %</th>
+                    <th>app1+app2</th>
+                    <th>app1+app3</th>
+                    <th>app2+app3</th>
+                    <th>all-3</th>
+                  </tr>
+                </thead>
+                <tbody id="perpair-table-body">
+                  <tr><td colspan="9" class="placeholder">Loading per-pair stats…</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
@@ -438,153 +461,202 @@
           </div>
         </div>
       </div>
+      </div><!-- /#history-folder-detail -->
     </section>
 
     <!-- ============ SETTINGS ============ -->
     <section id="tab-settings" class="tab-panel">
-      <div class="grid-2col">
+      <!-- Folder-menu landing view — tap a card to open that settings group -->
+      <div class="folder-grid" id="settings-folder-grid">
+        <button class="folder-card" data-folder="general" type="button">
+          <span class="folder-card__icon folder-card__icon--blue"><i class="fas fa-sliders"></i></span>
+          <span class="folder-card__title">General</span>
+          <span class="folder-card__desc">Theme, language, clock, time format</span>
+        </button>
+        <button class="folder-card" data-folder="realtime" type="button">
+          <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-bolt"></i></span>
+          <span class="folder-card__title">Real-time Refresh</span>
+          <span class="folder-card__desc">Polling mode, feed size, sound, notifications</span>
+        </button>
+        <button class="folder-card" data-folder="filters" type="button">
+          <span class="folder-card__icon folder-card__icon--violet"><i class="fas fa-filter"></i></span>
+          <span class="folder-card__title">Trading Filters</span>
+          <span class="folder-card__desc">Min win rate, freshness, conflicts, favorites</span>
+        </button>
+        <button class="folder-card" data-folder="offsets" type="button">
+          <span class="folder-card__icon folder-card__icon--amber"><i class="fas fa-clock"></i></span>
+          <span class="folder-card__title">App Candle Offsets</span>
+          <span class="folder-card__desc">Per-app candle alignment (advanced)</span>
+        </button>
+        <button class="folder-card" data-folder="diagnostics" type="button">
+          <span class="folder-card__icon folder-card__icon--red"><i class="fas fa-stethoscope"></i></span>
+          <span class="folder-card__title">Diagnostics</span>
+          <span class="folder-card__desc">Engineer-facing alignment diagnostics</span>
+        </button>
+        <button class="folder-card" data-folder="about" type="button">
+          <span class="folder-card__icon folder-card__icon--yellow"><i class="fas fa-circle-info"></i></span>
+          <span class="folder-card__title">Data &amp; About</span>
+          <span class="folder-card__desc">Clear cache, reset settings, version, GitHub</span>
+        </button>
+      </div>
 
-        <div class="panel">
-          <div class="panel__header"><h2>General</h2></div>
-          <div class="panel__body">
-            <div class="setting-row">
-              <label for="set-theme">Theme</label>
-              <select id="set-theme">
-                <option value="dark">Dark (default)</option>
-                <option value="light">Light</option>
-              </select>
-            </div>
-            <div class="setting-row">
-              <label for="set-lang">Language</label>
-              <select id="set-lang">
-                <option value="en">English</option>
-                <option value="bn">বাংলা (Bangla)</option>
-              </select>
-            </div>
-            <div class="setting-row">
-              <label for="set-tz">Clock display</label>
-              <select id="set-tz">
-                <option value="utc">UTC only</option>
-                <option value="local">Local only</option>
-                <option value="both" selected>Both UTC + Local</option>
-              </select>
-            </div>
-            <div class="setting-row">
-              <label for="set-timefmt">Time format</label>
-              <select id="set-timefmt">
-                <option value="24" selected>24-hour</option>
-                <option value="12">12-hour (AM/PM)</option>
-              </select>
+      <!-- Detail view — hidden until a folder card above is tapped -->
+      <div class="folder-detail" id="settings-folder-detail" hidden>
+        <button class="folder-back" id="settings-folder-back" type="button"><i class="fas fa-arrow-left"></i> Back to Settings</button>
+
+        <div class="settings-panel settings-panel--active" id="settings-general">
+          <div class="panel">
+            <div class="panel__header"><h2>General</h2></div>
+            <div class="panel__body">
+              <div class="setting-row">
+                <label for="set-theme">Theme</label>
+                <select id="set-theme">
+                  <option value="dark">Dark (default)</option>
+                  <option value="light">Light</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <label for="set-lang">Language</label>
+                <select id="set-lang">
+                  <option value="en">English</option>
+                  <option value="bn">বাংলা (Bangla)</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <label for="set-tz">Clock display</label>
+                <select id="set-tz">
+                  <option value="utc">UTC only</option>
+                  <option value="local">Local only</option>
+                  <option value="both" selected>Both UTC + Local</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <label for="set-timefmt">Time format</label>
+                <select id="set-timefmt">
+                  <option value="24" selected>24-hour</option>
+                  <option value="12">12-hour (AM/PM)</option>
+                </select>
+              </div>
             </div>
           </div>
         </div>
 
-        <div class="panel">
-          <div class="panel__header"><h2>Real-time Refresh</h2></div>
-          <div class="panel__body">
-            <div class="setting-row">
-              <label for="set-poll">Polling mode</label>
-              <select id="set-poll">
-                <option value="adaptive" selected>Adaptive (burst 1s, idle 3s)</option>
-                <option value="1">Every 1 second (aggressive)</option>
-                <option value="3">Every 3 seconds</option>
-                <option value="5">Every 5 seconds</option>
-                <option value="10">Every 10 seconds (battery saver)</option>
-              </select>
-            </div>
-            <div class="setting-row">
-              <label for="set-feed-size">Signal feed size</label>
-              <select id="set-feed-size">
-                <option value="20">20 items</option>
-                <option value="50" selected>50 items</option>
-                <option value="100">100 items</option>
-              </select>
-            </div>
-            <div class="setting-row">
-              <label for="set-sound">Sound on 3-agree</label>
-              <input type="checkbox" id="set-sound">
-            </div>
-            <div class="setting-row">
-              <label for="set-notify">Browser notifications</label>
-              <input type="checkbox" id="set-notify">
-            </div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel__header"><h2>Trading Filters</h2></div>
-          <div class="panel__body">
-            <div class="setting-row">
-              <label for="set-min-wr">Min win rate %</label>
-              <input type="number" id="set-min-wr" min="0" max="100" step="1" value="0">
-            </div>
-            <div class="setting-row">
-              <label for="set-only-fresh">Hide signals older than (sec)</label>
-              <input type="number" id="set-only-fresh" min="0" max="600" step="5" value="0">
-            </div>
-            <div class="setting-row">
-              <label for="set-hide-conflicts">Hide conflicts</label>
-              <input type="checkbox" id="set-hide-conflicts">
-            </div>
-            <div class="setting-row">
-              <label>Favorites</label>
-              <div id="favorites-list" class="favorites-list"><span class="placeholder">No favorites yet — tap ★ next to a pair.</span></div>
+        <div class="settings-panel" id="settings-realtime">
+          <div class="panel">
+            <div class="panel__header"><h2>Real-time Refresh</h2></div>
+            <div class="panel__body">
+              <div class="setting-row">
+                <label for="set-poll">Polling mode</label>
+                <select id="set-poll">
+                  <option value="adaptive" selected>Adaptive (burst 1s, idle 3s)</option>
+                  <option value="1">Every 1 second (aggressive)</option>
+                  <option value="3">Every 3 seconds</option>
+                  <option value="5">Every 5 seconds</option>
+                  <option value="10">Every 10 seconds (battery saver)</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <label for="set-feed-size">Signal feed size</label>
+                <select id="set-feed-size">
+                  <option value="20">20 items</option>
+                  <option value="50" selected>50 items</option>
+                  <option value="100">100 items</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <label for="set-sound">Sound on 3-agree</label>
+                <input type="checkbox" id="set-sound">
+              </div>
+              <div class="setting-row">
+                <label for="set-notify">Browser notifications</label>
+                <input type="checkbox" id="set-notify">
+              </div>
             </div>
           </div>
         </div>
 
-        <div class="panel">
-          <div class="panel__header"><h2>App Candle Offsets</h2></div>
-          <div class="panel__body">
-            <p class="hint">Per-app candle offset, in whole candles. Set this only if /api/diag reports a consistent non-zero offset between two apps.</p>
-            <div class="setting-row">
-              <label for="set-off1">App 1 (Minimum Pair)</label>
-              <select id="set-off1">
-                <option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option>
-                <option value="0" selected>0 (default)</option>
-                <option value="1">1</option><option value="2">2</option><option value="3">3</option>
-              </select>
+        <div class="settings-panel" id="settings-filters">
+          <div class="panel">
+            <div class="panel__header"><h2>Trading Filters</h2></div>
+            <div class="panel__body">
+              <div class="setting-row">
+                <label for="set-min-wr">Min win rate %</label>
+                <input type="number" id="set-min-wr" min="0" max="100" step="1" value="0">
+              </div>
+              <div class="setting-row">
+                <label for="set-only-fresh">Hide signals older than (sec)</label>
+                <input type="number" id="set-only-fresh" min="0" max="600" step="5" value="0">
+              </div>
+              <div class="setting-row">
+                <label for="set-hide-conflicts">Hide conflicts</label>
+                <input type="checkbox" id="set-hide-conflicts">
+              </div>
+              <div class="setting-row">
+                <label>Favorites</label>
+                <div id="favorites-list" class="favorites-list"><span class="placeholder">No favorites yet — tap ★ next to a pair.</span></div>
+              </div>
             </div>
-            <div class="setting-row">
-              <label for="set-off2">App 2 (Binary Signal)</label>
-              <select id="set-off2">
-                <option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option>
-                <option value="0" selected>0 (default)</option>
-                <option value="1">1</option><option value="2">2</option><option value="3">3</option>
-              </select>
-            </div>
-            <div class="setting-row">
-              <label for="set-off3">App 3 (OTC Live)</label>
-              <select id="set-off3">
-                <option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option>
-                <option value="0" selected>0 (default)</option>
-                <option value="1">1</option><option value="2">2</option><option value="3">3</option>
-              </select>
-            </div>
-            <p class="hint">Note: changing offsets here is informational only — to actually apply offsets server-side, set the APP1/2/3_CANDLE_OFFSET environment variables on Railway.</p>
           </div>
         </div>
 
-        <div class="panel">
-          <div class="panel__header"><h2>Diagnostics</h2></div>
-          <div class="panel__body">
-            <p class="hint">Engineer-facing alignment diagnostics. Hidden from the main navigation but kept here for power users.</p>
-            <button class="btn btn--ghost" id="btn-refresh-diag">Load diagnostics</button>
-            <div id="diag-content" style="margin-top:12px;"></div>
+        <div class="settings-panel" id="settings-offsets">
+          <div class="panel">
+            <div class="panel__header"><h2>App Candle Offsets</h2></div>
+            <div class="panel__body">
+              <p class="hint">Per-app candle offset, in whole candles. Set this only if /api/diag reports a consistent non-zero offset between two apps.</p>
+              <div class="setting-row">
+                <label for="set-off1">App 1 (Minimum Pair)</label>
+                <select id="set-off1">
+                  <option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option>
+                  <option value="0" selected>0 (default)</option>
+                  <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <label for="set-off2">App 2 (Binary Signal)</label>
+                <select id="set-off2">
+                  <option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option>
+                  <option value="0" selected>0 (default)</option>
+                  <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <label for="set-off3">App 3 (OTC Live)</label>
+                <select id="set-off3">
+                  <option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option>
+                  <option value="0" selected>0 (default)</option>
+                  <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+                </select>
+              </div>
+              <p class="hint">Note: changing offsets here is informational only — to actually apply offsets server-side, set the APP1/2/3_CANDLE_OFFSET environment variables on Railway.</p>
+            </div>
           </div>
         </div>
 
-        <div class="panel">
-          <div class="panel__header"><h2>Data &amp; About</h2></div>
-          <div class="panel__body">
-            <div class="setting-row">
-              <button class="btn btn--ghost" id="btn-clear-cache">Clear local cache</button>
-              <button class="btn btn--ghost" id="btn-reset-settings">Reset settings</button>
+        <div class="settings-panel" id="settings-diagnostics">
+          <div class="panel">
+            <div class="panel__header"><h2>Diagnostics</h2></div>
+            <div class="panel__body">
+              <p class="hint">Engineer-facing alignment diagnostics. Hidden from the main navigation but kept here for power users.</p>
+              <button class="btn btn--ghost" id="btn-refresh-diag">Load diagnostics</button>
+              <div id="diag-content" style="margin-top:12px;"></div>
             </div>
-            <div class="setting-row about-row">
-              <span>Master-Ai v<span id="version">{{ version }}</span></span>
-              <span>Python · FastAPI · httpx</span>
-              <span><a href="https://github.com/psfaruk/Master-Ai" target="_blank" rel="noopener">GitHub</a></span>
+          </div>
+        </div>
+
+        <div class="settings-panel" id="settings-about">
+          <div class="panel">
+            <div class="panel__header"><h2>Data &amp; About</h2></div>
+            <div class="panel__body">
+              <div class="setting-row">
+                <button class="btn btn--ghost" id="btn-clear-cache">Clear local cache</button>
+                <button class="btn btn--ghost" id="btn-reset-settings">Reset settings</button>
+              </div>
+              <div class="setting-row about-row">
+                <span>Master-Ai v<span id="version">{{ version }}</span></span>
+                <span>Python · FastAPI · httpx</span>
+                <span><a href="https://github.com/psfaruk/Master-Ai" target="_blank" rel="noopener">GitHub</a></span>
+              </div>
             </div>
           </div>
         </div>

@@ -775,6 +775,7 @@ async def get_diag(
             "offsets.modalOffsetCandles should be 0 for every app pair. A stable non-zero value means the apps label candles differently — set APP{N}_CANDLE_OFFSET to correct it.",
             "pairOverlap.onlyIn shows pair names one app has and the other doesn't — after canonicalization these should only be genuinely different assets.",
             "app2Cache.entries growing over time confirms the App 2 history poller is recording candles.",
+            "apps[].rawRows/normalizedSignals can stay flat even when an app is perfectly healthy — some upstreams (e.g. App 3's historical endpoint) return a fixed-size window of their newest rows, so the count plateaus while the content keeps rotating fresh underneath. Trust apps[].newestCandleLagCandles (and the freshness badge on this page) to judge whether an app is actually stale, not the raw count.",
         ],
     })
 
