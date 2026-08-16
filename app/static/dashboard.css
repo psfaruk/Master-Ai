@@ -1108,7 +1108,10 @@ a { color: var(--blue); }
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
-  min-width: 1000px;
+  /* min-width: 1000px REMOVED — was forcing horizontal scroll on every
+     mobile viewport. The table now flows to its natural width and only
+     scrolls horizontally when columns truly cannot fit. See the
+     MOBILE OPTIMIZATIONS block at the bottom for the stacked-card layout. */
   font-family: 'Space Grotesk', -apple-system, sans-serif;
 }
 #tab-signals .sp-th {
@@ -1448,9 +1451,10 @@ a { color: var(--blue); }
 @media (max-width: 768px) {
   #tab-signals .sp-detail-inner { grid-template-columns: 1fr; gap: 12px; }
   #tab-signals .sp-detail-signal { grid-template-columns: 100px 50px 60px 1fr 60px; font-size: 10px; }
-  /* Candle UTC repeats the "Final + Entry" cell's entry time, so it's the
-     one column safe to drop for space — no data is lost. */
-  #tab-signals .sp-table { min-width: 760px; }
+  /* On tablet, keep the table structure but allow horizontal scroll.
+     The min-width: 760px is intentionally removed in favor of the
+     responsive rule below — see the MOBILE OPTIMIZATIONS block at the
+     bottom of this file. */
   #tab-signals .sp-th:nth-child(3),
   #tab-signals .sp-table tbody td:nth-child(3) { display: none; } /* candle UTC (duplicated in Final + Entry) */
 }
@@ -1458,15 +1462,293 @@ a { color: var(--blue); }
   #tab-signals .sp-stats-bar { padding: 10px 12px; gap: 8px; }
   #tab-signals .sp-filter-section { padding: 10px 12px; }
   #tab-signals .sp-table-section { padding: 0 12px 16px; }
-  #tab-signals .sp-stat-card { min-width: 118px; padding: 10px 12px; }
-  #tab-signals .sp-filter-trigger { padding: 7px 10px; min-width: 76px; }
-  #tab-signals .sp-filter-trigger.narrow { min-width: 60px; }
-  #tab-signals .sp-filter-input.search { min-width: 110px; }
-  #tab-signals .sp-table { min-width: 620px; font-size: 12px; }
+  #tab-signals .sp-stat-card { min-width: 100px; padding: 8px 10px; }
+  #tab-signals .sp-filter-trigger { padding: 7px 10px; min-width: 70px; }
+  #tab-signals .sp-filter-trigger.narrow { min-width: 56px; }
+  #tab-signals .sp-filter-input.search { min-width: 100px; }
+  /* Removed: min-width: 620px on .sp-table. The table now flows naturally —
+     see the MOBILE OPTIMIZATIONS block at the bottom of this file. */
+  #tab-signals .sp-table { font-size: 12px; }
   #tab-signals .sp-table tbody td { padding: 8px 8px; }
 }
 @media (max-width: 420px) {
   #tab-signals .sp-stats-bar { padding: 8px 10px; }
   #tab-signals .sp-filter-section { padding: 8px 10px; }
   #tab-signals .sp-table-section { padding: 0 10px 14px; }
+}
+
+/* ============================================================
+   FILTER TABLE — clean grid layout
+   Replaces the old flex-wrap row with a 4-column grid
+   (2 columns of label/control pairs) so filters are always
+   aligned and don't waste vertical space on phones.
+   ============================================================ */
+#tab-signals .sp-filter-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr max-content 1fr;
+  gap: 8px 12px;
+  align-items: end;
+}
+#tab-signals .sp-filter-grid .sp-filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+#tab-signals .sp-filter-grid .sp-filter-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+#tab-signals .sp-filter-grid .sp-active-filters {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  min-height: 0;
+}
+@media (max-width: 768px) {
+  /* On tablet, drop to 2 columns (one label/control per row) */
+  #tab-signals .sp-filter-grid {
+    grid-template-columns: max-content 1fr;
+  }
+}
+
+/* ============================================================
+   APP-PAIR STATS — for "Win Rate by App Pair" sections
+   (Signals expanded row + History "App Pair Leaders" sub-tab)
+   ============================================================ */
+.sp-app-pair-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+.sp-app-pair-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sp-app-pair-card__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+.sp-app-pair-card__wr {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--blue);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.sp-app-pair-card__wr.none { color: var(--text-muted); }
+.sp-app-pair-card__wr.high { color: var(--emerald); }
+.sp-app-pair-card__wr.low { color: var(--red); }
+.sp-app-pair-card__sub {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.sp-app-pair-leaderboard {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 8px;
+}
+.sp-app-pair-leader-col {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sp-app-pair-leader-col__head {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+  font-weight: 700;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.sp-app-pair-leader-col__wr {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--blue);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.sp-app-pair-leader-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.sp-app-pair-leader-row:hover { background: rgba(59, 130, 246, 0.05); }
+.sp-app-pair-leader-row__pair {
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sp-app-pair-leader-row__wr {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--emerald);
+  font-weight: 700;
+}
+.sp-app-pair-leader-row__wr.low { color: var(--red); }
+.sp-app-pair-leader-row__wr.mid { color: var(--amber); }
+.sp-app-pair-leader-row__meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+/* ============================================================
+   MOBILE OPTIMIZATIONS — stacked card layout for tables
+   On viewports ≤ 560px, the wide Signals table and the
+   History Per-Pair Stats table convert from <table> to a
+   stacked-card layout (each row becomes a self-contained card
+   with the column name shown as a label prefix). This eliminates
+   horizontal scroll entirely on phones and makes every column
+   visible without losing data.
+   ============================================================ */
+@media (max-width: 560px) {
+  /* Signals tab — table → stacked cards */
+  #tab-signals .sp-table-scroll {
+    overflow-x: visible;
+    max-height: none;
+    overflow-y: visible;
+  }
+  #tab-signals .sp-table,
+  #tab-signals .sp-table thead,
+  #tab-signals .sp-table tbody,
+  #tab-signals .sp-table tr,
+  #tab-signals .sp-table th,
+  #tab-signals .sp-table td {
+    display: block;
+    width: 100% !important;
+  }
+  #tab-signals .sp-table thead {
+    display: none;
+  }
+  #tab-signals .sp-table tbody tr {
+    margin-bottom: 10px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 8px 10px;
+    background: var(--bg-elev) !important;
+    animation: none;
+  }
+  #tab-signals .sp-table tbody tr.is-expanded {
+    background: var(--bg-card) !important;
+  }
+  #tab-signals .sp-table tbody td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border: none;
+    white-space: normal;
+    text-align: right;
+  }
+  #tab-signals .sp-table tbody td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    font-weight: 700;
+    text-align: left;
+    padding-right: 8px;
+  }
+  #tab-signals .sp-table tbody td:first-child {
+    /* Favorite star — full row, centered */
+    justify-content: center;
+    padding: 4px 0;
+    border-bottom: 1px dashed var(--border);
+  }
+  #tab-signals .sp-table tbody td:first-child::before {
+    display: none;
+  }
+  #tab-signals .sp-table tbody td[data-label="Expand"] {
+    justify-content: center;
+    padding: 4px 0;
+    border-top: 1px dashed var(--border);
+  }
+
+  /* History — Per-Pair Stats table → stacked cards */
+  #tab-history .pair-table,
+  #tab-history .pair-table thead,
+  #tab-history .pair-table tbody,
+  #tab-history .pair-table tr,
+  #tab-history .pair-table th,
+  #tab-history .pair-table td {
+    display: block;
+    width: 100% !important;
+  }
+  #tab-history .pair-table thead { display: none; }
+  #tab-history .pair-table tbody tr {
+    margin-bottom: 10px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 8px 10px;
+    background: var(--bg-elev) !important;
+  }
+  #tab-history .pair-table tbody td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border: none;
+    text-align: right;
+    font-size: 12px;
+  }
+  #tab-history .pair-table tbody td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    font-weight: 700;
+    text-align: left;
+    padding-right: 8px;
+  }
+  /* Reset any earlier column-hiding rules that targeted ≥ 720px screens */
+  #tab-history .pair-table th, #tab-history .pair-table td { display: block !important; }
+
+  /* History — App Pair Leaders grid stacks to 1 column */
+  .sp-app-pair-leaderboard {
+    grid-template-columns: 1fr;
+  }
+  .sp-app-pair-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 380px) {
+  /* Very narrow phones — stack app-pair cards in a single column */
+  .sp-app-pair-grid { grid-template-columns: 1fr; }
 }

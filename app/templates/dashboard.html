@@ -159,9 +159,12 @@
         <!-- Populated by JS — renderSignalStats() -->
       </div>
 
-      <!-- Filter section — comprehensive, all columns filterable -->
+      <!-- Filter section — comprehensive, all columns filterable.
+           Laid out as a 2-pair grid (label/control × 2) so filters
+           are aligned like a table row, and collapse to 1 column on
+           narrow phones (see .sp-filter-grid in dashboard.css). -->
       <section class="sp-filter-section">
-        <div class="sp-filter-row">
+        <div class="sp-filter-grid">
           <div class="sp-filter-group">
             <div class="sp-filter-label">Market Type</div>
             <div class="dropdown">
@@ -195,6 +198,20 @@
           <div class="sp-filter-group">
             <div class="sp-filter-label">Pair Name</div>
             <input type="text" class="sp-filter-input search" id="filter-pair-sp" placeholder="Search pair..." autocomplete="off">
+          </div>
+          <div class="sp-filter-group">
+            <div class="sp-filter-label">Final Prediction</div>
+            <div class="dropdown">
+              <button class="dropdown__trigger sp-filter-trigger narrow" id="dir-trigger" type="button">
+                <span id="dir-label">All</span>
+                <span class="dropdown__caret">▾</span>
+              </button>
+              <ul class="dropdown__menu" id="dir-menu" role="menu">
+                <li role="menuitem" data-value="">All</li>
+                <li role="menuitem" data-value="CALL">CALL</li>
+                <li role="menuitem" data-value="PUT">PUT</li>
+              </ul>
+            </div>
           </div>
           <div class="sp-filter-group">
             <div class="sp-filter-label">App 1 Prediction</div>
@@ -256,20 +273,6 @@
             </div>
           </div>
           <div class="sp-filter-group">
-            <div class="sp-filter-label">Final Prediction</div>
-            <div class="dropdown">
-              <button class="dropdown__trigger sp-filter-trigger narrow" id="dir-trigger" type="button">
-                <span id="dir-label">All</span>
-                <span class="dropdown__caret">▾</span>
-              </button>
-              <ul class="dropdown__menu" id="dir-menu" role="menu">
-                <li role="menuitem" data-value="">All</li>
-                <li role="menuitem" data-value="CALL">CALL</li>
-                <li role="menuitem" data-value="PUT">PUT</li>
-              </ul>
-            </div>
-          </div>
-          <div class="sp-filter-group">
             <div class="sp-filter-label">Win Rate (60m)</div>
             <div class="dropdown">
               <button class="dropdown__trigger sp-filter-trigger" id="wr60-trigger" type="button">
@@ -310,9 +313,9 @@
               <i class="fas fa-undo"></i> Reset
             </button>
           </div>
+          <!-- Active filter tags — rendered into the grid as a full-width row -->
+          <div class="sp-active-filters" id="sp-active-filters"></div>
         </div>
-        <!-- Active filter tags -->
-        <div class="sp-active-filters" id="sp-active-filters"></div>
       </section>
 
       <!-- Excel-like table -->
@@ -353,6 +356,7 @@
       <div class="history-tabs">
         <button class="history-tab history-tab--active" data-subtab="backtest">Backtest</button>
         <button class="history-tab" data-subtab="perpair">Per-Pair Stats</button>
+        <button class="history-tab" data-subtab="apppair">App Pair Leaders</button>
         <button class="history-tab" data-subtab="drilldown">Pair Drilldown</button>
       </div>
 
@@ -372,7 +376,10 @@
         </div>
       </div>
 
-      <!-- Per-pair stats sub-tab -->
+      <!-- Per-pair stats sub-tab — now includes per-app-pair columns:
+           app1+app2, app1+app3, app2+app3, all-3 win/loss per pair.
+           Lets the user see at a glance WHICH pair of apps performs best
+           on each pair. -->
       <div class="history-panel" id="history-perpair">
         <div class="panel">
           <div class="panel__header">
@@ -388,15 +395,31 @@
                   <th>Cat</th>
                   <th>Overall W/L</th>
                   <th>Win %</th>
-                  <th>3-agree W/L</th>
-                  <th>2-agree W/L</th>
-                  <th>1-only W/L</th>
+                  <th>app1+app2</th>
+                  <th>app1+app3</th>
+                  <th>app2+app3</th>
+                  <th>all-3</th>
                 </tr>
               </thead>
               <tbody id="perpair-table-body">
-                <tr><td colspan="8" class="placeholder">Loading per-pair stats…</td></tr>
+                <tr><td colspan="9" class="placeholder">Loading per-pair stats…</td></tr>
               </tbody>
             </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- App Pair Leaders sub-tab — for each app-subset (singletons + the
+           three 2-app pairs + all-3-agree), shows the global aggregate
+           win rate and the top pairs they perform best on. -->
+      <div class="history-panel" id="history-apppair">
+        <div class="panel">
+          <div class="panel__header">
+            <h2>App Pair Leaders</h2>
+            <span class="panel__meta" id="apppair-meta">—</span>
+          </div>
+          <div class="panel__body" id="apppair-content">
+            <p class="placeholder">Loading app-pair leaderboards…</p>
           </div>
         </div>
       </div>

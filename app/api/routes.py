@@ -372,6 +372,10 @@ async def get_pairs(
             "winRate": wr.get("winRate"),
             "gradedTotal": wr.get("gradedTotal", 0),
             "levelStats": wr.get("levels", {}),
+            # Per-app-pair win rate (app1+app2, app1+app3, app2+app3, all-3,
+            # plus singletons) from the cached backtest. Surfaced in the
+            # Signals tab expanded row and the History "App Pair Leaders" sub-tab.
+            "appPairStats": wr.get("appPairStats", {}),
             # Other stats
             "freshCount": p.fresh_count,
             "callCount": p.call_count,
@@ -469,6 +473,9 @@ async def get_pair_detail(
         "winRate": wr.get("winRate"),
         "gradedTotal": wr.get("gradedTotal", 0),
         "levelStats": wr.get("levels", {}),
+        # Per-pair × per-app-subset win rate (app1, app2, app3, app1+app2,
+        # app1+app3, app2+app3, app1+app2+app3). Surfaced in the drawer.
+        "appPairStats": wr.get("appPairStats", {}),
         "now": now_sec,
     })
 
@@ -547,6 +554,61 @@ async def get_backtest_status(request: Request):
         "totalClusters": cached.get("totalClusters") if cached else 0,
         "perPairCount": len(cached.get("perPair", [])) if cached else 0,
         "timestamp": cached.get("timestamp") if cached else None,
+    })
+
+
+@router.get("/app-pair-leaders")
+async def get_app_pair_leaders(request: Request):
+    """Per-app-subset leaderboard from the cached backtest.
+
+    For each canonical app subset (``app1``, ``app2``, ``app3``,
+    ``app1+app2``, ``app1+app3``, ``app2+app3``, ``app1+app2+app3``),
+    returns the top 10 pairs by graded win rate (min 3 graded samples).
+
+    Also returns a global aggregate per app subset, so the dashboard can
+    answer both:
+
+        - "Which pair of apps performs best globally?"
+        - "For each pair of apps, which pairs are they best on?"
+    """
+    start_app2_cache_poller()
+    start_candle_poller()
+    cached = get_cached_backtest()
+    if cached is None:
+        # Cold cache — trigger a background refresh; client can re-poll.
+        await get_or_refresh_backtest()
+        cached = get_cached_backtest()
+
+    leaders = cached.get("appPairLeaders", {}) if cached else {}
+
+    # Global aggregate per app subset (across all pairs).
+    APP_SUBSET_KEYS = ["app1", "app2", "app3", "app1+app2", "app1+app3", "app2+app3", "app1+app2+app3"]
+    global_agg: Dict[str, Dict[str, int]] = {k: {"total": 0, "win": 0, "loss": 0, "unknown": 0, "draw": 0} for k in APP_SUBSET_KEYS}
+    for p in (cached.get("perPair", []) if cached else []):
+        for key, st in (p.get("appPairStats") or {}).items():
+            if key not in global_agg:
+                global_agg[key] = {"total": 0, "win": 0, "loss": 0, "unknown": 0, "draw": 0}
+            agg = global_agg[key]
+            agg["total"] += st.get("total", 0)
+            agg["win"] += st.get("win", 0)
+            agg["loss"] += st.get("loss", 0)
+            agg["unknown"] += st.get("unknown", 0)
+            agg["draw"] += st.get("draw", 0)
+    global_summary = {}
+    for key, agg in global_agg.items():
+        graded = agg["win"] + agg["loss"]
+        global_summary[key] = {
+            **agg,
+            "gradedTotal": graded,
+            "winRate": round((agg["win"] / graded) * 100, 1) if graded else None,
+        }
+
+    return _json({
+        "appPairLeaders": leaders,
+        "appPairGlobal": global_summary,
+        "cacheAgeSec": round(get_backtest_cache_age_sec(), 1),
+        "verdict": cached.get("verdict") if cached else None,
+        "subsetKeys": APP_SUBSET_KEYS,
     })
 
 
@@ -820,6 +882,10 @@ def _serialize_pair(p, *, winrate_lookup: Optional[Dict[str, Dict[str, Any]]] = 
         "gradedTotal60Min": wr.get("gradedTotal60Min", 0),
         "wins60Min": wr.get("wins60Min", 0),
         "losses60Min": wr.get("losses60Min", 0),
+        # Per-pair × per-app-subset win rate (app1, app2, app3, app1+app2,
+        # app1+app3, app2+app3, app1+app2+app3). Surfaced in the Signals tab
+        # expanded row and the History "App Pair Leaders" sub-tab.
+        "appPairStats": wr.get("appPairStats", {}),
     }
     return out
 

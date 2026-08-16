@@ -112,6 +112,47 @@ per-level stats from the cached backtest (60s TTL). The backtest runs in
 the background — the snapshot endpoint returns the cached value without
 blocking.
 
+### Win rate by app pair (NEW)
+
+In addition to the existing 3-agree / 2-agree / conflict / 1-only level
+buckets, the backtest now tracks **per-pair × per-app-subset win rate**.
+For every pair you can see — on a single row in the Signals tab expanded
+detail row, in the History "Per-Pair Stats" sub-tab table, and in the new
+History "App Pair Leaders" sub-tab — exactly how each subset of apps
+performs on that pair:
+
+- `app1` (app1 alone, when no other app agrees)
+- `app2` (app2 alone)
+- `app3` (app3 alone)
+- `app1+app2` (when app1 AND app2 agree, with or without app3)
+- `app1+app3`
+- `app2+app3`
+- `app1+app2+app3` (all 3 apps agree — the strongest consensus signal)
+
+This answers the user's central question — **"which pair of apps performs
+best on which pairs?"** — directly:
+
+- On the Signals tab → row-tap → "Win Rate by App Pair" card grid shows
+  per-subset W/L and win rate for the tapped pair.
+- On the History → Per-Pair Stats sub-tab → 4 new columns (`app1+app2`,
+  `app1+app3`, `app2+app3`, `all-3`) replace the old `3-agree / 2-agree /
+  1-only` columns. The table collapses to stacked cards on phones.
+- On the History → App Pair Leaders sub-tab → 7 columns (one per app
+  subset), each showing the global aggregate win rate for that subset plus
+  the top 10 pairs by graded win rate (min 3 graded samples).
+
+#### API additions
+
+- `/api/snapshot`, `/api/pairs`, `/api/pair/{pair}`, `/api/backtest` now
+  return `appPairStats` for each pair (a dict keyed by app-subset).
+- `/api/backtest` returns a top-level `appPairLeaders` field.
+- New endpoint `GET /api/app-pair-leaders` returns both the leaderboards
+  and a global aggregate per app-subset.
+- New CLI: `python -m app.backtest_runner` runs a fresh backtest, prints
+  a JSON summary (verdict + per-level + per-app-pair stats + top pairs),
+  and exits with non-zero on anomaly/error — usable as a pre-push
+  verification gate.
+
 ### Signal source timing
 
 Each signal shows:

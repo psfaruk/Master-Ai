@@ -111,6 +111,17 @@ class ClassifiedCluster:
     outcome: Optional[int]
     ts: int
     pair: str
+    # Which concrete apps agreed on the consensus direction (sorted).
+    # e.g. ["app1", "app2"] for a 2-agree cluster where those two agreed.
+    # For "conflict" / "1-only" this is the list of apps that voted for
+    # the chosen direction (the majority for conflict, the singleton for
+    # 1-only) so the win rate attribution still makes sense.
+    agreeing_apps: List[str] = None  # type: ignore[assignment]
+    # Canonical bucket key like "app1+app2", "app1+app3",
+    # "app2+app3", "app1+app2+app3", or singletons "app1" / "app2" / "app3".
+    # Derived from `agreeing_apps`. Used by the per-pair app-pair stats
+    # so the dashboard can show "app1+app2 wins 80% on EURUSD".
+    app_subset_key: str = ""
 
 
 @dataclass
@@ -138,12 +149,44 @@ class SourceStat:
 
 
 @dataclass
+class AppPairStat:
+    """Stats for ONE specific subset of agreeing apps.
+
+    Key examples: "app1", "app2", "app3", "app1+app2",
+    "app1+app3", "app2+app3", "app1+app2+app3".
+
+    Each ClassifiedCluster contributes to exactly ONE AppPairStat per pair
+    — the one matching its ``app_subset_key``. This lets the dashboard
+    answer questions like:
+
+        "On EURUSD, when app1+app2 agree, what is the win rate?"
+        "Which pair of apps performs best on EURUSD?"
+        "Which pairs is app1+app2 best at?"
+    """
+    total: int = 0
+    win: int = 0
+    loss: int = 0
+    unknown: int = 0
+    draw: int = 0
+    call: int = 0
+    put: int = 0
+    call_win: int = 0
+    call_loss: int = 0
+    put_win: int = 0
+    put_loss: int = 0
+
+
+@dataclass
 class PairStat:
     pair: str
     display_pair: str
     category: str  # "otc" | "real"
     levels: Dict[str, LevelStat]
     history: List[ClassifiedCluster]
+    # Per-pair × per-app-subset stats (app1, app2, app3, app1+app2,
+    # app1+app3, app2+app3, app1+app2+app3). Only keys that actually
+    # occurred in the backtest window are present.
+    app_pair_stats: Dict[str, AppPairStat] = None  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +334,12 @@ def normalize_app3(d: dict, time_keys: List[str]) -> Optional[NormalizedSignal]:
 
 
 def _classify_cluster(cluster_apps: Dict[AppId, NormalizedSignal], ts_anchor: int) -> Dict[str, Any]:
-    """Returns the classified cluster dict (sans ``pair``)."""
+    """Returns the classified cluster dict (sans ``pair``).
+
+    Also derives ``agreeing_apps`` and ``app_subset_key`` so callers can
+    attribute the outcome to a specific app subset (e.g. "app1+app2")
+    rather than just a level bucket ("2-agree").
+    """
     signal_list = list(cluster_apps.values())
     n = len(signal_list)
     call_c = sum(1 for a in signal_list if a.direction == "CALL")
@@ -314,7 +362,12 @@ def _classify_cluster(cluster_apps: Dict[AppId, NormalizedSignal], ts_anchor: in
         direction = "CALL" if call_c > put_c else "PUT" if put_c > call_c else None
 
     # Grade only the apps that voted for the consensus direction.
-    gradable: List[NormalizedSignal] = [] if level == "conflict" else [a for a in signal_list if a.direction == direction]
+    gradable: List[NormalizedSignal] = [] if level == "conflict" or direction is None else [a for a in signal_list if a.direction == direction]
+
+    # The list of apps that agreed on the consensus direction. Sorted so
+    # the app_subset_key is deterministic regardless of dict ordering.
+    agreeing_apps: List[str] = sorted(a.source for a in gradable) if direction is not None else []
+    app_subset_key: str = "+".join(agreeing_apps)
 
     def is_neutral(rs: Optional[str]) -> bool:
         return rs is not None and rs.lower() in ("draw", "void")
@@ -343,6 +396,8 @@ def _classify_cluster(cluster_apps: Dict[AppId, NormalizedSignal], ts_anchor: in
         "agreeing_draw": draw_count,
         "outcome": outcome,
         "ts": ts_anchor,
+        "agreeing_apps": agreeing_apps,
+        "app_subset_key": app_subset_key,
     }
 
 
@@ -390,7 +445,40 @@ def _new_level_stat() -> LevelStat:
     return LevelStat()
 
 
+def _new_app_pair_stat() -> AppPairStat:
+    return AppPairStat()
+
+
 def _add_cluster_to_level(s: LevelStat, c: Dict[str, Any]) -> None:
+    s.total += 1
+    if c["outcome"] == 1:
+        s.win += 1
+    elif c["outcome"] == 0:
+        s.loss += 1
+    elif c.get("agreeing_draw", 0) > 0 and c["outcome"] is None:
+        s.draw += c["agreeing_draw"]
+    else:
+        s.unknown += 1
+    if c["direction"] == "CALL":
+        s.call += 1
+        if c["outcome"] == 1:
+            s.call_win += 1
+        elif c["outcome"] == 0:
+            s.call_loss += 1
+    elif c["direction"] == "PUT":
+        s.put += 1
+        if c["outcome"] == 1:
+            s.put_win += 1
+        elif c["outcome"] == 0:
+            s.put_loss += 1
+
+
+def _add_cluster_to_app_pair(s: AppPairStat, c: Dict[str, Any]) -> None:
+    """Same accumulation as ``_add_cluster_to_level`` but on an AppPairStat.
+
+    Reuses the exact same semantics so the per-app-pair win rate is directly
+    comparable to the per-level win rate.
+    """
     s.total += 1
     if c["outcome"] == 1:
         s.win += 1
@@ -423,6 +511,55 @@ def _level_win_rate(s: LevelStat) -> Optional[float]:
     if graded == 0:
         return None
     return round((s.win / graded) * 100, 1)
+
+
+def _app_pair_win_rate(s: AppPairStat) -> Optional[float]:
+    graded = s.win + s.loss
+    if graded == 0:
+        return None
+    return round((s.win / graded) * 100, 1)
+
+
+# Canonical app-subset keys the dashboard UI renders. The backtest may
+# produce stats for any subset that actually occurred — we always emit a
+# full grid (zeroed entries for unseen subsets) so the UI can render a
+# stable table without missing columns.
+APP_SUBSET_KEYS: List[str] = [
+    "app1",
+    "app2",
+    "app3",
+    "app1+app2",
+    "app1+app3",
+    "app2+app3",
+    "app1+app2+app3",
+]
+
+
+def _serialize_app_pair_stats(stats: Dict[str, AppPairStat]) -> Dict[str, dict]:
+    """Return a stable JSON-friendly dict covering ALL canonical app subsets.
+
+    Subsets that didn't occur in this pair's backtest history are emitted
+    with zeroed counters and ``winRate: None``.
+    """
+    out: Dict[str, dict] = {}
+    for key in APP_SUBSET_KEYS:
+        s = stats.get(key)
+        if s is None:
+            s = _new_app_pair_stat()
+        d = asdict(s)
+        d["winRate"] = _app_pair_win_rate(s)
+        d["gradedTotal"] = s.win + s.loss
+        out[key] = d
+    # Preserve any non-canonical subsets (defensive — shouldn't happen, but
+    # don't silently drop them if a future caller introduces one).
+    for key, s in stats.items():
+        if key in out:
+            continue
+        d = asdict(s)
+        d["winRate"] = _app_pair_win_rate(s)
+        d["gradedTotal"] = s.win + s.loss
+        out[key] = d
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -543,8 +680,18 @@ async def run_backtest() -> Dict[str, Any]:
             "conflict": _new_level_stat(),
             "1-only": _new_level_stat(),
         }
+        aps: Dict[str, AppPairStat] = {}
         for c in clusters:
             _add_cluster_to_level(pl[c.level], c.__dict__)
+            # Bucket by the specific app subset that agreed on the
+            # consensus direction. For "conflict" with a tie, c.app_subset_key
+            # is "" — skip it (no clear agreement to attribute to).
+            key = c.app_subset_key
+            if not key:
+                continue
+            if key not in aps:
+                aps[key] = _new_app_pair_stat()
+            _add_cluster_to_app_pair(aps[key], c.__dict__)
 
         per_pair.append(PairStat(
             pair=pair,
@@ -552,6 +699,7 @@ async def run_backtest() -> Dict[str, Any]:
             category="otc" if pair.endswith("_otc") else "real",
             levels=pl,
             history=clusters,
+            app_pair_stats=aps,
         ))
 
     def pair_total(p: PairStat) -> int:
@@ -621,6 +769,13 @@ async def run_backtest() -> Dict[str, Any]:
     def source_to_dict(s: SourceStat) -> dict:
         return asdict(s)
 
+    def app_pair_stat_to_dict(s: AppPairStat) -> dict:
+        d = asdict(s)
+        d["winRate"] = _app_pair_win_rate(s)
+        graded = s.win + s.loss
+        d["gradedTotal"] = graded
+        return d
+
     def cluster_to_dict(c: ClassifiedCluster) -> dict:
         return asdict(c)
 
@@ -663,6 +818,12 @@ async def run_backtest() -> Dict[str, Any]:
             "gradedTotal60Min": recent_graded_total,
             "wins60Min": recent_wins,
             "losses60Min": recent_losses,
+            # Per-pair × per-app-subset stats. Always includes the four
+            # app-subset keys the dashboard UI renders (singletons + the
+            # three 2-app pairs + the all-3-agree bucket), with zeroed
+            # AppPairStat values for any subset that didn't occur on this
+            # pair in the backtest window.
+            "appPairStats": _serialize_app_pair_stats(p.app_pair_stats or {}),
             "history": [cluster_to_dict(c) for c in p.history],
         }
 
@@ -672,6 +833,10 @@ async def run_backtest() -> Dict[str, Any]:
         "totalClusters": len(all_clusters),
         "levels": {k: level_to_dict(v) for k, v in levels.items()},
         "sources": {k: source_to_dict(v) for k, v in sources.items()},
+        # Global per-app-subset leaderboard: for each canonical app subset,
+        # the top N pairs by graded win rate (min 1 graded sample). Lets the
+        # dashboard answer "which pairs is app1+app2 best at?".
+        "appPairLeaders": _build_app_pair_leaders(per_pair),
         "perPair": [pair_to_dict(p) for p in per_pair],
         "sampleThreeAgree": [cluster_to_dict(c) for c in sample_three_agree],
         "sampleTwoAgree": [cluster_to_dict(c) for c in sample_two_agree],
@@ -695,5 +860,161 @@ def get_per_pair_winrate_lookup(cached: Optional[Dict[str, Any]]) -> Dict[str, D
             "gradedTotal60Min": p.get("gradedTotal60Min", 0),
             "wins60Min": p.get("wins60Min", 0),
             "losses60Min": p.get("losses60Min", 0),
+            "appPairStats": p.get("appPairStats", {}),
         }
     return out
+
+
+# Minimum graded samples required for a pair to appear in an app-pair
+# leaderboard. Below this, the win rate is just 1-2 coin flips reported as a
+# misleading 0%/100%.
+LEADERBOARD_MIN_GRADED = 3
+LEADERBOARD_TOP_N = 10
+
+
+def _build_app_pair_leaders(per_pair: List[PairStat]) -> Dict[str, List[Dict[str, Any]]]:
+    """For each canonical app subset, return the top ``LEADERBOARD_TOP_N``
+    pairs by win rate (descending), with at least ``LEADERBOARD_MIN_GRADED``
+    graded samples.
+
+    Used by the dashboard "App Pair Leaders" sub-tab to answer:
+        - which pairs does app1+app2 perform best on?
+        - on which pair of apps does EURUSD perform best?
+    """
+    leaders: Dict[str, List[Dict[str, Any]]] = {k: [] for k in APP_SUBSET_KEYS}
+    for p in per_pair:
+        aps = p.app_pair_stats or {}
+        for key in APP_SUBSET_KEYS:
+            s = aps.get(key)
+            if s is None:
+                continue
+            graded = s.win + s.loss
+            if graded < LEADERBOARD_MIN_GRADED:
+                continue
+            wr = round((s.win / graded) * 100, 1) if graded else 0.0
+            leaders[key].append({
+                "pair": p.pair,
+                "displayPair": p.display_pair,
+                "category": p.category,
+                "winRate": wr,
+                "wins": s.win,
+                "losses": s.loss,
+                "gradedTotal": graded,
+                "call": s.call,
+                "put": s.put,
+                "callWin": s.call_win,
+                "callLoss": s.call_loss,
+                "putWin": s.put_win,
+                "putLoss": s.put_loss,
+            })
+    # Sort each leaderboard: win rate desc, then graded total desc (more
+    # confidence wins ties), then display pair asc (stable ordering).
+    for key in leaders:
+        leaders[key].sort(
+            key=lambda r: (-r["winRate"], -r["gradedTotal"], r["displayPair"])
+        )
+        leaders[key] = leaders[key][:LEADERBOARD_TOP_N]
+    return leaders
+
+
+# ---------------------------------------------------------------------------
+# CLI — runs a fresh backtest, prints a summary, exits non-zero if the
+# verdict doesn't pass the quality gate (used as a pre-push verification).
+# ---------------------------------------------------------------------------
+
+
+async def _run_backtest_cli() -> int:
+    """Run ``run_backtest()`` synchronously, print a structured summary,
+    return a process exit code (0 = ok, 1 = anomaly/insufficient/error).
+
+    The summary includes:
+      - verdict (kind + message)
+      - total signals / clusters / pairs
+      - per-level win rates
+      - per-app-subset win rates (global, across all pairs)
+      - top 3 pairs per app-subset (which pairs is each app-subset best at)
+    """
+    try:
+        result = await run_backtest()
+    except Exception as e:
+        import json
+        logger.exception("backtest CLI failed")
+        print(json.dumps({
+            "ok": False,
+            "error": str(e),
+            "verdict": {"kind": "error", "message": str(e)},
+        }, indent=2))
+        return 1
+
+    verdict = result.get("verdict", {})
+    levels = result.get("levels", {})
+    sources = result.get("sources", {})
+    app_pair_leaders = result.get("appPairLeaders", {})
+
+    # Build a compact global per-app-subset summary (aggregate across all
+    # pairs) by summing per-pair stats.
+    global_app_pair: Dict[str, Dict[str, int]] = {k: {"total": 0, "win": 0, "loss": 0, "unknown": 0, "draw": 0} for k in APP_SUBSET_KEYS}
+    for p in result.get("perPair", []):
+        for key, st in (p.get("appPairStats") or {}).items():
+            if key not in global_app_pair:
+                global_app_pair[key] = {"total": 0, "win": 0, "loss": 0, "unknown": 0, "draw": 0}
+            agg = global_app_pair[key]
+            agg["total"] += st.get("total", 0)
+            agg["win"] += st.get("win", 0)
+            agg["loss"] += st.get("loss", 0)
+            agg["unknown"] += st.get("unknown", 0)
+            agg["draw"] += st.get("draw", 0)
+
+    app_pair_summary = {}
+    for key, agg in global_app_pair.items():
+        graded = agg["win"] + agg["loss"]
+        app_pair_summary[key] = {
+            **agg,
+            "gradedTotal": graded,
+            "winRate": round((agg["win"] / graded) * 100, 1) if graded else None,
+        }
+
+    # Top 3 pairs per app-subset leaderboard.
+    top_pairs_summary = {
+        key: [
+            {"pair": r["displayPair"], "winRate": r["winRate"], "wins": r["wins"], "losses": r["losses"], "graded": r["gradedTotal"]}
+            for r in leaders[:3]
+        ]
+        for key, leaders in app_pair_leaders.items()
+    }
+
+    summary = {
+        "ok": verdict.get("kind") in ("validated", "partial", "insufficient"),
+        "verdict": verdict,
+        "totalSignals": result.get("totalSignals", 0),
+        "totalClusters": result.get("totalClusters", 0),
+        "perPairCount": len(result.get("perPair", [])),
+        "levels": {
+            k: {
+                "total": v.get("total", 0),
+                "win": v.get("win", 0),
+                "loss": v.get("loss", 0),
+                "winRate": v.get("winRate"),
+            } for k, v in levels.items()
+        },
+        "sources": {
+            k: {
+                "total": v.get("total", 0),
+                "win": v.get("win", 0),
+                "loss": v.get("loss", 0),
+            } for k, v in sources.items()
+        },
+        "appPairGlobal": app_pair_summary,
+        "appPairTopPairs": top_pairs_summary,
+    }
+    import json
+    print(json.dumps(summary, indent=2, default=str))
+    # Exit 0 if verdict is validated/partial/insufficient (insufficient
+    # still means the backtest itself ran cleanly, just with too few
+    # samples — that's a soft pass for CI purposes).
+    return 0 if verdict.get("kind") in ("validated", "partial", "insufficient") else 1
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(asyncio.run(_run_backtest_cli()))

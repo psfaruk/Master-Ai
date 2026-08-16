@@ -142,6 +142,7 @@ function switchHistorySubtab(name) {
   $$(".history-tab").forEach((b) => b.classList.toggle("history-tab--active", b.dataset.subtab === name));
   $$(".history-panel").forEach((p) => p.classList.toggle("history-panel--active", p.id === `history-${name}`));
   if (name === "perpair") renderPerPairTable();
+  if (name === "apppair") renderAppPairLeaders();
   if (name === "drilldown") populateHistoryPairSelector();
 }
 
@@ -596,17 +597,17 @@ function renderPairTable() {
 
     const mainRow = `
       <tr data-pair="${escAttr(p.pair)}" class="${isExpanded ? "is-expanded" : ""}">
-        <td class="td-fav fav ${isFav ? "is-fav" : ""}" data-fav="${escAttr(p.pair)}"><i class="fas fa-star"></i></td>
-        <td>${marketBadge}</td>
-        <td>${candleBadge}</td>
-        <td><span class="sp-pair-name">${escHtml(p.displayPair)}</span></td>
-        <td>${appBadge(r.app1Dir)}</td>
-        <td>${appBadge(r.app2Dir)}</td>
-        <td>${appBadge(r.app3Dir)}</td>
-        <td>${agreeBadge}</td>
-        <td>${finalCell}</td>
-        <td>${wr60Bar}</td>
-        <td class="td-expand"><span class="sp-row-toggle"><i class="fas fa-chevron-right"></i></span></td>
+        <td class="td-fav fav ${isFav ? "is-fav" : ""}" data-fav="${escAttr(p.pair)}" data-label="★"><i class="fas fa-star"></i></td>
+        <td data-label="Market">${marketBadge}</td>
+        <td data-label="Candle">${candleBadge}</td>
+        <td data-label="Pair"><span class="sp-pair-name">${escHtml(p.displayPair)}</span></td>
+        <td data-label="App 1">${appBadge(r.app1Dir)}</td>
+        <td data-label="App 2">${appBadge(r.app2Dir)}</td>
+        <td data-label="App 3">${appBadge(r.app3Dir)}</td>
+        <td data-label="Agree">${agreeBadge}</td>
+        <td data-label="Final">${finalCell}</td>
+        <td data-label="Win Rate">${wr60Bar}</td>
+        <td class="td-expand" data-label="Expand"><span class="sp-row-toggle"><i class="fas fa-chevron-right"></i></span></td>
       </tr>`;
 
     const detailRow = isExpanded ? renderDetailRow(r) : "";
@@ -750,6 +751,41 @@ function renderDetailRow(r) {
     return `${s.win || 0}/${s.loss || 0} (${s.winRate == null ? "—" : s.winRate.toFixed(0) + "%"})`;
   };
 
+  // ---- Per-app-pair win rate (app1, app2, app3, app1+app2, app1+app3,
+  //      app2+app3, app1+app2+app3) — answers "which pair of apps performs
+  //      best on THIS pair?". Renders as a 4-column grid of cards.
+  const aps = p.appPairStats || {};
+  const fmtAppPair = (key, label) => {
+    const s = aps[key];
+    if (!s || (s.win + s.loss) === 0) {
+      return `
+        <div class="sp-app-pair-card">
+          <div class="sp-app-pair-card__head"><span>${label}</span><span class="sp-app-pair-card__sub">0 graded</span></div>
+          <div class="sp-app-pair-card__wr none">—</div>
+        </div>`;
+    }
+    const graded = s.win + s.loss;
+    const wr = s.winRate;
+    const cls = wr == null ? "none" : wr >= 60 ? "high" : wr < 45 ? "low" : "";
+    const wrTxt = wr == null ? "—" : `${wr.toFixed(0)}%`;
+    return `
+      <div class="sp-app-pair-card">
+        <div class="sp-app-pair-card__head"><span>${label}</span><span class="sp-app-pair-card__sub">${graded} graded</span></div>
+        <div class="sp-app-pair-card__wr ${cls}">${wrTxt}</div>
+        <div class="sp-app-pair-card__sub">${s.win}W / ${s.loss}L${s.draw ? ` · ${s.draw} draw` : ""}</div>
+      </div>`;
+  };
+
+  const appPairCards = [
+    fmtAppPair("app1", "app1 only"),
+    fmtAppPair("app2", "app2 only"),
+    fmtAppPair("app3", "app3 only"),
+    fmtAppPair("app1+app2", "app1 + app2"),
+    fmtAppPair("app1+app3", "app1 + app3"),
+    fmtAppPair("app2+app3", "app2 + app3"),
+    fmtAppPair("app1+app2+app3", "all 3 agree"),
+  ].join("");
+
   return `
     <tr class="sp-detail-row" data-pair-detail="${escAttr(p.pair)}">
       <td colspan="11">
@@ -790,6 +826,10 @@ function renderDetailRow(r) {
                 <span class="sp-detail-signal__outcome sp-detail-signal__outcome--unknown">—</span>
               </div>
             </div>
+          </div>
+          <div class="sp-detail-section">
+            <h4><i class="fas fa-users"></i> Win Rate by App Pair (which pair of apps performs best on ${escHtml(p.displayPair)})</h4>
+            <div class="sp-app-pair-grid">${appPairCards}</div>
           </div>
         </div>
       </td>
@@ -931,6 +971,10 @@ async function runBacktest() {
 }
 
 function renderBacktest(bt) {
+  // Cache the result so the App Pair Leaders sub-tab can render from it
+  // without an extra round-trip to /api/backtest.
+  state.cachedBacktest = bt;
+
   const v = bt.verdict || {};
   const levelStats = Object.entries(bt.levels || {}).map(([level, s]) => {
     const total = s.win + s.loss;
@@ -964,6 +1008,32 @@ function renderBacktest(bt) {
       </div>`;
   }).join("");
 
+  // ---- App-pair global stats (the user's main "2 different win rates
+  //      per pair of apps" view) — global aggregate per app subset, with
+  //      a button to dive into the per-pair leaderboard sub-tab.
+  const appPairGlobal = _aggregateAppPairGlobal(bt.perPair || []);
+  const APP_SUBSET_LABELS = [
+    { key: "app1", label: "App 1 only" },
+    { key: "app2", label: "App 2 only" },
+    { key: "app3", label: "App 3 only" },
+    { key: "app1+app2", label: "App 1 + App 2" },
+    { key: "app1+app3", label: "App 1 + App 3" },
+    { key: "app2+app3", label: "App 2 + App 3" },
+    { key: "app1+app2+app3", label: "All 3 agree" },
+  ];
+  const appPairCards = APP_SUBSET_LABELS.map(({ key, label }) => {
+    const g = appPairGlobal[key] || { win: 0, loss: 0, gradedTotal: 0, winRate: null, draw: 0 };
+    const wr = g.winRate;
+    const wrCls = wr == null ? "none" : wr >= 60 ? "high" : wr < 45 ? "low" : "";
+    const wrTxt = wr == null ? "—" : `${wr.toFixed(0)}%`;
+    return `
+      <div class="sp-app-pair-card">
+        <div class="sp-app-pair-card__head"><span>${escHtml(label)}</span><span class="sp-app-pair-card__sub">${g.gradedTotal} graded</span></div>
+        <div class="sp-app-pair-card__wr ${wrCls}">${wrTxt}</div>
+        <div class="sp-app-pair-card__sub">${g.win}W / ${g.loss}L${g.draw ? ` · ${g.draw} draw` : ""}</div>
+      </div>`;
+  }).join("");
+
   $("backtest-content").innerHTML = `
     <div class="verdict verdict--${v.kind}">${v.message || "—"}</div>
     <div class="panel__header" style="padding-left:0;border-bottom:1px solid var(--border);margin-bottom:10px;">
@@ -971,11 +1041,21 @@ function renderBacktest(bt) {
       <span class="panel__meta">${bt.totalSignals} signals · ${bt.totalClusters} clusters</span>
     </div>
     <div class="level-stats">${levelStats}</div>
-    <div class="panel__header" style="padding-left:0;border-bottom:1px solid var(--border);margin-bottom:10px;">
+    <div class="panel__header" style="padding-left:0;border-bottom:1px solid var(--border);margin-bottom:10px;margin-top:18px;">
+      <h3 style="font-size:12px;">Win rate by app pair (global)</h3>
+      <span class="panel__meta"><button class="btn btn--ghost" id="btn-goto-apppair" style="padding:4px 10px;font-size:11px;">View per-pair leaders →</button></span>
+    </div>
+    <div class="sp-app-pair-grid">${appPairCards}</div>
+    <div class="panel__header" style="padding-left:0;border-bottom:1px solid var(--border);margin-bottom:10px;margin-top:18px;">
       <h3 style="font-size:12px;">Per-source stats</h3>
     </div>
     <div class="level-stats">${sourceStats}</div>
   `;
+
+  // Wire the "View per-pair leaders" button → switch to the App Pair Leaders sub-tab.
+  $("btn-goto-apppair")?.addEventListener("click", () => {
+    switchHistorySubtab("apppair");
+  });
 }
 
 // ====== Per-pair table (History → Per-Pair Stats) ======
@@ -989,13 +1069,23 @@ function renderPerPairTable() {
   pairs.sort((a, b) => (b.winRate ?? -1) - (a.winRate ?? -1));
 
   if (pairs.length === 0) {
-    body.innerHTML = '<tr><td colspan="8" class="placeholder">No pairs.</td></tr>';
+    body.innerHTML = '<tr><td colspan="9" class="placeholder">No pairs.</td></tr>';
     return;
   }
   $("perpair-meta").textContent = `${pairs.length} pairs · cached ${state.snapshot.backtestCacheAgeSec?.toFixed(0) ?? "—"}s`;
 
   body.innerHTML = pairs.slice(0, 100).map((p) => {
     const ls = p.levelStats || {};
+    const aps = p.appPairStats || {};
+    // Format a per-app-pair stat cell: shows win/loss and a tiny win-rate badge.
+    const fmtAP = (key) => {
+      const s = aps[key];
+      if (!s || (s.win + s.loss) === 0) return '<span class="mono" style="color:var(--text-muted)">—</span>';
+      const wr = s.winRate;
+      const wrCls = wr == null ? "none" : wr >= 60 ? "good" : wr >= 45 ? "mid" : "low";
+      const wrTxt = wr == null ? "?" : `${wr.toFixed(0)}%`;
+      return `<span class="mono"><strong>${s.win}/${s.loss}</strong> <span class="wr-bar wr-bar--${wrCls}" style="font-size:10px;padding:1px 5px">${wrTxt}</span></span>`;
+    };
     const fmt = (lvl) => {
       const s = ls[lvl];
       if (!s) return "—";
@@ -1009,14 +1099,15 @@ function renderPerPairTable() {
     const isFav = state.favorites.has(p.pair);
     return `
       <tr data-pair="${escAttr(p.pair)}">
-        <td class="fav ${isFav ? "is-fav" : ""}" data-fav="${escAttr(p.pair)}">${isFav ? "★" : "☆"}</td>
-        <td><strong>${escHtml(p.displayPair)}</strong></td>
-        <td><span class="pill pill--${p.category}">${p.category}</span></td>
-        <td class="mono">${totalW}/${totalL}</td>
-        <td><span class="wr-bar wr-bar--${wrCls}">${wrTxt}</span></td>
-        <td class="mono">${fmt("3-agree")}</td>
-        <td class="mono">${fmt("2-agree")}</td>
-        <td class="mono">${fmt("1-only")}</td>
+        <td class="fav ${isFav ? "is-fav" : ""}" data-fav="${escAttr(p.pair)}" data-label="★">${isFav ? "★" : "☆"}</td>
+        <td data-label="Pair"><strong>${escHtml(p.displayPair)}</strong></td>
+        <td data-label="Cat"><span class="pill pill--${p.category}">${p.category}</span></td>
+        <td data-label="Overall W/L" class="mono">${totalW}/${totalL}</td>
+        <td data-label="Win %"><span class="wr-bar wr-bar--${wrCls}">${wrTxt}</span></td>
+        <td data-label="app1+app2">${fmtAP("app1+app2")}</td>
+        <td data-label="app1+app3">${fmtAP("app1+app3")}</td>
+        <td data-label="app2+app3">${fmtAP("app2+app3")}</td>
+        <td data-label="all-3">${fmtAP("app1+app2+app3")}</td>
       </tr>`;
   }).join("");
 
@@ -1033,6 +1124,146 @@ function renderPerPairTable() {
       openPairDrawer(row.dataset.pair);
     });
   });
+}
+
+// ====== App Pair Leaders (History → App Pair Leaders sub-tab) ======
+// For each canonical app-subset (singletons + 3 two-app pairs + all-3-agree),
+// show the global aggregate win rate AND the top N pairs by win rate.
+// Answers both:
+//   - "Which pair of apps performs best globally?"
+//   - "For each pair of apps, which pairs are they best on?"
+async function renderAppPairLeaders() {
+  const meta = $("apppair-meta");
+  const content = $("apppair-content");
+  if (!content) return;
+
+  // Try to read from cached backtest first; fall back to fetching the
+  // dedicated /api/app-pair-leaders endpoint if no cache.
+  let payload = null;
+  const cached = state.cachedBacktest;
+  if (cached && cached.appPairLeaders) {
+    payload = {
+      appPairLeaders: cached.appPairLeaders,
+      appPairGlobal: _aggregateAppPairGlobal(cached.perPair || []),
+      cacheAgeSec: state.snapshot?.backtestCacheAgeSec ?? null,
+      verdict: cached.verdict,
+    };
+  }
+  if (!payload) {
+    try {
+      if (meta) meta.textContent = "loading…";
+      const res = await fetch("/api/app-pair-leaders", { cache: "no-store" });
+      if (res.ok) payload = await res.json();
+    } catch (e) {
+      console.warn("[app-pair-leaders] fetch failed", e);
+    }
+  }
+
+  if (!payload) {
+    content.innerHTML = '<p class="placeholder">No backtest data yet. Click "Run fresh backtest" on the Backtest sub-tab first.</p>';
+    if (meta) meta.textContent = "—";
+    return;
+  }
+
+  const leaders = payload.appPairLeaders || {};
+  const global = payload.appPairGlobal || {};
+  const verdict = payload.verdict;
+  const ageSec = payload.cacheAgeSec;
+
+  if (meta) {
+    const verdictTxt = verdict ? `${verdict.kind}` : "—";
+    meta.textContent = `cache ${ageSec != null ? ageSec.toFixed(0) + "s" : "—"} · verdict: ${verdictTxt}`;
+  }
+
+  const APP_SUBSET_LABELS = [
+    { key: "app1", label: "App 1 only" },
+    { key: "app2", label: "App 2 only" },
+    { key: "app3", label: "App 3 only" },
+    { key: "app1+app2", label: "App 1 + App 2" },
+    { key: "app1+app3", label: "App 1 + App 3" },
+    { key: "app2+app3", label: "App 2 + App 3" },
+    { key: "app1+app2+app3", label: "All 3 agree" },
+  ];
+
+  const renderLeaderCol = ({ key, label }) => {
+    const g = global[key] || { total: 0, win: 0, loss: 0, gradedTotal: 0, winRate: null };
+    const wr = g.winRate;
+    const wrCls = wr == null ? "" : wr >= 60 ? "high" : wr < 45 ? "low" : "";
+    const wrTxt = wr == null ? "—" : `${wr.toFixed(0)}%`;
+    const list = leaders[key] || [];
+    const rows = list.length === 0
+      ? '<div class="sp-app-pair-leader-row"><span class="sp-app-pair-leader-row__pair" style="color:var(--text-muted)">No qualified pairs yet (need ≥3 graded samples)</span></div>'
+      : list.map((r) => {
+          const rwr = r.winRate;
+          const rwrCls = rwr == null ? "low" : rwr >= 60 ? "" : rwr >= 45 ? "mid" : "low";
+          return `
+            <div class="sp-app-pair-leader-row" data-pair="${escAttr(r.pair)}" data-display="${escAttr(r.displayPair)}">
+              <span class="sp-app-pair-leader-row__pair">${escHtml(r.displayPair)}</span>
+              <span class="sp-app-pair-leader-row__wr ${rwrCls}">${rwr == null ? "—" : rwr.toFixed(0) + "%"}</span>
+              <span class="sp-app-pair-leader-row__meta">${r.wins}/${r.losses} · ${r.graded} graded</span>
+            </div>`;
+        }).join("");
+    return `
+      <div class="sp-app-pair-leader-col">
+        <div class="sp-app-pair-leader-col__head">
+          <span>${escHtml(label)}</span>
+          <span class="sp-app-pair-leader-col__wr ${wrCls}">${wrTxt}</span>
+        </div>
+        <div class="sp-app-pair-leader-col__sub" style="font-size:10px;color:var(--text-muted);font-family:'JetBrains Mono',ui-monospace,monospace">
+          ${g.win}W / ${g.loss}L · ${g.gradedTotal} graded${g.draw ? ` · ${g.draw} draw` : ""}
+        </div>
+        ${rows}
+      </div>`;
+  };
+
+  content.innerHTML = `
+    <div class="sp-app-pair-leaderboard">
+      ${APP_SUBSET_LABELS.map(renderLeaderCol).join("")}
+    </div>
+    <p class="placeholder" style="margin-top:14px;font-size:11px">
+      <i class="fas fa-info-circle"></i>
+      Each column shows the top pairs by graded win rate for that app subset.
+      A pair appears only when it has ≥3 graded signals in the backtest window.
+      Tap a pair row to open the drilldown.
+    </p>
+  `;
+
+  $$("#apppair-content .sp-app-pair-leader-row[data-pair]").forEach((row) => {
+    row.addEventListener("click", () => {
+      openPairDrawer(row.dataset.pair);
+    });
+    row.style.cursor = "pointer";
+  });
+}
+
+// Helper: build the global aggregate per app-subset from perPair[].appPairStats.
+// Used when we render from the cached snapshot instead of fetching the
+// dedicated /api/app-pair-leaders endpoint.
+function _aggregateAppPairGlobal(perPair) {
+  const APP_SUBSET_KEYS = ["app1", "app2", "app3", "app1+app2", "app1+app3", "app2+app3", "app1+app2+app3"];
+  const out = {};
+  for (const key of APP_SUBSET_KEYS) {
+    out[key] = { total: 0, win: 0, loss: 0, unknown: 0, draw: 0, gradedTotal: 0, winRate: null };
+  }
+  for (const p of perPair) {
+    const aps = p.appPairStats || {};
+    for (const key of Object.keys(aps)) {
+      if (!out[key]) out[key] = { total: 0, win: 0, loss: 0, unknown: 0, draw: 0, gradedTotal: 0, winRate: null };
+      const agg = out[key];
+      const s = aps[key];
+      agg.total += s.total || 0;
+      agg.win += s.win || 0;
+      agg.loss += s.loss || 0;
+      agg.unknown += s.unknown || 0;
+      agg.draw += s.draw || 0;
+    }
+  }
+  for (const key of Object.keys(out)) {
+    const agg = out[key];
+    agg.gradedTotal = agg.win + agg.loss;
+    agg.winRate = agg.gradedTotal > 0 ? Math.round((agg.win / agg.gradedTotal) * 1000) / 10 : null;
+  }
+  return out;
 }
 
 // ====== Pair drilldown (History → Pair Drilldown) ======
