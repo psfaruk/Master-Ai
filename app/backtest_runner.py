@@ -69,6 +69,11 @@ LOOKBACK_SEC = 6 * 3600
 # 6h window.
 CACHE_TTL_SEC = 60.0
 
+# Minimum graded signals required before a per-pair 60-minute win rate is
+# shown. Fewer than this and the "rate" is just 1-2 coin flips reported as
+# a hard 0%/100% — see pair_to_dict() below.
+MIN_SAMPLE_60MIN = 3
+
 # Match "draw" / "void" in any case — used to exclude resolved-but-neutral
 # signals from the win/loss count.
 _DRAW_RE = re.compile(r"draw|void", re.IGNORECASE)
@@ -632,14 +637,21 @@ async def run_backtest() -> Dict[str, Any]:
         )
         # ---- 60-minute win rate ----
         # Filter this pair's cluster history to only the last 60 minutes,
-        # then grade the ones that have a known outcome.
+        # then grade the ones that have a known outcome. Below
+        # MIN_SAMPLE_60MIN graded signals, a "win rate" is really just the
+        # outcome of 1-2 trades reported as a misleading 0%/50%/100% — treat
+        # it as insufficient data (None) rather than a real rate, same as
+        # the overall verdict already does for the 6h levels above.
         sixty_min_ago = now - 3600
         recent = [c for c in p.history if c.ts >= sixty_min_ago]
         recent_graded = [c for c in recent if c.outcome is not None]
         recent_wins = sum(1 for c in recent_graded if c.outcome == 1)
         recent_losses = sum(1 for c in recent_graded if c.outcome == 0)
         recent_graded_total = len(recent_graded)
-        recent_win_rate = round((recent_wins / recent_graded_total) * 100, 1) if recent_graded_total > 0 else None
+        recent_win_rate = (
+            round((recent_wins / recent_graded_total) * 100, 1)
+            if recent_graded_total >= MIN_SAMPLE_60MIN else None
+        )
         return {
             "pair": p.pair,
             "displayPair": p.display_pair,
