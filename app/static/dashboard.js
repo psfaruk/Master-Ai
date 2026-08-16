@@ -56,8 +56,6 @@ const state = {
   signalFeedIds: new Set(),    // for "new" highlight
   favorites: loadFavorites(),
   settings: loadSettings(),
-  pollTimer: null,
-  feedPollTimer: null,
   clockTimer: null,
   lastPollAt: 0,
   drawerPair: null,
@@ -124,27 +122,60 @@ function switchTab(name) {
   $$(".bottomnav__item").forEach((b) => b.classList.toggle("bottomnav__item--active", b.dataset.tab === name));
   $$(".tab-panel").forEach((p) => p.classList.toggle("tab-panel--active", p.id === `tab-${name}`));
   if (name === "signals") renderPairTable();
+  if (name === "home") refreshBacktestStatus();
   if (name === "history") {
+    resetFolderView("history-folder-grid", "history-folder-detail");
     populateHistoryPairSelector();
     renderPerPairTable();
     refreshBacktestStatus();
   }
+  if (name === "settings") resetFolderView("settings-folder-grid", "settings-folder-detail");
   window.scrollTo(0, 0);
 }
 
-// ====== History sub-tabs ======
-$$(".history-tab").forEach((btn) => {
-  btn.addEventListener("click", () => switchHistorySubtab(btn.dataset.subtab));
+// ====== Folder-menu navigation (History / Settings) ======
+// Each section shows a grid of tappable "folder" cards; tapping one opens
+// its detail view (hiding the grid) and a back button returns to the grid.
+function resetFolderView(gridId, detailId) {
+  const grid = $(gridId);
+  const detail = $(detailId);
+  if (grid) grid.hidden = false;
+  if (detail) detail.hidden = true;
+}
+
+$$("#history-folder-grid .folder-card").forEach((card) => {
+  card.addEventListener("click", () => {
+    $("history-folder-grid").hidden = true;
+    $("history-folder-detail").hidden = false;
+    switchHistorySubtab(card.dataset.folder);
+    window.scrollTo(0, 0);
+  });
+});
+$("history-folder-back")?.addEventListener("click", () => {
+  resetFolderView("history-folder-grid", "history-folder-detail");
+  window.scrollTo(0, 0);
 });
 
 function switchHistorySubtab(name) {
   state.activeHistorySubtab = name;
-  $$(".history-tab").forEach((b) => b.classList.toggle("history-tab--active", b.dataset.subtab === name));
   $$(".history-panel").forEach((p) => p.classList.toggle("history-panel--active", p.id === `history-${name}`));
   if (name === "perpair") renderPerPairTable();
   if (name === "apppair") renderAppPairLeaders();
   if (name === "drilldown") populateHistoryPairSelector();
 }
+
+$$("#settings-folder-grid .folder-card").forEach((card) => {
+  card.addEventListener("click", () => {
+    $("settings-folder-grid").hidden = true;
+    $("settings-folder-detail").hidden = false;
+    $$(".settings-panel").forEach((p) => p.classList.toggle("settings-panel--active", p.id === `settings-${card.dataset.folder}`));
+    window.scrollTo(0, 0);
+  });
+});
+$("settings-folder-back")?.addEventListener("click", () => {
+  resetFolderView("settings-folder-grid", "settings-folder-detail");
+  window.scrollTo(0, 0);
+});
 
 // ====== Dropdowns ======
 function wireDropdown(triggerId, menuId, labelId, onSelect) {
@@ -943,9 +974,25 @@ function renderBacktestStatus() {
   const s = state.backtestStatus;
   const age = s.cacheAgeSec >= 0 ? `cache ${s.cacheAgeSec.toFixed(0)}s old` : "no cache";
   $("backtest-status").textContent = `${age} · ${s.totalSignals || 0} signals · ${s.totalClusters || 0} clusters · ${s.perPairCount || 0} pairs`;
-  if (state.activeTab === "home") {
-    $("bt-cache-age")?.replaceWith();
+  const cacheAgeEl = $("bt-cache-age");
+  if (cacheAgeEl) cacheAgeEl.textContent = age;
+  renderHomeBacktestSummary(s);
+}
+
+// Populates the "Consensus Accuracy (last 6 hours)" panel on the Home tab.
+function renderHomeBacktestSummary(s) {
+  const el = $("home-backtest");
+  if (!el) return;
+  if (!s.hasResult) {
+    el.innerHTML = '<p class="placeholder">Run a backtest to see per-level accuracy.</p>';
+    return;
   }
+  const v = s.verdict || {};
+  el.innerHTML = `
+    <div class="verdict verdict--${v.kind || "insufficient"}">${escHtml(v.message || "—")}</div>
+    <p class="placeholder" style="margin-top:8px;font-size:11px;">
+      ${s.totalSignals || 0} signals · ${s.totalClusters || 0} clusters · ${s.perPairCount || 0} pairs — see History → Backtest for the full breakdown.
+    </p>`;
 }
 
 $("btn-run-backtest")?.addEventListener("click", runBacktest);
@@ -1200,7 +1247,7 @@ async function renderAppPairLeaders() {
             <div class="sp-app-pair-leader-row" data-pair="${escAttr(r.pair)}" data-display="${escAttr(r.displayPair)}">
               <span class="sp-app-pair-leader-row__pair">${escHtml(r.displayPair)}</span>
               <span class="sp-app-pair-leader-row__wr ${rwrCls}">${rwr == null ? "—" : rwr.toFixed(0) + "%"}</span>
-              <span class="sp-app-pair-leader-row__meta">${r.wins}/${r.losses} · ${r.graded} graded</span>
+              <span class="sp-app-pair-leader-row__meta">${r.wins}/${r.losses} · ${r.gradedTotal} graded</span>
             </div>`;
         }).join("");
     return `
@@ -1399,17 +1446,21 @@ function renderPairDetailHtml(data) {
     </div>
     <div class="drawer__section">
       <h3>Per-App Signals (latest candle)</h3>
-      <table class="pair-table">
-        <thead><tr><th>App</th><th>Name</th><th>Dir</th><th>Emitted (UTC)</th><th>Candle (UTC)</th><th>Lead</th><th>Conf</th><th>Strength</th><th>Outcome</th></tr></thead>
-        <tbody>${signalRows || '<tr><td colspan="9" class="placeholder">No signals for the latest candle.</td></tr>'}</tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="pair-table">
+          <thead><tr><th>App</th><th>Name</th><th>Dir</th><th>Emitted (UTC)</th><th>Candle (UTC)</th><th>Lead</th><th>Conf</th><th>Strength</th><th>Outcome</th></tr></thead>
+          <tbody>${signalRows || '<tr><td colspan="9" class="placeholder">No signals for the latest candle.</td></tr>'}</tbody>
+        </table>
+      </div>
     </div>
     <div class="drawer__section">
       <h3>App 2 History (last ${Math.min(30, app2History.length)})</h3>
-      <table class="pair-table">
-        <thead><tr><th>Candle (UTC)</th><th>Dir</th><th>First Seen (UTC)</th><th>Lead</th><th>Buyers</th><th>Sellers</th></tr></thead>
-        <tbody>${app2Rows || '<tr><td colspan="6" class="placeholder">No App 2 history.</td></tr>'}</tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="pair-table">
+          <thead><tr><th>Candle (UTC)</th><th>Dir</th><th>First Seen (UTC)</th><th>Lead</th><th>Buyers</th><th>Sellers</th></tr></thead>
+          <tbody>${app2Rows || '<tr><td colspan="6" class="placeholder">No App 2 history.</td></tr>'}</tbody>
+        </table>
+      </div>
     </div>
     <div class="drawer__section">
       ${favBtn}
@@ -1473,16 +1524,34 @@ async function fetchDiag() {
   }
 }
 
+// Freshness is the headline signal for "is this app actually alive right
+// now" — a stable/flat raw-row count does NOT mean stale data (some
+// upstreams return a fixed-size sliding window, so the count plateaus
+// while the content keeps rotating underneath). Candle lag is the metric
+// that actually answers "is new data arriving", so it's shown big and
+// color-coded first; raw/normalized counts are secondary detail below it.
+function _freshnessBadge(a, nowSec) {
+  const lag = a.newestCandleLagCandles;
+  const ageSec = a.newestCandle != null ? Math.max(0, nowSec - a.newestCandle) : null;
+  let cls, label;
+  if (lag == null) { cls = "stale"; label = "NO DATA"; }
+  else if (lag <= 0) { cls = "fresh"; label = "FRESH"; }
+  else if (lag === 1) { cls = "warn"; label = "1 CANDLE BEHIND"; }
+  else { cls = "stale"; label = `${lag} CANDLES BEHIND`; }
+  const ageTxt = ageSec != null ? `updated ${ageSec}s ago` : "no signal yet";
+  return `<div class="diag-freshness diag-freshness--${cls}"><span class="diag-freshness__label">${label}</span><span class="diag-freshness__age">${ageTxt}</span></div>`;
+}
+
 function renderDiag(d) {
+  const nowSec = d.now?.unixSec ?? Math.floor(Date.now() / 1000);
   const apps = (d.apps || []).map((a) => `
     <div class="level-stat">
-      <div class="level-stat__title">${a.app}</div>
-      <div class="level-stat__row"><span>Health</span><strong>${a.health}</strong></div>
-      <div class="level-stat__row"><span>Raw rows</span><span>${a.rawRows}</span></div>
+      <div class="level-stat__title">${a.app} <span style="color:var(--text-muted);font-weight:400;text-transform:none;">(health: ${a.health})</span></div>
+      ${_freshnessBadge(a, nowSec)}
+      <div class="level-stat__row" style="margin-top:8px;"><span>Raw rows</span><span>${a.rawRows}</span></div>
       <div class="level-stat__row"><span>Normalized</span><span>${a.normalizedSignals}</span></div>
       <div class="level-stat__row"><span>Skipped</span><span>${JSON.stringify(a.skipped)}</span></div>
       <div class="level-stat__row"><span>Distinct pairs</span><span>${(a.distinctPairs || []).length}</span></div>
-      <div class="level-stat__row"><span>Newest candle lag</span><span>${a.newestCandleLagCandles ?? "—"} candles</span></div>
       <div class="level-stat__row"><span>Valid for own candle</span><span>${a.validForOwnCandle} / ${a.invalidForOwnCandle}</span></div>
     </div>`).join("");
 
@@ -1551,9 +1620,10 @@ settingsInputs.forEach(([id, key, kind]) => {
 });
 
 $("btn-clear-cache").addEventListener("click", () => {
+  if (!confirm("Clear local cache?")) return;
   state.pairDetailCache.clear();
   state.signalFeedIds.clear();
-  if (confirm("Clear local cache?")) location.reload();
+  location.reload();
 });
 $("btn-reset-settings").addEventListener("click", () => {
   if (!confirm("Reset all settings to defaults?")) return;
@@ -1596,9 +1666,7 @@ function fmtHmUtc(unixSec) {
 // ====== Polling loop ======
 function startPolling() {
   pollSnapshot();
-  state.pollTimer = setInterval(pollSnapshot, 5000);  // fallback, will be overridden
   state.clockTimer = setInterval(tickClock, 1000);
-  state.feedPollTimer = setInterval(pollSignalFeed, 3000);
   tickClock();
   scheduleAdaptivePoll();
 }
@@ -1615,7 +1683,6 @@ function scheduleAdaptivePoll() {
 }
 
 function restartPolling() {
-  if (state.pollTimer) clearInterval(state.pollTimer);
   if (adaptiveTimer) clearTimeout(adaptiveTimer);
   scheduleAdaptivePoll();
 }
