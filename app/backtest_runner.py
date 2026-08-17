@@ -122,6 +122,13 @@ class ClassifiedCluster:
     # Derived from `agreeing_apps`. Used by the per-pair app-pair stats
     # so the dashboard can show "app1+app2 wins 80% on EURUSD".
     app_subset_key: str = ""
+    # Per-app raw direction for THIS candle, e.g. {"app1":"CALL","app2":"CALL","app3":"PUT"}.
+    # Used by the per-pair "Signal History (Last 60 min)" table so the UI can
+    # show which app gave which direction on each candle.
+    app_directions: Dict[str, str] = None  # type: ignore[assignment]
+    # Per-app outcome for THIS candle, e.g. {"app1":1,"app2":1,"app3":0}.
+    # Lets the history table show per-app W/L chips alongside the consensus outcome.
+    app_outcomes: Dict[str, Optional[int]] = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -372,6 +379,19 @@ def _classify_cluster(cluster_apps: Dict[AppId, NormalizedSignal], ts_anchor: in
     def is_neutral(rs: Optional[str]) -> bool:
         return rs is not None and rs.lower() in ("draw", "void")
 
+    # Per-app raw direction for THIS candle — captured for every signal that
+    # voted, regardless of whether it agreed with the consensus. Lets the
+    # history table show "App 1: CALL, App 2: CALL, App 3: PUT" per candle.
+    app_directions: Dict[str, str] = {a.source: a.direction for a in signal_list}
+
+    # Per-app outcome for THIS candle (1=win, 0=loss, None=unknown/draw).
+    # Mirrors the per-app direction chip so the table can show a per-app W/L
+    # chip alongside the consensus outcome.
+    app_outcomes: Dict[str, Optional[int]] = {
+        a.source: (a.outcome if not is_neutral(a.raw_status) else None)
+        for a in signal_list
+    }
+
     gradable_non_draw = [a for a in gradable if not is_neutral(a.raw_status)]
     outcomes = [a.outcome for a in gradable_non_draw if a.outcome is not None]
     draw_count = len(gradable) - len(gradable_non_draw)
@@ -398,6 +418,8 @@ def _classify_cluster(cluster_apps: Dict[AppId, NormalizedSignal], ts_anchor: in
         "ts": ts_anchor,
         "agreeing_apps": agreeing_apps,
         "app_subset_key": app_subset_key,
+        "app_directions": app_directions,
+        "app_outcomes": app_outcomes,
     }
 
 
@@ -777,7 +799,24 @@ async def run_backtest() -> Dict[str, Any]:
         return d
 
     def cluster_to_dict(c: ClassifiedCluster) -> dict:
-        return asdict(c)
+        d = asdict(c)
+        # Add a friendly "WIN"|"LOSS"|"DRAW"|"—" label for the UI so the
+        # per-candle history table doesn't have to map 1/0/None on the client.
+        if d.get("outcome") == 1:
+            d["outcomeLabel"] = "WIN"
+        elif d.get("outcome") == 0:
+            d["outcomeLabel"] = "LOSS"
+        elif any(rs and isinstance(rs, str) and rs.lower() in ("draw", "void")
+                 for rs in [d.get("agreeing_draw")]):
+            d["outcomeLabel"] = "DRAW"
+        else:
+            d["outcomeLabel"] = "—"
+        # Add per-app outcome labels too (used by the per-candle history chips).
+        d["appOutcomeLabels"] = {
+            app: ("WIN" if o == 1 else "LOSS" if o == 0 else "—")
+            for app, o in (d.get("app_outcomes") or {}).items()
+        }
+        return d
 
     def pair_to_dict(p: PairStat) -> dict:
         graded_total = (
@@ -807,6 +846,60 @@ async def run_backtest() -> Dict[str, Any]:
             round((recent_wins / recent_graded_total) * 100, 1)
             if recent_graded_total >= MIN_SAMPLE_60MIN else None
         )
+
+        # ---- Per-app-subset × 60-min stats ----
+        # For the Signal History (Last 60 min) UI we want one row per
+        # app-subset key (1+2 / 1+3 / 2+3 / all-3 / singletons) showing
+        # how many clusters and what win rate that subset produced on
+        # this pair in the last 60 minutes. This is the per-pair /
+        # per-agreement-type summary the user explicitly asked for.
+        recent_by_subset: Dict[str, Dict[str, int]] = {}
+        for c in recent:
+            key = c.app_subset_key
+            if not key:
+                continue
+            bucket = recent_by_subset.setdefault(key, {
+                "total": 0, "win": 0, "loss": 0, "draw": 0, "unknown": 0,
+                "call": 0, "put": 0,
+            })
+            bucket["total"] += 1
+            if c.outcome == 1:
+                bucket["win"] += 1
+            elif c.outcome == 0:
+                bucket["loss"] += 1
+            elif c.agreeing_draw and c.agreeing_draw > 0:
+                bucket["draw"] += 1
+            else:
+                bucket["unknown"] += 1
+            if c.direction == "CALL":
+                bucket["call"] += 1
+            elif c.direction == "PUT":
+                bucket["put"] += 1
+        # Serialize: include every canonical app-subset key (zeroed when absent)
+        # so the UI can render a stable table without missing columns.
+        history60_by_subset: Dict[str, dict] = {}
+        for key in APP_SUBSET_KEYS:
+            b = recent_by_subset.get(key, {
+                "total": 0, "win": 0, "loss": 0, "draw": 0, "unknown": 0,
+                "call": 0, "put": 0,
+            })
+            graded = b["win"] + b["loss"]
+            history60_by_subset[key] = {
+                **b,
+                "gradedTotal": graded,
+                "winRate": round((b["win"] / graded) * 100, 1) if graded else None,
+            }
+        # Preserve any non-canonical subsets that occurred (defensive).
+        for key, b in recent_by_subset.items():
+            if key in history60_by_subset:
+                continue
+            graded = b["win"] + b["loss"]
+            history60_by_subset[key] = {
+                **b,
+                "gradedTotal": graded,
+                "winRate": round((b["win"] / graded) * 100, 1) if graded else None,
+            }
+
         return {
             "pair": p.pair,
             "displayPair": p.display_pair,
@@ -824,7 +917,16 @@ async def run_backtest() -> Dict[str, Any]:
             # AppPairStat values for any subset that didn't occur on this
             # pair in the backtest window.
             "appPairStats": _serialize_app_pair_stats(p.app_pair_stats or {}),
+            # Full 6-hour cluster history (already existed).
             "history": [cluster_to_dict(c) for c in p.history],
+            # NEW — last-60-min cluster list (per-candle row data). Each item
+            # has ts (candle_time), level, direction, app_subset_key,
+            # app_directions, app_outcomes, outcome, outcomeLabel — enough for
+            # the per-pair drawer to render a candle-by-candle table.
+            "history60Min": [cluster_to_dict(c) for c in recent],
+            # NEW — per-app-subset summary over the last 60 minutes. Lets
+            # the UI show "1+2: 3W/1L (75%) | 1+3: 0W/0L (—) | ..." per pair.
+            "history60BySubset": history60_by_subset,
         }
 
     return {
@@ -861,6 +963,12 @@ def get_per_pair_winrate_lookup(cached: Optional[Dict[str, Any]]) -> Dict[str, D
             "wins60Min": p.get("wins60Min", 0),
             "losses60Min": p.get("losses60Min", 0),
             "appPairStats": p.get("appPairStats", {}),
+            # NEW — expose the per-candle history list + per-subset summary so
+            # the per-pair drawer can render "Signal History (Last 60 min)"
+            # without an extra round trip. The backtest cache is 60 s, so this
+            # data is at most 1 minute stale — acceptable for a 60-min window.
+            "history60Min": p.get("history60Min", []),
+            "history60BySubset": p.get("history60BySubset", {}),
         }
     return out
 

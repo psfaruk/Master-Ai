@@ -413,8 +413,26 @@ async def get_pair_detail(
     pair: str,
     request: Request,
     candle_limit: int = Query(default=60, ge=1, le=300),
+    history_minutes: int = Query(default=60, ge=1, le=360),
 ):
-    """Single-pair drilldown — used by the Signals tab row-tap drawer."""
+    """Single-pair drilldown — used by the Signals tab row-tap drawer.
+
+    Carries everything the drawer needs to render the pair detail:
+      - latest per-app signals (live)
+      - latest candle consensus
+      - per-pair OHLC candle history (mini chart)
+      - per-pair App 2 historical cache
+      - per-pair win rate (overall + 60-min) + per-level + per-app-subset
+      - **clusterHistory** — per-candle signal history filtered to the last
+        ``history_minutes`` minutes. Each row carries:
+          candleUtc, level, direction, app_subset_key (1+2 / 1+3 / 2+3 / all-3
+          / singleton), per-app direction chip (app1/app2/app3 directions),
+          per-app outcome chip (WIN/LOSS/—), consensus outcome (WIN/LOSS/DRAW/—).
+        Used by the drawer's "Signal History (Last 60 min)" table.
+      - **history60BySubset** — one-row-per-app-subset summary (total / wins /
+        losses / winRate) over the same window. Lets the drawer render a
+        compact "1+2: 3W/1L (75%)" strip above the per-candle table.
+    """
     start_poller()
     start_candle_poller()
     snap_data = get_snapshot()
@@ -444,6 +462,35 @@ async def get_pair_detail(
         except Exception:
             pass
         candles = get_candles_for_pair(pair, candle_limit)
+
+    # ---- Per-candle cluster history (last N minutes) ----
+    # `history60Min` is pre-filtered to the last 60 minutes in the backtest.
+    # If the caller asks for a different window we filter the full `history`
+    # list ourselves. Anything older than the backtest's 6h lookback is
+    # simply absent.
+    cluster_history_full = wr.get("history60Min", [])
+    if history_minutes == 60:
+        cluster_history = cluster_history_full
+    else:
+        cutoff = now_sec - history_minutes * 60
+        # Fall back to the full per-pair history (cached backtest perPair[*].history)
+        # if the 60-min slice doesn't cover the requested window.
+        cached = get_cached_backtest() or {}
+        full_history = []
+        for p in cached.get("perPair", []):
+            if p.get("pair") == pair:
+                full_history = p.get("history", [])
+                break
+        cluster_history = [c for c in full_history if c.get("ts", 0) >= cutoff]
+    # Attach candleUtc + relative age so the UI doesn't have to compute it.
+    for c in cluster_history:
+        c["candleUtc"] = _fmt_hm(c.get("ts", 0)) if c.get("ts", 0) else None
+        c["ageSec"] = now_sec - c.get("ts", 0) if c.get("ts", 0) else None
+    # Per-subset summary already shipped in wr["history60BySubset"] for the
+    # default 60-min window; for other windows we re-derive it on the fly.
+    history_by_subset = wr.get("history60BySubset", {})
+    if history_minutes != 60:
+        history_by_subset = _build_subset_summary(cluster_history)
 
     return _json({
         "pair": pair,
@@ -476,6 +523,153 @@ async def get_pair_detail(
         # Per-pair × per-app-subset win rate (app1, app2, app3, app1+app2,
         # app1+app3, app2+app3, app1+app2+app3). Surfaced in the drawer.
         "appPairStats": wr.get("appPairStats", {}),
+        # NEW — per-candle signal history (last `history_minutes` minutes).
+        # Each row carries: ts, candleUtc, ageSec, level, direction,
+        # app_subset_key, app_directions{app1,app2,app3}, app_outcomes,
+        # appOutcomeLabels, outcome, outcomeLabel, agreeing_apps.
+        "clusterHistory": cluster_history,
+        "clusterHistoryMinutes": history_minutes,
+        # NEW — per-app-subset summary over the same window. Keys: app1, app2,
+        # app3, app1+app2, app1+app3, app2+app3, app1+app2+app3.
+        "historyBySubset": history_by_subset,
+        "now": now_sec,
+    })
+
+
+# ---------------------------------------------------------------------------
+# /api/pair/{pair}/history  — per-candle signal history (dedicated endpoint)
+# ---------------------------------------------------------------------------
+
+
+def _build_subset_summary(clusters: List[Dict[str, Any]]) -> Dict[str, dict]:
+    """Aggregate a list of cluster dicts by ``app_subset_key`` into a stable
+    one-row-per-subset summary. Mirrors the per-pair `history60BySubset`
+    shape produced by ``backtest_runner.pair_to_dict`` so the UI can use the
+    same rendering path regardless of the window length."""
+    from ..backtest_runner import APP_SUBSET_KEYS
+    buckets: Dict[str, Dict[str, int]] = {}
+    for c in clusters:
+        key = c.get("app_subset_key") or ""
+        if not key:
+            continue
+        b = buckets.setdefault(key, {
+            "total": 0, "win": 0, "loss": 0, "draw": 0, "unknown": 0,
+            "call": 0, "put": 0,
+        })
+        b["total"] += 1
+        outcome = c.get("outcome")
+        if outcome == 1:
+            b["win"] += 1
+        elif outcome == 0:
+            b["loss"] += 1
+        elif c.get("agreeing_draw", 0):
+            b["draw"] += 1
+        else:
+            b["unknown"] += 1
+        d = c.get("direction")
+        if d == "CALL":
+            b["call"] += 1
+        elif d == "PUT":
+            b["put"] += 1
+    out: Dict[str, dict] = {}
+    for key in APP_SUBSET_KEYS:
+        b = buckets.get(key, {
+            "total": 0, "win": 0, "loss": 0, "draw": 0, "unknown": 0,
+            "call": 0, "put": 0,
+        })
+        graded = b["win"] + b["loss"]
+        out[key] = {
+            **b,
+            "gradedTotal": graded,
+            "winRate": round((b["win"] / graded) * 100, 1) if graded else None,
+        }
+    for key, b in buckets.items():
+        if key in out:
+            continue
+        graded = b["win"] + b["loss"]
+        out[key] = {
+            **b,
+            "gradedTotal": graded,
+            "winRate": round((b["win"] / graded) * 100, 1) if graded else None,
+        }
+    return out
+
+
+@router.get("/pair/{pair}/history")
+async def get_pair_history(
+    pair: str,
+    request: Request,
+    minutes: int = Query(default=60, ge=1, le=360),
+    subset: str = Query(default=""),
+):
+    """Dedicated per-pair signal history endpoint.
+
+    Returns the candle-by-candle cluster history for one pair, filtered to
+    the last ``minutes`` minutes (default 60). Each cluster carries:
+
+      - ts (unix sec, candle_time)
+      - candleUtc (HH:MM UTC)
+      - ageSec (now - ts)
+      - level (3-agree / 2-agree / conflict / 1-only)
+      - direction (CALL / PUT / null)
+      - app_subset_key (e.g. "app1+app2", "app1+app3", "app2+app3",
+        "app1+app2+app3", or singleton "app1" / "app2" / "app3")
+      - app_directions (per-app direction, e.g. {"app1":"CALL","app2":"CALL","app3":"PUT"})
+      - app_outcomes (per-app outcome, 1/0/null)
+      - appOutcomeLabels (per-app "WIN"/"LOSS"/"—")
+      - outcome (1 / 0 / null)
+      - outcomeLabel ("WIN" / "LOSS" / "DRAW" / "—")
+      - agreeing_apps (list of app ids that voted for the consensus direction)
+
+    Optional ``subset`` query filters by app_subset_key (e.g. ``?subset=app1+app2``).
+    Used by the per-pair drawer's "Signal History (Last 60 min)" table when
+    the user wants only one agreement type (1+2 / 1+3 / 2+3 / all-3).
+    """
+    start_poller()
+    await get_or_refresh_backtest()
+    winrate_lookup = get_per_pair_winrate_lookup(get_cached_backtest())
+    wr = winrate_lookup.get(pair, {})
+    now_sec = int(datetime.now(timezone.utc).timestamp())
+
+    cached = get_cached_backtest() or {}
+    full_history: List[Dict[str, Any]] = []
+    for p in cached.get("perPair", []):
+        if p.get("pair") == pair:
+            full_history = p.get("history", [])
+            break
+
+    cutoff = now_sec - minutes * 60
+    history = [c for c in full_history if c.get("ts", 0) >= cutoff]
+    if subset:
+        history = [c for c in history if c.get("app_subset_key") == subset]
+    for c in history:
+        c["candleUtc"] = _fmt_hm(c.get("ts", 0)) if c.get("ts", 0) else None
+        c["ageSec"] = now_sec - c.get("ts", 0) if c.get("ts", 0) else None
+    history.sort(key=lambda c: c.get("ts", 0), reverse=True)
+
+    history_by_subset = _build_subset_summary(history)
+
+    # Per-subset summary across the WHOLE window (not just the filtered subset)
+    # — gives the UI a complete strip even when the user picks one subset.
+    full_window = [c for c in full_history if c.get("ts", 0) >= cutoff]
+    full_by_subset = _build_subset_summary(full_window)
+
+    return _json({
+        "pair": pair,
+        "minutes": minutes,
+        "subset": subset or None,
+        "items": history,
+        "total": len(history),
+        # Per-subset summary over the requested window (all subsets, even if
+        # `subset` filter is set — so the UI can show non-filtered chips too).
+        "bySubset": full_by_subset,
+        # Per-subset summary over only the filtered rows (when subset is set,
+        # this will only have one non-zero entry).
+        "bySubsetFiltered": history_by_subset,
+        "winRate60Min": wr.get("winRate60Min"),
+        "gradedTotal60Min": wr.get("gradedTotal60Min", 0),
+        "wins60Min": wr.get("wins60Min", 0),
+        "losses60Min": wr.get("losses60Min", 0),
         "now": now_sec,
     })
 

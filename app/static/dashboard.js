@@ -1373,12 +1373,18 @@ function renderPairDrawer(data) {
   const cons = data.consensus ? `<span class="pill pill--${data.consensus.level}">${data.consensus.level}</span>` : "";
   $("drawer-sub").innerHTML = `${cat} ${cons} · ${data.signals?.length || 0} signals · win rate ${data.winRate == null ? "—" : data.winRate.toFixed(1) + "%"}`;
   $("drawer-body").innerHTML = renderPairDetailHtml(data);
+  // Cache the cluster history on the drawer body so the subset-chip filter
+  // can re-render the history table client-side without re-fetching.
+  $("drawer-body").__clusterHistory = data.clusterHistory || [];
 }
 
 function renderPairDetailHtml(data) {
   const signals = data.signals || [];
   const candles = data.candles || [];
   const app2History = data.app2History || [];
+  const clusterHistory = data.clusterHistory || [];
+  const historyBySubset = data.historyBySubset || {};
+  const historyMinutes = data.clusterHistoryMinutes || 60;
 
   const candleChart = candles.length
     ? `<div class="candle-chart">${candles.slice(0, 60).reverse().map((c) => {
@@ -1431,10 +1437,44 @@ function renderPairDetailHtml(data) {
     </div>`;
   }).join("");
 
+  // ---- Signal History (Last 60 min) ----
+  // Per-candle cluster table + per-agreement-type summary strip.
+  // The data is shipped once with /api/pair/{pair} and re-filtered client-side
+  // when the user clicks a subset chip (1+2 / 1+3 / 2+3 / all-3 / singletons)
+  // — no extra round trip. The strip's totals never change when filtering;
+  // only the per-candle table below reflects the active filter.
+  const SUBSET_KEYS = ["app1", "app2", "app3", "app1+app2", "app1+app3", "app2+app3", "app1+app2+app3"];
+  const SUBSET_LABELS = {
+    "app1": "App 1 only",
+    "app2": "App 2 only",
+    "app3": "App 3 only",
+    "app1+app2": "1+2",
+    "app1+app3": "1+3",
+    "app2+app3": "2+3",
+    "app1+app2+app3": "All 3",
+  };
+  const subsetStrip = SUBSET_KEYS.map((k) => {
+    const s = historyBySubset[k] || {};
+    const total = s.total || 0;
+    const win = s.win || 0;
+    const loss = s.loss || 0;
+    const graded = win + loss;
+    const wr = graded > 0 ? ((win / graded) * 100).toFixed(0) + "%" : "—";
+    const wrCls = graded === 0 ? "none" : (win / graded) >= 0.6 ? "high" : (win / graded) >= 0.4 ? "mid" : "low";
+    return `<button type="button" class="subset-chip subset-chip--${wrCls} ${total === 0 ? "subset-chip--empty" : ""}" data-subset="${escAttr(k)}" data-pair="${escAttr(data.pair)}">
+      <span class="subset-chip__label">${SUBSET_LABELS[k]}</span>
+      <span class="subset-chip__count">${total}</span>
+      <span class="subset-chip__wl">${win}W/${loss}L</span>
+      <span class="subset-chip__wr">${wr}</span>
+    </button>`;
+  }).join("");
+
   const favBtn = state.favorites.has(data.pair)
     ? `<button class="btn btn--ghost" id="drawer-unfav">★ Unfavorite</button>`
     : `<button class="btn btn--ghost" id="drawer-fav">☆ Add to favorites</button>`;
 
+  // The history table is rendered by a separate function so the subset filter
+  // can re-render JUST this part of the drawer without touching the rest.
   return `
     <div class="drawer__section">
       <h3>Win Rate</h3>
@@ -1462,11 +1502,120 @@ function renderPairDetailHtml(data) {
         </table>
       </div>
     </div>
+    <div class="drawer__section drawer__section--history">
+      <h3>Signal History — Last ${historyMinutes} min <span class="drawer__section-count" id="history-count">${clusterHistory.length} candles</span></h3>
+      <p class="drawer__hint">Per-candle record of which signal each app gave, the agreement type (1+2 / 1+3 / 2+3 / All 3 / single), and the actual WIN / LOSS outcome graded against the candle close.</p>
+      <div class="subset-strip" id="subset-strip">${subsetStrip || '<span class="placeholder">No agreement data.</span>'}</div>
+      <div class="table-scroll">
+        <table class="pair-table pair-table--history" id="history-table">
+          <thead><tr>
+            <th>Candle (UTC)</th>
+            <th>App 1</th><th>App 2</th><th>App 3</th>
+            <th>Agree</th>
+            <th>Dir</th>
+            <th>Outcome</th>
+          </tr></thead>
+          <tbody>${renderHistoryRows(clusterHistory, "") || `<tr><td colspan="7" class="placeholder">No signals in the last ${historyMinutes} minutes.</td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>
     <div class="drawer__section">
       ${favBtn}
     </div>
   `;
 }
+
+// ---- Signal History (Last 60 min) helpers ----
+
+// Subset labels and order — kept in sync with the backend APP_SUBSET_KEYS.
+const HISTORY_SUBSET_KEYS = ["app1", "app2", "app3", "app1+app2", "app1+app3", "app2+app3", "app1+app2+app3"];
+const HISTORY_SUBSET_LABELS = {
+  "app1": "App 1 only",
+  "app2": "App 2 only",
+  "app3": "App 3 only",
+  "app1+app2": "1+2",
+  "app1+app3": "1+3",
+  "app2+app3": "2+3",
+  "app1+app2+app3": "All 3",
+};
+
+// Render the <tbody> rows for the per-candle history table.
+// `subset` filters by app_subset_key ("" = all). Used both for the initial
+// render in renderPairDetailHtml and for re-rendering when the user clicks
+// a subset chip.
+function renderHistoryRows(clusterHistory, subset) {
+  const rows = (clusterHistory || []).slice();
+  // Newest first — the API already sorts this way, but make sure.
+  rows.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  const filtered = subset ? rows.filter((c) => c.app_subset_key === subset) : rows;
+  if (filtered.length === 0) {
+    return "";
+  }
+  return filtered.map((c) => {
+    const apps = c.app_directions || {};
+    const outcomes = c.app_outcomes || {};
+    const labels = c.appOutcomeLabels || {};
+    const cell = (appId) => {
+      const dir = apps[appId];
+      if (!dir) return '<td class="hist-cell hist-cell--missing">—</td>';
+      const ol = labels[appId] || "—";
+      const cls = ol === "WIN" ? "win" : ol === "LOSS" ? "loss" : "unknown";
+      return `<td class="hist-cell hist-cell--${dir.toLowerCase()} hist-cell--${cls}">
+        <span class="dir dir--${dir}">${dir}</span>
+        <span class="hist-cell__ol hist-cell__ol--${cls}">${ol}</span>
+      </td>`;
+    };
+    const subsetLabel = HISTORY_SUBSET_LABELS[c.app_subset_key] || c.app_subset_key || "—";
+    const outcomeLabel = c.outcomeLabel || "—";
+    const outcomeCls = c.outcome === 1 ? "win" : c.outcome === 0 ? "loss" : "unknown";
+    const dir = c.direction || "—";
+    return `<tr>
+      <td class="mono">${c.candleUtc || "—"}</td>
+      ${cell("app1")}${cell("app2")}${cell("app3")}
+      <td><span class="agree-chip agree-chip--${c.app_subset_key ? c.app_subset_key.replace(/\+/g, "-") : "none"}">${subsetLabel}</span></td>
+      <td><span class="dir dir--${dir === "—" ? "null" : dir}">${dir}</span></td>
+      <td><span class="outcome outcome--${outcomeCls}">${outcomeLabel}</span></td>
+    </tr>`;
+  }).join("");
+}
+
+// Subset chip click handler — re-renders ONLY the history table body and
+// highlights the active chip. The full drawer is NOT re-rendered, so the
+// drawer's scroll position and the other sections stay put.
+document.addEventListener("click", (e) => {
+  const chip = e.target.closest(".subset-chip");
+  if (!chip) return;
+  const subset = chip.dataset.subset;
+  const pair = chip.dataset.pair;
+  if (!pair) return;
+  // Toggle: clicking the active chip again clears the filter.
+  const wasActive = chip.classList.contains("subset-chip--active");
+  const strip = chip.parentElement;
+  if (strip) {
+    strip.querySelectorAll(".subset-chip").forEach((c) => c.classList.remove("subset-chip--active"));
+  }
+  if (wasActive) {
+    // cleared
+  } else {
+    chip.classList.add("subset-chip--active");
+  }
+  const activeSubset = wasActive ? "" : subset;
+  // Pull the cached cluster history from the open drawer's data. We stash it
+  // on the drawer body element when the drawer opens so client-side filters
+  // don't need to re-fetch.
+  const drawerBody = $("drawer-body");
+  const cachedHistory = (drawerBody && drawerBody.__clusterHistory) || [];
+  const tbody = document.querySelector("#history-table tbody");
+  if (tbody) {
+    const html = renderHistoryRows(cachedHistory, activeSubset);
+    tbody.innerHTML = html || `<tr><td colspan="7" class="placeholder">No ${HISTORY_SUBSET_LABELS[subset] || subset} signals in this window.</td></tr>`;
+  }
+  const countEl = $("history-count");
+  if (countEl) {
+    const total = activeSubset ? cachedHistory.filter((c) => c.app_subset_key === activeSubset).length : cachedHistory.length;
+    countEl.textContent = `${total} candles`;
+  }
+});
 
 // Delegate fav button in drawer
 document.addEventListener("click", (e) => {

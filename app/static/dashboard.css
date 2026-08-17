@@ -779,6 +779,141 @@ html, body {
 .drawer__body { padding: 16px; }
 .drawer__section { margin-bottom: 20px; }
 .drawer__section h3 { font-size: 12px; text-transform: uppercase; color: var(--text-dim); letter-spacing: 0.05em; margin-bottom: 8px; }
+.drawer__section--history h3 { display: flex; align-items: baseline; gap: 8px; }
+.drawer__section-count {
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-muted);
+  background: var(--bg-elev);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 500;
+}
+.drawer__hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+
+/* Subset filter strip — chips for app1 / app2 / app3 / 1+2 / 1+3 / 2+3 / All 3.
+ * Clicking a chip filters the per-candle history table client-side. */
+.subset-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.subset-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.1s;
+  font: inherit;
+  text-align: left;
+  color: var(--text);
+}
+.subset-chip:hover { border-color: var(--text-muted); }
+.subset-chip:active { transform: scale(0.97); }
+.subset-chip--empty { opacity: 0.5; }
+.subset-chip--active {
+  border-color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 12%, var(--bg-card));
+  box-shadow: 0 0 0 1px var(--blue) inset;
+}
+.subset-chip__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+}
+.subset-chip__count {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  font-family: var(--font-mono);
+}
+.subset-chip__wl {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+.subset-chip__wr {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+.subset-chip--high .subset-chip__wr { color: var(--emerald); }
+.subset-chip--mid .subset-chip__wr { color: var(--amber); }
+.subset-chip--low .subset-chip__wr { color: var(--red); }
+.subset-chip--none .subset-chip__wr { color: var(--text-muted); }
+
+/* Per-candle history table — compact rows with per-app direction+outcome chips */
+.pair-table--history { font-size: 12px; }
+.pair-table--history th, .pair-table--history td {
+  padding: 6px 6px;
+  text-align: center;
+  white-space: nowrap;
+}
+.pair-table--history th:first-child, .pair-table--history td:first-child {
+  text-align: left;
+}
+.hist-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 4px !important;
+}
+.hist-cell--missing { color: var(--text-muted); }
+.hist-cell__ol {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+.hist-cell__ol--win { color: var(--emerald); }
+.hist-cell__ol--loss { color: var(--red); }
+.hist-cell__ol--unknown { color: var(--text-muted); }
+.hist-cell--call .dir { color: var(--emerald); }
+.hist-cell--put .dir { color: var(--red); }
+
+/* Agreement-type chip in the history table Agree column */
+.agree-chip {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.agree-chip--app1-app2 { background: color-mix(in srgb, var(--blue) 18%, var(--bg-elev)); color: var(--blue); border-color: color-mix(in srgb, var(--blue) 40%, var(--border)); }
+.agree-chip--app1-app3 { background: color-mix(in srgb, var(--violet) 18%, var(--bg-elev)); color: var(--violet); border-color: color-mix(in srgb, var(--violet) 40%, var(--border)); }
+.agree-chip--app2-app3 { background: color-mix(in srgb, var(--amber) 18%, var(--bg-elev)); color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, var(--border)); }
+.agree-chip--app1-app2-app3 { background: color-mix(in srgb, var(--emerald) 18%, var(--bg-elev)); color: var(--emerald); border-color: color-mix(in srgb, var(--emerald) 40%, var(--border)); }
+.agree-chip--app1 { background: color-mix(in srgb, var(--amber) 12%, var(--bg-elev)); color: var(--amber); }
+.agree-chip--app2 { background: color-mix(in srgb, var(--violet) 12%, var(--bg-elev)); color: var(--violet); }
+.agree-chip--app3 { background: color-mix(in srgb, var(--emerald) 12%, var(--bg-elev)); color: var(--emerald); }
+
+/* Final consensus outcome chip in the history table */
+.outcome {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+.outcome--win { background: color-mix(in srgb, var(--emerald) 18%, transparent); color: var(--emerald); }
+.outcome--loss { background: color-mix(in srgb, var(--red) 18%, transparent); color: var(--red); }
+.outcome--unknown { background: var(--bg-elev); color: var(--text-muted); }
 
 /* Mini candle chart */
 .candle-chart {
