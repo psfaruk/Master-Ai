@@ -196,6 +196,45 @@ def test_get_cached_backtest_returns_result(monkeypatch):
     assert get_cached_backtest() is fake
 
 
+@pytest.mark.asyncio
+async def test_run_backtest_coordinated_joins_in_flight_refresh(monkeypatch):
+    """GET /api/backtest (run_backtest_coordinated) must not start a second
+    concurrent run_backtest() when the poller's background refresh
+    (get_or_refresh_backtest) is already mid-flight — regression test for a
+    race that doubled upstream load and could let a slower-but-earlier run
+    clobber a newer cached result."""
+    import app.backtest_runner as br
+    monkeypatch.setattr(br, "_cache", BacktestCache())
+
+    call_count = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_run_backtest():
+        nonlocal call_count
+        call_count += 1
+        started.set()
+        await release.wait()
+        return {"verdict": {"kind": "validated"}, "perPair": [], "run": call_count}
+
+    monkeypatch.setattr(br, "run_backtest", fake_run_backtest)
+
+    # Background refresh, the way a /api/snapshot poll triggers one.
+    bg_task = asyncio.create_task(br.get_or_refresh_backtest())
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    # A concurrent manual "Run fresh backtest" should JOIN it, not race it.
+    coordinated_task = asyncio.create_task(br.run_backtest_coordinated())
+    await asyncio.sleep(0)  # let it schedule and reach _ensure_refresh_task()
+
+    release.set()
+    await bg_task
+    result = await coordinated_task
+
+    assert call_count == 1
+    assert result["run"] == 1
+
+
 # ---------------------------------------------------------------------------
 # _serialize_pair enrichment with win rate
 # ---------------------------------------------------------------------------

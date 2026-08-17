@@ -59,6 +59,28 @@ def test_to_unix_seconds_returns_zero_for_junk():
     assert to_unix_seconds(False) == 0
 
 
+def test_to_unix_seconds_converts_nanoseconds():
+    assert to_unix_seconds(1786000000000000000) == 1786000000
+
+
+def test_to_unix_seconds_rejects_implausible_magnitude_instead_of_crashing():
+    # A stray nanosecond-or-larger / garbage value must not "divide down"
+    # into an out-of-range seconds value — datetime.fromtimestamp() raises
+    # OSError/OverflowError on some platforms (observed on Windows) for
+    # anything tens of thousands of years out, and every caller downstream
+    # (candle bucketing, /api/snapshot, _fmt_hm/_fmt_hms) passes the result
+    # straight to it.
+    huge = to_unix_seconds(5e20)
+    assert huge == 0
+    from datetime import datetime, timezone as _tz
+    # Sanity: every non-zero result this function can produce must be safe
+    # to hand to fromtimestamp().
+    for raw in (1786000000, 1786000000000, 1786000000000000, 1786000000000000000, 5e20, 9.99e30):
+        v = to_unix_seconds(raw)
+        if v > 0:
+            datetime.fromtimestamp(v, tz=_tz.utc)  # must not raise
+
+
 # ---- canonical_pair ------------------------------------------------------
 
 

@@ -19,7 +19,7 @@
       <span class="topbar__logo">📊</span>
       <div class="topbar__title">
         <h1>Master-Ai</h1>
-        <p class="topbar__subtitle">Quotex signal aggregator</p>
+        <p class="topbar__subtitle" data-i18n="topbar_subtitle">Quotex signal aggregator</p>
       </div>
     </div>
 
@@ -41,13 +41,13 @@
           <span class="dropdown__caret">▾</span>
         </button>
         <ul class="dropdown__menu" id="cat-menu" role="menu">
-          <li role="menuitem" data-value="">All pairs</li>
-          <li role="menuitem" data-value="otc">OTC only</li>
-          <li role="menuitem" data-value="real">Real only</li>
+          <li role="menuitem" data-value="" data-i18n="opt_all_pairs">All pairs</li>
+          <li role="menuitem" data-value="otc" data-i18n="opt_otc_only">OTC only</li>
+          <li role="menuitem" data-value="real" data-i18n="opt_real_only">Real only</li>
         </ul>
       </div>
       <div class="search">
-        <input type="search" id="search-input" placeholder="Search pair…" autocomplete="off">
+        <input type="search" id="search-input" placeholder="Search pair…" data-i18n-placeholder="ph_search_pair" autocomplete="off">
       </div>
       <div class="topbar__status" id="status-pill" title="Data feed status">
         <span class="pulse"></span>
@@ -65,7 +65,7 @@
     <div id="app-health-alert" class="health-alert" hidden>
       <div class="health-alert__icon"><i class="fas fa-exclamation-triangle"></i></div>
       <div class="health-alert__body">
-        <div class="health-alert__title">Source app issue detected</div>
+        <div class="health-alert__title" data-i18n="health_alert_title">Source app issue detected</div>
         <div class="health-alert__msg" id="app-health-msg">—</div>
       </div>
       <button class="health-alert__close" id="health-alert-close" type="button" aria-label="Dismiss"><i class="fas fa-times"></i></button>
@@ -75,24 +75,24 @@
     <section id="tab-home" class="tab-panel tab-panel--active">
       <div class="hero-row">
         <div class="hero hero--3agree">
-          <div class="hero__label">3-Bot Agree</div>
+          <div class="hero__label" data-i18n="hero_3agree_label">3-Bot Agree</div>
           <div class="hero__value" id="stat-3agree">—</div>
           <div class="hero__sub" id="stat-3agree-sub">across all pairs</div>
         </div>
         <div class="hero hero--2agree">
-          <div class="hero__label">2-Bot Agree</div>
+          <div class="hero__label" data-i18n="hero_2agree_label">2-Bot Agree</div>
           <div class="hero__value" id="stat-2agree">—</div>
           <div class="hero__sub" id="stat-2agree-sub">across all pairs</div>
         </div>
         <div class="hero hero--conflict">
-          <div class="hero__label">Conflicts</div>
+          <div class="hero__label" data-i18n="hero_conflict_label">Conflicts</div>
           <div class="hero__value" id="stat-conflict">—</div>
-          <div class="hero__sub">split direction</div>
+          <div class="hero__sub" data-i18n="hero_conflict_sub">split direction</div>
         </div>
         <div class="hero hero--single">
-          <div class="hero__label">Single Only</div>
+          <div class="hero__label" data-i18n="hero_single_label">Single Only</div>
           <div class="hero__value" id="stat-single">—</div>
-          <div class="hero__sub">only one source</div>
+          <div class="hero__sub" data-i18n="hero_single_sub">only one source</div>
         </div>
       </div>
 
@@ -117,32 +117,32 @@
       <div class="grid-2col">
         <div class="panel">
           <div class="panel__header">
-            <h2>Top Signals</h2>
+            <h2 data-i18n="home_top_signals">Top Signals</h2>
             <span class="panel__meta" id="home-meta">—</span>
           </div>
           <div class="panel__body" id="consensus-highlights">
-            <p class="placeholder">Loading consensus…</p>
+            <p class="placeholder" data-i18n="loading_consensus">Loading consensus…</p>
           </div>
         </div>
 
         <div class="panel">
           <div class="panel__header">
-            <h2>Live Signal Feed</h2>
-            <span class="panel__meta">real-time</span>
+            <h2 data-i18n="home_live_feed">Live Signal Feed</h2>
+            <span class="panel__meta" data-i18n="home_live_tag">real-time</span>
           </div>
           <div class="panel__body panel__body--scroll" id="home-signal-feed">
-            <p class="placeholder">Loading feed…</p>
+            <p class="placeholder" data-i18n="loading_feed">Loading feed…</p>
           </div>
         </div>
       </div>
 
       <div class="panel">
         <div class="panel__header">
-          <h2>Consensus Accuracy (last 6 hours)</h2>
+          <h2 data-i18n="home_consensus_accuracy">Consensus Accuracy (last 6 hours)</h2>
           <span class="panel__meta" id="backtest-status">—</span>
         </div>
         <div class="panel__body" id="home-backtest">
-          <p class="placeholder">Run a backtest to see per-level accuracy.</p>
+          <p class="placeholder" data-i18n="placeholder_run_backtest_home">Run a backtest to see per-level accuracy.</p>
         </div>
       </div>
     </section>
@@ -166,121 +166,121 @@
       <section class="sp-filter-section">
         <div class="sp-filter-grid">
           <div class="sp-filter-group">
-            <div class="sp-filter-label">Market Type</div>
+            <div class="sp-filter-label" data-i18n="filter_market_type">Market Type</div>
             <div class="dropdown">
               <button class="dropdown__trigger sp-filter-trigger" id="cat-trigger2" type="button">
                 <span id="cat-label2">All</span>
                 <span class="dropdown__caret">▾</span>
               </button>
               <ul class="dropdown__menu" id="cat-menu2" role="menu">
-                <li role="menuitem" data-value="">All</li>
+                <li role="menuitem" data-value="" data-i18n="opt_all">All</li>
                 <li role="menuitem" data-value="otc">OTC</li>
-                <li role="menuitem" data-value="real">Real</li>
+                <li role="menuitem" data-value="real" data-i18n="opt_real">Real</li>
               </ul>
             </div>
           </div>
           <div class="sp-filter-group">
-            <div class="sp-filter-label">Candle (UTC)</div>
+            <div class="sp-filter-label" data-i18n="filter_candle_utc">Candle (UTC)</div>
             <div class="dropdown">
               <button class="dropdown__trigger sp-filter-trigger" id="level-trigger" type="button">
                 <span id="level-label">All</span>
                 <span class="dropdown__caret">▾</span>
               </button>
               <ul class="dropdown__menu" id="level-menu" role="menu">
-                <li role="menuitem" data-value="">All</li>
+                <li role="menuitem" data-value="" data-i18n="opt_all">All</li>
                 <li role="menuitem" data-value="3-agree">3-agree</li>
                 <li role="menuitem" data-value="2-agree">2-agree</li>
-                <li role="menuitem" data-value="conflict">Conflict</li>
-                <li role="menuitem" data-value="1-only">Single</li>
+                <li role="menuitem" data-value="conflict" data-i18n="lvl_conflict">Conflict</li>
+                <li role="menuitem" data-value="1-only" data-i18n="lvl_single">Single</li>
               </ul>
             </div>
           </div>
           <div class="sp-filter-group">
-            <div class="sp-filter-label">Pair Name</div>
-            <input type="text" class="sp-filter-input search" id="filter-pair-sp" placeholder="Search pair..." autocomplete="off">
+            <div class="sp-filter-label" data-i18n="filter_pair_name">Pair Name</div>
+            <input type="text" class="sp-filter-input search" id="filter-pair-sp" placeholder="Search pair..." data-i18n-placeholder="ph_search_pair" autocomplete="off">
           </div>
           <div class="sp-filter-group">
-            <div class="sp-filter-label">Final Prediction</div>
+            <div class="sp-filter-label" data-i18n="filter_final_prediction">Final Prediction</div>
             <div class="dropdown">
               <button class="dropdown__trigger sp-filter-trigger narrow" id="dir-trigger" type="button">
                 <span id="dir-label">All</span>
                 <span class="dropdown__caret">▾</span>
               </button>
               <ul class="dropdown__menu" id="dir-menu" role="menu">
-                <li role="menuitem" data-value="">All</li>
+                <li role="menuitem" data-value="" data-i18n="opt_all">All</li>
                 <li role="menuitem" data-value="CALL">CALL</li>
                 <li role="menuitem" data-value="PUT">PUT</li>
               </ul>
             </div>
           </div>
           <div class="sp-filter-group">
-            <div class="sp-filter-label">App 1 Prediction</div>
+            <div class="sp-filter-label" data-i18n="filter_app1_prediction">App 1 Prediction</div>
             <div class="dropdown">
               <button class="dropdown__trigger sp-filter-trigger narrow" id="app1-trigger" type="button">
                 <span id="app1-label">All</span>
                 <span class="dropdown__caret">▾</span>
               </button>
               <ul class="dropdown__menu" id="app1-menu" role="menu">
-                <li role="menuitem" data-value="">All</li>
+                <li role="menuitem" data-value="" data-i18n="opt_all">All</li>
                 <li role="menuitem" data-value="CALL">CALL</li>
                 <li role="menuitem" data-value="PUT">PUT</li>
-                <li role="menuitem" data-value="NONE">Missing</li>
+                <li role="menuitem" data-value="NONE" data-i18n="opt_missing">Missing</li>
               </ul>
             </div>
           </div>
           <div class="sp-filter-group">
-            <div class="sp-filter-label">App 2 Prediction</div>
+            <div class="sp-filter-label" data-i18n="filter_app2_prediction">App 2 Prediction</div>
             <div class="dropdown">
               <button class="dropdown__trigger sp-filter-trigger narrow" id="app2-trigger" type="button">
                 <span id="app2-label">All</span>
                 <span class="dropdown__caret">▾</span>
               </button>
               <ul class="dropdown__menu" id="app2-menu" role="menu">
-                <li role="menuitem" data-value="">All</li>
+                <li role="menuitem" data-value="" data-i18n="opt_all">All</li>
                 <li role="menuitem" data-value="CALL">CALL</li>
                 <li role="menuitem" data-value="PUT">PUT</li>
-                <li role="menuitem" data-value="NONE">Missing</li>
+                <li role="menuitem" data-value="NONE" data-i18n="opt_missing">Missing</li>
               </ul>
             </div>
           </div>
           <div class="sp-filter-group">
-            <div class="sp-filter-label">App 3 Prediction</div>
+            <div class="sp-filter-label" data-i18n="filter_app3_prediction">App 3 Prediction</div>
             <div class="dropdown">
               <button class="dropdown__trigger sp-filter-trigger narrow" id="app3-trigger" type="button">
                 <span id="app3-label">All</span>
                 <span class="dropdown__caret">▾</span>
               </button>
               <ul class="dropdown__menu" id="app3-menu" role="menu">
-                <li role="menuitem" data-value="">All</li>
+                <li role="menuitem" data-value="" data-i18n="opt_all">All</li>
                 <li role="menuitem" data-value="CALL">CALL</li>
                 <li role="menuitem" data-value="PUT">PUT</li>
-                <li role="menuitem" data-value="NONE">Missing</li>
+                <li role="menuitem" data-value="NONE" data-i18n="opt_missing">Missing</li>
               </ul>
             </div>
           </div>
           <div class="sp-filter-group">
-            <div class="sp-filter-label">Agree 2/3</div>
+            <div class="sp-filter-label" data-i18n="filter_agree">Agree 2/3</div>
             <div class="dropdown">
               <button class="dropdown__trigger sp-filter-trigger narrow" id="agree-trigger" type="button">
                 <span id="agree-label">Any</span>
                 <span class="dropdown__caret">▾</span>
               </button>
               <ul class="dropdown__menu" id="agree-menu" role="menu">
-                <li role="menuitem" data-value="0">Any</li>
+                <li role="menuitem" data-value="0" data-i18n="opt_any">Any</li>
                 <li role="menuitem" data-value="2">≥ 2 agree</li>
                 <li role="menuitem" data-value="3">3 agree</li>
               </ul>
             </div>
           </div>
           <div class="sp-filter-group">
-            <div class="sp-filter-label">Win Rate (60m)</div>
+            <div class="sp-filter-label" data-i18n="filter_winrate60">Win Rate (60m)</div>
             <div class="dropdown">
               <button class="dropdown__trigger sp-filter-trigger" id="wr60-trigger" type="button">
                 <span id="wr60-label">Any</span>
                 <span class="dropdown__caret">▾</span>
               </button>
               <ul class="dropdown__menu" id="wr60-menu" role="menu">
-                <li role="menuitem" data-value="0">Any</li>
+                <li role="menuitem" data-value="0" data-i18n="opt_any">Any</li>
                 <li role="menuitem" data-value="50">≥ 50%</li>
                 <li role="menuitem" data-value="55">≥ 55%</li>
                 <li role="menuitem" data-value="60">≥ 60%</li>
@@ -290,14 +290,14 @@
             </div>
           </div>
           <div class="sp-filter-group">
-            <div class="sp-filter-label">Freshness</div>
+            <div class="sp-filter-label" data-i18n="filter_freshness">Freshness</div>
             <div class="dropdown">
               <button class="dropdown__trigger sp-filter-trigger" id="fresh-trigger" type="button">
                 <span id="fresh-label">Any</span>
                 <span class="dropdown__caret">▾</span>
               </button>
               <ul class="dropdown__menu" id="fresh-menu" role="menu">
-                <li role="menuitem" data-value="0">Any age</li>
+                <li role="menuitem" data-value="0" data-i18n="opt_any_age">Any age</li>
                 <li role="menuitem" data-value="60">≤ 1 min</li>
                 <li role="menuitem" data-value="120">≤ 2 min</li>
                 <li role="menuitem" data-value="300">≤ 5 min</li>
@@ -307,10 +307,13 @@
           <div class="sp-filter-actions">
             <label class="sp-checkbox">
               <input type="checkbox" id="favorites-only">
-              <span><i class="fas fa-star"></i> Favorites</span>
+              <span><i class="fas fa-star"></i> <span data-i18n="lbl_favorites">Favorites</span></span>
             </label>
             <button class="sp-btn sp-btn-reset" id="btn-clear-filters" type="button">
-              <i class="fas fa-undo"></i> Reset
+              <i class="fas fa-undo"></i> <span data-i18n="btn_reset">Reset</span>
+            </button>
+            <button class="sp-btn sp-btn-reset" id="btn-export-csv" type="button" title="Export the currently filtered rows as a CSV file">
+              <i class="fas fa-file-csv"></i> <span data-i18n="btn_export_csv">Export CSV</span>
             </button>
           </div>
           <!-- Active filter tags — rendered into the grid as a full-width row -->
@@ -330,20 +333,20 @@
               <thead>
                 <tr>
                   <th class="sp-th sp-th-fav"><i class="fas fa-star"></i></th>
-                  <th class="sp-th sortable" data-sort="market">Market <i class="fas fa-sort sort-icon"></i></th>
-                  <th class="sp-th sortable" data-sort="candle">Candle (UTC) <i class="fas fa-sort sort-icon"></i></th>
-                  <th class="sp-th sortable" data-sort="pair">Pair <i class="fas fa-sort sort-icon"></i></th>
+                  <th class="sp-th sortable" data-sort="market"><span data-i18n="th_market">Market</span> <i class="fas fa-sort sort-icon"></i></th>
+                  <th class="sp-th sortable" data-sort="candle"><span data-i18n="filter_candle_utc">Candle (UTC)</span> <i class="fas fa-sort sort-icon"></i></th>
+                  <th class="sp-th sortable" data-sort="pair"><span data-i18n="th_pair">Pair</span> <i class="fas fa-sort sort-icon"></i></th>
                   <th class="sp-th">App 1</th>
                   <th class="sp-th">App 2</th>
                   <th class="sp-th">App 3</th>
-                  <th class="sp-th sortable" data-sort="agree">Agree <i class="fas fa-sort sort-icon"></i></th>
-                  <th class="sp-th">Final + Entry</th>
-                  <th class="sp-th sortable" data-sort="wr60">Win Rate 60min <i class="fas fa-sort sort-icon"></i></th>
+                  <th class="sp-th sortable" data-sort="agree"><span data-i18n="th_agree">Agree</span> <i class="fas fa-sort sort-icon"></i></th>
+                  <th class="sp-th" data-i18n="th_final_entry">Final + Entry</th>
+                  <th class="sp-th sortable" data-sort="wr60"><span data-i18n="th_winrate60">Win Rate 60min</span> <i class="fas fa-sort sort-icon"></i></th>
                   <th class="sp-th sp-th-expand"></th>
                 </tr>
               </thead>
               <tbody id="pair-table-body">
-                <tr><td colspan="11" class="sp-placeholder">Loading…</td></tr>
+                <tr><td colspan="11" class="sp-placeholder" data-i18n="loading_ellipsis">Loading…</td></tr>
               </tbody>
             </table>
           </div>
@@ -357,42 +360,42 @@
       <div class="folder-grid" id="history-folder-grid">
         <button class="folder-card" data-folder="backtest" type="button">
           <span class="folder-card__icon folder-card__icon--blue"><i class="fas fa-chart-line"></i></span>
-          <span class="folder-card__title">Backtest</span>
-          <span class="folder-card__desc">Consensus accuracy over the last 6 hours</span>
+          <span class="folder-card__title" data-i18n="folder_backtest_title">Backtest</span>
+          <span class="folder-card__desc" data-i18n="folder_backtest_desc">Consensus accuracy over the last 6 hours</span>
         </button>
         <button class="folder-card" data-folder="perpair" type="button">
           <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-table-list"></i></span>
-          <span class="folder-card__title">Per-Pair Stats</span>
-          <span class="folder-card__desc">Win rate per pair, by app combination</span>
+          <span class="folder-card__title" data-i18n="folder_perpair_title">Per-Pair Stats</span>
+          <span class="folder-card__desc" data-i18n="folder_perpair_desc">Win rate per pair, by app combination</span>
         </button>
         <button class="folder-card" data-folder="apppair" type="button">
           <span class="folder-card__icon folder-card__icon--violet"><i class="fas fa-users"></i></span>
-          <span class="folder-card__title">App Pair Leaders</span>
-          <span class="folder-card__desc">Which pair of apps performs best, and where</span>
+          <span class="folder-card__title" data-i18n="folder_apppair_title">App Pair Leaders</span>
+          <span class="folder-card__desc" data-i18n="folder_apppair_desc">Which pair of apps performs best, and where</span>
         </button>
         <button class="folder-card" data-folder="drilldown" type="button">
           <span class="folder-card__icon folder-card__icon--amber"><i class="fas fa-magnifying-glass-chart"></i></span>
-          <span class="folder-card__title">Pair Drilldown</span>
-          <span class="folder-card__desc">Candle history + signals for one pair</span>
+          <span class="folder-card__title" data-i18n="folder_drilldown_title">Pair Drilldown</span>
+          <span class="folder-card__desc" data-i18n="folder_drilldown_desc">Candle history + signals for one pair</span>
         </button>
       </div>
 
       <!-- Detail view — hidden until a folder card above is tapped -->
       <div class="folder-detail" id="history-folder-detail" hidden>
-        <button class="folder-back" id="history-folder-back" type="button"><i class="fas fa-arrow-left"></i> Back to History</button>
+        <button class="folder-back" id="history-folder-back" type="button"><i class="fas fa-arrow-left"></i> <span data-i18n="back_to_history">Back to History</span></button>
 
       <!-- Backtest sub-tab -->
       <div class="history-panel history-panel--active" id="history-backtest">
         <div class="panel">
           <div class="panel__header">
-            <h2>Consensus Accuracy Backtest</h2>
+            <h2 data-i18n="panel_backtest_title">Consensus Accuracy Backtest</h2>
             <div class="filter-bar">
               <span class="panel__meta" id="bt-cache-age">—</span>
               <button class="btn btn--ghost" id="btn-run-backtest">Run fresh backtest</button>
             </div>
           </div>
           <div class="panel__body" id="backtest-content">
-            <p class="placeholder">Click "Run fresh backtest" to fetch a verdict, or wait for the auto-cached result to appear.</p>
+            <p class="placeholder" data-i18n="placeholder_run_backtest_history">Click "Run fresh backtest" to fetch a verdict, or wait for the auto-cached result to appear.</p>
           </div>
         </div>
       </div>
@@ -404,7 +407,7 @@
       <div class="history-panel" id="history-perpair">
         <div class="panel">
           <div class="panel__header">
-            <h2>Per-Pair Win Rate</h2>
+            <h2 data-i18n="panel_perpair_title">Per-Pair Win Rate</h2>
             <span class="panel__meta" id="perpair-meta">—</span>
           </div>
           <div class="panel__body panel__body--scroll">
@@ -413,10 +416,10 @@
                 <thead>
                   <tr>
                     <th>★</th>
-                    <th>Pair</th>
-                    <th>Cat</th>
-                    <th>Overall W/L</th>
-                    <th>Win %</th>
+                    <th data-i18n="th_pair">Pair</th>
+                    <th data-i18n="th_cat">Cat</th>
+                    <th data-i18n="th_overall_wl">Overall W/L</th>
+                    <th data-i18n="th_win_pct">Win %</th>
                     <th>app1+app2</th>
                     <th>app1+app3</th>
                     <th>app2+app3</th>
@@ -424,7 +427,7 @@
                   </tr>
                 </thead>
                 <tbody id="perpair-table-body">
-                  <tr><td colspan="9" class="placeholder">Loading per-pair stats…</td></tr>
+                  <tr><td colspan="9" class="placeholder" data-i18n="placeholder_loading_perpair">Loading per-pair stats…</td></tr>
                 </tbody>
               </table>
             </div>
@@ -438,11 +441,11 @@
       <div class="history-panel" id="history-apppair">
         <div class="panel">
           <div class="panel__header">
-            <h2>App Pair Leaders</h2>
+            <h2 data-i18n="panel_apppair_title">App Pair Leaders</h2>
             <span class="panel__meta" id="apppair-meta">—</span>
           </div>
           <div class="panel__body" id="apppair-content">
-            <p class="placeholder">Loading app-pair leaderboards…</p>
+            <p class="placeholder" data-i18n="placeholder_loading_apppair">Loading app-pair leaderboards…</p>
           </div>
         </div>
       </div>
@@ -451,13 +454,13 @@
       <div class="history-panel" id="history-drilldown">
         <div class="panel">
           <div class="panel__header">
-            <h2>Pair Drilldown</h2>
+            <h2 data-i18n="panel_drilldown_title">Pair Drilldown</h2>
             <div class="filter-bar">
-              <select id="drilldown-pair"><option value="">Select a pair…</option></select>
+              <select id="drilldown-pair"><option value="" data-i18n="opt_select_pair">Select a pair…</option></select>
             </div>
           </div>
           <div class="panel__body" id="drilldown-content">
-            <p class="placeholder">Pick a pair to see its candle history + per-app signal breakdown.</p>
+            <p class="placeholder" data-i18n="placeholder_pick_pair">Pick a pair to see its candle history + per-app signal breakdown.</p>
           </div>
         </div>
       </div>
@@ -470,71 +473,71 @@
       <div class="folder-grid" id="settings-folder-grid">
         <button class="folder-card" data-folder="general" type="button">
           <span class="folder-card__icon folder-card__icon--blue"><i class="fas fa-sliders"></i></span>
-          <span class="folder-card__title">General</span>
-          <span class="folder-card__desc">Theme, language, clock, time format</span>
+          <span class="folder-card__title" data-i18n="folder_general_title">General</span>
+          <span class="folder-card__desc" data-i18n="folder_general_desc">Theme, language, clock, time format</span>
         </button>
         <button class="folder-card" data-folder="realtime" type="button">
           <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-bolt"></i></span>
-          <span class="folder-card__title">Real-time Refresh</span>
-          <span class="folder-card__desc">Polling mode, feed size, sound, notifications</span>
+          <span class="folder-card__title" data-i18n="folder_realtime_title">Real-time Refresh</span>
+          <span class="folder-card__desc" data-i18n="folder_realtime_desc">Polling mode, feed size, sound, notifications</span>
         </button>
         <button class="folder-card" data-folder="filters" type="button">
           <span class="folder-card__icon folder-card__icon--violet"><i class="fas fa-filter"></i></span>
-          <span class="folder-card__title">Trading Filters</span>
-          <span class="folder-card__desc">Min win rate, freshness, conflicts, favorites</span>
+          <span class="folder-card__title" data-i18n="folder_filters_title">Trading Filters</span>
+          <span class="folder-card__desc" data-i18n="folder_filters_desc">Min win rate, freshness, conflicts, favorites</span>
         </button>
         <button class="folder-card" data-folder="offsets" type="button">
           <span class="folder-card__icon folder-card__icon--amber"><i class="fas fa-clock"></i></span>
-          <span class="folder-card__title">App Candle Offsets</span>
-          <span class="folder-card__desc">Per-app candle alignment (advanced)</span>
+          <span class="folder-card__title" data-i18n="folder_offsets_title">App Candle Offsets</span>
+          <span class="folder-card__desc" data-i18n="folder_offsets_desc">Per-app candle alignment (advanced)</span>
         </button>
         <button class="folder-card" data-folder="diagnostics" type="button">
           <span class="folder-card__icon folder-card__icon--red"><i class="fas fa-stethoscope"></i></span>
-          <span class="folder-card__title">Diagnostics</span>
-          <span class="folder-card__desc">Engineer-facing alignment diagnostics</span>
+          <span class="folder-card__title" data-i18n="folder_diagnostics_title">Diagnostics</span>
+          <span class="folder-card__desc" data-i18n="folder_diagnostics_desc">Engineer-facing alignment diagnostics</span>
         </button>
         <button class="folder-card" data-folder="about" type="button">
           <span class="folder-card__icon folder-card__icon--yellow"><i class="fas fa-circle-info"></i></span>
-          <span class="folder-card__title">Data &amp; About</span>
-          <span class="folder-card__desc">Clear cache, reset settings, version, GitHub</span>
+          <span class="folder-card__title" data-i18n="folder_about_title">Data &amp; About</span>
+          <span class="folder-card__desc" data-i18n="folder_about_desc">Clear cache, reset settings, version, GitHub</span>
         </button>
       </div>
 
       <!-- Detail view — hidden until a folder card above is tapped -->
       <div class="folder-detail" id="settings-folder-detail" hidden>
-        <button class="folder-back" id="settings-folder-back" type="button"><i class="fas fa-arrow-left"></i> Back to Settings</button>
+        <button class="folder-back" id="settings-folder-back" type="button"><i class="fas fa-arrow-left"></i> <span data-i18n="back_to_settings">Back to Settings</span></button>
 
         <div class="settings-panel settings-panel--active" id="settings-general">
           <div class="panel">
-            <div class="panel__header"><h2>General</h2></div>
+            <div class="panel__header"><h2 data-i18n="folder_general_title">General</h2></div>
             <div class="panel__body">
               <div class="setting-row">
-                <label for="set-theme">Theme</label>
+                <label for="set-theme" data-i18n="lbl_theme">Theme</label>
                 <select id="set-theme">
-                  <option value="dark">Dark (default)</option>
-                  <option value="light">Light</option>
+                  <option value="dark" data-i18n="opt_theme_dark">Dark (default)</option>
+                  <option value="light" data-i18n="opt_theme_light">Light</option>
                 </select>
               </div>
               <div class="setting-row">
-                <label for="set-lang">Language</label>
+                <label for="set-lang" data-i18n="lbl_language">Language</label>
                 <select id="set-lang">
                   <option value="en">English</option>
                   <option value="bn">বাংলা (Bangla)</option>
                 </select>
               </div>
               <div class="setting-row">
-                <label for="set-tz">Clock display</label>
+                <label for="set-tz" data-i18n="lbl_clock_display">Clock display</label>
                 <select id="set-tz">
-                  <option value="utc">UTC only</option>
-                  <option value="local">Local only</option>
-                  <option value="both" selected>Both UTC + Local</option>
+                  <option value="utc" data-i18n="opt_tz_utc">UTC only</option>
+                  <option value="local" data-i18n="opt_tz_local">Local only</option>
+                  <option value="both" selected data-i18n="opt_tz_both">Both UTC + Local</option>
                 </select>
               </div>
               <div class="setting-row">
-                <label for="set-timefmt">Time format</label>
+                <label for="set-timefmt" data-i18n="lbl_time_format">Time format</label>
                 <select id="set-timefmt">
-                  <option value="24" selected>24-hour</option>
-                  <option value="12">12-hour (AM/PM)</option>
+                  <option value="24" selected data-i18n="opt_time_24">24-hour</option>
+                  <option value="12" data-i18n="opt_time_12">12-hour (AM/PM)</option>
                 </select>
               </div>
             </div>
@@ -543,32 +546,32 @@
 
         <div class="settings-panel" id="settings-realtime">
           <div class="panel">
-            <div class="panel__header"><h2>Real-time Refresh</h2></div>
+            <div class="panel__header"><h2 data-i18n="folder_realtime_title">Real-time Refresh</h2></div>
             <div class="panel__body">
               <div class="setting-row">
-                <label for="set-poll">Polling mode</label>
+                <label for="set-poll" data-i18n="lbl_polling_mode">Polling mode</label>
                 <select id="set-poll">
-                  <option value="adaptive" selected>Adaptive (burst 1s, idle 3s)</option>
-                  <option value="1">Every 1 second (aggressive)</option>
-                  <option value="3">Every 3 seconds</option>
-                  <option value="5">Every 5 seconds</option>
-                  <option value="10">Every 10 seconds (battery saver)</option>
+                  <option value="adaptive" selected data-i18n="opt_poll_adaptive">Adaptive (burst 1s, idle 3s)</option>
+                  <option value="1" data-i18n="opt_poll_1">Every 1 second (aggressive)</option>
+                  <option value="3" data-i18n="opt_poll_3">Every 3 seconds</option>
+                  <option value="5" data-i18n="opt_poll_5">Every 5 seconds</option>
+                  <option value="10" data-i18n="opt_poll_10">Every 10 seconds (battery saver)</option>
                 </select>
               </div>
               <div class="setting-row">
-                <label for="set-feed-size">Signal feed size</label>
+                <label for="set-feed-size" data-i18n="lbl_feed_size">Signal feed size</label>
                 <select id="set-feed-size">
-                  <option value="20">20 items</option>
-                  <option value="50" selected>50 items</option>
-                  <option value="100">100 items</option>
+                  <option value="20" data-i18n="opt_feed_20">20 items</option>
+                  <option value="50" selected data-i18n="opt_feed_50">50 items</option>
+                  <option value="100" data-i18n="opt_feed_100">100 items</option>
                 </select>
               </div>
               <div class="setting-row">
-                <label for="set-sound">Sound on 3-agree</label>
+                <label for="set-sound" data-i18n="lbl_sound">Sound on 3-agree</label>
                 <input type="checkbox" id="set-sound">
               </div>
               <div class="setting-row">
-                <label for="set-notify">Browser notifications</label>
+                <label for="set-notify" data-i18n="lbl_notify">Browser notifications</label>
                 <input type="checkbox" id="set-notify">
               </div>
             </div>
@@ -577,23 +580,23 @@
 
         <div class="settings-panel" id="settings-filters">
           <div class="panel">
-            <div class="panel__header"><h2>Trading Filters</h2></div>
+            <div class="panel__header"><h2 data-i18n="folder_filters_title">Trading Filters</h2></div>
             <div class="panel__body">
               <div class="setting-row">
-                <label for="set-min-wr">Min win rate %</label>
+                <label for="set-min-wr" data-i18n="lbl_min_wr">Min win rate %</label>
                 <input type="number" id="set-min-wr" min="0" max="100" step="1" value="0">
               </div>
               <div class="setting-row">
-                <label for="set-only-fresh">Hide signals older than (sec)</label>
+                <label for="set-only-fresh" data-i18n="lbl_only_fresh">Hide signals older than (sec)</label>
                 <input type="number" id="set-only-fresh" min="0" max="600" step="5" value="0">
               </div>
               <div class="setting-row">
-                <label for="set-hide-conflicts">Hide conflicts</label>
+                <label for="set-hide-conflicts" data-i18n="lbl_hide_conflicts">Hide conflicts</label>
                 <input type="checkbox" id="set-hide-conflicts">
               </div>
               <div class="setting-row">
-                <label>Favorites</label>
-                <div id="favorites-list" class="favorites-list"><span class="placeholder">No favorites yet — tap ★ next to a pair.</span></div>
+                <label data-i18n="lbl_favorites">Favorites</label>
+                <div id="favorites-list" class="favorites-list"><span class="placeholder" data-i18n="placeholder_no_favorites">No favorites yet — tap ★ next to a pair.</span></div>
               </div>
             </div>
           </div>
@@ -601,44 +604,44 @@
 
         <div class="settings-panel" id="settings-offsets">
           <div class="panel">
-            <div class="panel__header"><h2>App Candle Offsets</h2></div>
+            <div class="panel__header"><h2 data-i18n="folder_offsets_title">App Candle Offsets</h2></div>
             <div class="panel__body">
-              <p class="hint">Per-app candle offset, in whole candles. Set this only if /api/diag reports a consistent non-zero offset between two apps.</p>
+              <p class="hint" data-i18n="hint_offsets_1">Per-app candle offset, in whole candles. Set this only if /api/diag reports a consistent non-zero offset between two apps.</p>
               <div class="setting-row">
-                <label for="set-off1">App 1 (Minimum Pair)</label>
+                <label for="set-off1" data-i18n="lbl_off1">App 1 (Minimum Pair)</label>
                 <select id="set-off1">
                   <option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option>
-                  <option value="0" selected>0 (default)</option>
+                  <option value="0" selected data-i18n="opt_offset_default">0 (default)</option>
                   <option value="1">1</option><option value="2">2</option><option value="3">3</option>
                 </select>
               </div>
               <div class="setting-row">
-                <label for="set-off2">App 2 (Binary Signal)</label>
+                <label for="set-off2" data-i18n="lbl_off2">App 2 (Binary Signal)</label>
                 <select id="set-off2">
                   <option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option>
-                  <option value="0" selected>0 (default)</option>
+                  <option value="0" selected data-i18n="opt_offset_default">0 (default)</option>
                   <option value="1">1</option><option value="2">2</option><option value="3">3</option>
                 </select>
               </div>
               <div class="setting-row">
-                <label for="set-off3">App 3 (OTC Live)</label>
+                <label for="set-off3" data-i18n="lbl_off3">App 3 (OTC Live)</label>
                 <select id="set-off3">
                   <option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option>
-                  <option value="0" selected>0 (default)</option>
+                  <option value="0" selected data-i18n="opt_offset_default">0 (default)</option>
                   <option value="1">1</option><option value="2">2</option><option value="3">3</option>
                 </select>
               </div>
-              <p class="hint">Note: changing offsets here is informational only — to actually apply offsets server-side, set the APP1/2/3_CANDLE_OFFSET environment variables on Railway.</p>
+              <p class="hint" data-i18n="hint_offsets_2">Note: changing offsets here is informational only — to actually apply offsets server-side, set the APP1/2/3_CANDLE_OFFSET environment variables on Railway.</p>
             </div>
           </div>
         </div>
 
         <div class="settings-panel" id="settings-diagnostics">
           <div class="panel">
-            <div class="panel__header"><h2>Diagnostics</h2></div>
+            <div class="panel__header"><h2 data-i18n="folder_diagnostics_title">Diagnostics</h2></div>
             <div class="panel__body">
-              <p class="hint">Engineer-facing alignment diagnostics. Hidden from the main navigation but kept here for power users.</p>
-              <button class="btn btn--ghost" id="btn-refresh-diag">Load diagnostics</button>
+              <p class="hint" data-i18n="hint_diagnostics">Engineer-facing alignment diagnostics. Hidden from the main navigation but kept here for power users.</p>
+              <button class="btn btn--ghost" id="btn-refresh-diag" data-i18n="btn_load_diagnostics">Load diagnostics</button>
               <div id="diag-content" style="margin-top:12px;"></div>
             </div>
           </div>
@@ -646,11 +649,11 @@
 
         <div class="settings-panel" id="settings-about">
           <div class="panel">
-            <div class="panel__header"><h2>Data &amp; About</h2></div>
+            <div class="panel__header"><h2 data-i18n="folder_about_title">Data &amp; About</h2></div>
             <div class="panel__body">
               <div class="setting-row">
-                <button class="btn btn--ghost" id="btn-clear-cache">Clear local cache</button>
-                <button class="btn btn--ghost" id="btn-reset-settings">Reset settings</button>
+                <button class="btn btn--ghost" id="btn-clear-cache" data-i18n="btn_clear_cache">Clear local cache</button>
+                <button class="btn btn--ghost" id="btn-reset-settings" data-i18n="btn_reset_settings">Reset settings</button>
               </div>
               <div class="setting-row about-row">
                 <span>Master-Ai v<span id="version">{{ version }}</span></span>
@@ -675,7 +678,7 @@
         <button class="drawer__close" id="drawer-close" aria-label="Close">✕</button>
       </header>
       <div class="drawer__body" id="drawer-body">
-        <p class="placeholder">Loading…</p>
+        <p class="placeholder" data-i18n="loading_ellipsis">Loading…</p>
       </div>
     </aside>
   </div>
@@ -684,19 +687,19 @@
   <nav class="bottomnav">
     <button class="bottomnav__item bottomnav__item--active" data-tab="home">
       <span class="bottomnav__icon">🏠</span>
-      <span class="bottomnav__label">Home</span>
+      <span class="bottomnav__label" data-i18n="nav_home">Home</span>
     </button>
     <button class="bottomnav__item" data-tab="signals">
       <span class="bottomnav__icon">📡</span>
-      <span class="bottomnav__label">Signals</span>
+      <span class="bottomnav__label" data-i18n="nav_signals">Signals</span>
     </button>
     <button class="bottomnav__item" data-tab="history">
       <span class="bottomnav__icon">📊</span>
-      <span class="bottomnav__label">History</span>
+      <span class="bottomnav__label" data-i18n="nav_history">History</span>
     </button>
     <button class="bottomnav__item" data-tab="settings">
       <span class="bottomnav__icon">⚙</span>
-      <span class="bottomnav__label">Settings</span>
+      <span class="bottomnav__label" data-i18n="nav_settings">Settings</span>
     </button>
   </nav>
 
