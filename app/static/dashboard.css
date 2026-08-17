@@ -1718,6 +1718,7 @@ a { color: var(--blue); }
 #tab-signals .sp-filter-grid .sp-filter-actions {
   grid-column: 1 / -1;
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   justify-content: flex-end;

@@ -43,7 +43,7 @@ from ..backtest_runner import (
     get_cached_backtest,
     get_or_refresh_backtest,
     get_per_pair_winrate_lookup,
-    run_backtest,
+    run_backtest_coordinated,
 )
 from ..candle_fetcher import (
     get_candle,
@@ -202,6 +202,7 @@ async def get_signal_feed(
                 "ageSec": s.age_sec,
                 "leadSec": lead,
                 "lagSec": lag,
+                "status": _signal_timing_status(lead, lag),
                 "fresh": s.fresh,
                 "cached": s.cached,
                 "outcome": s.outcome,
@@ -330,8 +331,9 @@ async def get_pairs(
 
         # ---- candle freshness filter ----
         candle_time = latest.candle_time if latest else 0
-        if candle_fresh_sec and candle_time > 0:
-            if (now_sec - candle_time) > candle_fresh_sec:
+        if candle_fresh_sec:
+            # No candle at all is never "fresh" — don't let it slip through.
+            if candle_time <= 0 or (now_sec - candle_time) > candle_fresh_sec:
                 continue
 
         # ---- win rate 60min filter ----
@@ -391,7 +393,9 @@ async def get_pairs(
     level_rank = {"3-agree": 0, "2-agree": 1, "conflict": 2, "1-only": 3, "none": 4}
     out.sort(key=lambda x: (
         level_rank.get(x.get("agreeLevel") or "none", 5),
-        -(x.get("winRate60Min") or -1),
+        # ``or -1`` would treat a real, fully-graded 0% win rate the same as
+        # "no data" (0.0 is falsy) — use an explicit None check instead.
+        -(x.get("winRate60Min") if x.get("winRate60Min") is not None else -1),
         x.get("displayPair") or "",
     ))
 
@@ -723,11 +727,13 @@ async def get_backtest(request: Request):
     """Runs a live backtest against the 3 source apps' historical signal
     data, computes consensus accuracy, and returns the structured result.
 
-    Also writes the result to the backtest cache so subsequent snapshot
-    polls can read per-pair win rates without re-running.
+    Joins a refresh already in flight (e.g. the poller's 60s background
+    refresh) instead of racing it, and writes the result to the backtest
+    cache so subsequent snapshot polls can read per-pair win rates without
+    re-running.
     """
     try:
-        result = await run_backtest()
+        result = await run_backtest_coordinated()
         return _json(result)
     except Exception as e:
         return _json({"error": "backtest_failed", "message": str(e)}, status=500)
@@ -864,7 +870,7 @@ async def get_diag(
             "signalsInLast5Candles": len(recent),
             "validForOwnCandle": sum(1 for s in sigs if s.valid_for_candle),
             "invalidForOwnCandle": sum(1 for s in sigs if not s.valid_for_candle),
-            "sample": [_serialize_signal_sample(s) for s in sorted(sigs, key=lambda x: x.candle_time, reverse=True)[:5]],
+            "sample": [_serialize_signal_sample(s, now_sec) for s in sorted(sigs, key=lambda x: x.candle_time, reverse=True)[:5]],
         })
 
     # ---- Pair-name overlap ----
@@ -1136,8 +1142,9 @@ def _serialize_signal(s) -> dict:
     }
 
 
-def _serialize_signal_sample(s) -> dict:
+def _serialize_signal_sample(s, now_sec: int) -> dict:
     lead = s.candle_time - s.timestamp
+    lag = now_sec - s.candle_time
     return {
         "pair": s.pair,
         "direction": s.direction,
@@ -1146,7 +1153,7 @@ def _serialize_signal_sample(s) -> dict:
         "emittedAt": s.timestamp,
         "emittedUtc": _fmt_hms(s.timestamp) if s.timestamp > 0 else None,
         "leadSec": lead,
-        "timingStatus": _signal_timing_status(lead, 0),
+        "timingStatus": _signal_timing_status(lead, lag),
         "validForCandle": s.valid_for_candle,
         "fresh": s.fresh,
         "cached": s.cached,

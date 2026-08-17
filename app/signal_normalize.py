@@ -47,12 +47,25 @@ Direction = str  # "CALL" | "PUT" | "NEUTRAL"
 # ---------------------------------------------------------------------------
 
 
+# Upper bound for a plausible unix-seconds value (2100-01-01 UTC). Nothing
+# in this app legitimately deals in timestamps anywhere near that far out —
+# this exists purely to catch garbage. Values beyond it are rejected rather
+# than returned, because `datetime.fromtimestamp()` (called all over the
+# codebase — candle bucketing, `_fmt_hm`/`_fmt_hms`, `/api/diag`, etc.)
+# raises OSError/OverflowError on out-of-range values on some platforms
+# (observed on Windows), which would 500 whichever endpoint touched it.
+_MAX_SANE_UNIX_SEC = 4_102_444_800
+
+
 def to_unix_seconds(value: Any) -> int:
     """Coerce anything that looks like a timestamp into unix SECONDS.
 
-    Accepts unix seconds, unix milliseconds, unix microseconds, numeric strings
-    and ISO-8601 strings. Returns 0 when the value is missing or unparseable,
-    so callers can test with a simple ``> 0``.
+    Accepts unix seconds, unix milliseconds, unix microseconds, unix
+    nanoseconds, numeric strings and ISO-8601 strings. Returns 0 when the
+    value is missing, unparseable, or resolves to an implausible magnitude
+    (garbage / an unrecognized unit), so callers can test with a simple
+    ``> 0`` and safely pass the result straight to
+    ``datetime.fromtimestamp()``.
     """
     if value is None:
         return 0
@@ -74,7 +87,8 @@ def to_unix_seconds(value: Any) -> int:
                 dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
             except ValueError:
                 return 0
-            return int(dt.timestamp())
+            result = int(dt.timestamp())
+            return result if 0 < result <= _MAX_SANE_UNIX_SEC else 0
     else:
         return 0
 
@@ -82,11 +96,21 @@ def to_unix_seconds(value: Any) -> int:
         return 0
 
     # Magnitude test. A sane unix-seconds timestamp for "now" is ~1.7e9.
-    if n >= 1e14:  # microseconds
-        return int(n // 1_000_000)
-    if n >= 1e11:  # milliseconds
-        return int(n // 1000)
-    return int(n)
+    if n >= 1e17:  # nanoseconds
+        result = int(n // 1_000_000_000)
+    elif n >= 1e14:  # microseconds
+        result = int(n // 1_000_000)
+    elif n >= 1e11:  # milliseconds
+        result = int(n // 1000)
+    else:
+        result = int(n)
+
+    # A value whose unit this function didn't recognize (or that was just
+    # garbage to begin with) can still come out absurdly large even after
+    # unit correction — e.g. a stray 1e18 "divides down" to ~31,700 years
+    # via the microsecond branch alone. Reject it outright rather than
+    # letting a 50,000-years-in-the-future timestamp leak downstream.
+    return result if result <= _MAX_SANE_UNIX_SEC else 0
 
 
 def candle_floor(ts_sec: int) -> int:

@@ -11,6 +11,148 @@
 const $ = (id) => document.getElementById(id);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
+// ====== i18n ======
+// Covers the app's static chrome (nav, headers, filter/settings labels,
+// buttons, placeholders) — the stuff every screen shows regardless of live
+// data. Trading terminology (CALL/PUT, OTC, pair names) and anything a
+// render function overwrites on every poll (status pill, live counters,
+// timestamps) are deliberately left untranslated: those are either
+// universal-in-English trading vocabulary or live operational readouts,
+// not chrome a translation would meaningfully improve.
+const TRANSLATIONS = {
+  en: {
+    nav_home: "Home", nav_signals: "Signals", nav_history: "History", nav_settings: "Settings",
+    topbar_subtitle: "Quotex signal aggregator",
+    opt_all_pairs: "All pairs", opt_otc_only: "OTC only", opt_real_only: "Real only",
+    ph_search_pair: "Search pair…",
+    health_alert_title: "Source app issue detected",
+    hero_3agree_label: "3-Bot Agree", hero_2agree_label: "2-Bot Agree",
+    hero_conflict_label: "Conflicts", hero_conflict_sub: "split direction",
+    hero_single_label: "Single Only", hero_single_sub: "only one source",
+    home_top_signals: "Top Signals", home_live_feed: "Live Signal Feed", home_live_tag: "real-time",
+    home_consensus_accuracy: "Consensus Accuracy (last 6 hours)",
+    loading_consensus: "Loading consensus…", loading_feed: "Loading feed…",
+    placeholder_run_backtest_home: "Run a backtest to see per-level accuracy.",
+    filter_market_type: "Market Type", filter_candle_utc: "Candle (UTC)", filter_pair_name: "Pair Name",
+    filter_final_prediction: "Final Prediction",
+    filter_app1_prediction: "App 1 Prediction", filter_app2_prediction: "App 2 Prediction", filter_app3_prediction: "App 3 Prediction",
+    filter_agree: "Agree 2/3", filter_winrate60: "Win Rate (60m)", filter_freshness: "Freshness",
+    opt_all: "All", opt_real: "Real", opt_missing: "Missing", opt_any: "Any", opt_any_age: "Any age",
+    lvl_conflict: "Conflict", lvl_single: "Single",
+    lbl_favorites: "Favorites", btn_reset: "Reset", btn_export_csv: "Export CSV",
+    th_market: "Market", th_pair: "Pair", th_agree: "Agree", th_final_entry: "Final + Entry", th_winrate60: "Win Rate 60min",
+    loading_ellipsis: "Loading…",
+    folder_backtest_title: "Backtest", folder_backtest_desc: "Consensus accuracy over the last 6 hours",
+    folder_perpair_title: "Per-Pair Stats", folder_perpair_desc: "Win rate per pair, by app combination",
+    folder_apppair_title: "App Pair Leaders", folder_apppair_desc: "Which pair of apps performs best, and where",
+    folder_drilldown_title: "Pair Drilldown", folder_drilldown_desc: "Candle history + signals for one pair",
+    back_to_history: "Back to History",
+    panel_backtest_title: "Consensus Accuracy Backtest",
+    placeholder_run_backtest_history: 'Click "Run fresh backtest" to fetch a verdict, or wait for the auto-cached result to appear.',
+    panel_perpair_title: "Per-Pair Win Rate", th_cat: "Cat", th_overall_wl: "Overall W/L", th_win_pct: "Win %",
+    placeholder_loading_perpair: "Loading per-pair stats…",
+    panel_apppair_title: "App Pair Leaders", placeholder_loading_apppair: "Loading app-pair leaderboards…",
+    panel_drilldown_title: "Pair Drilldown", opt_select_pair: "Select a pair…",
+    placeholder_pick_pair: "Pick a pair to see its candle history + per-app signal breakdown.",
+    folder_general_title: "General", folder_general_desc: "Theme, language, clock, time format",
+    folder_realtime_title: "Real-time Refresh", folder_realtime_desc: "Polling mode, feed size, sound, notifications",
+    folder_filters_title: "Trading Filters", folder_filters_desc: "Min win rate, freshness, conflicts, favorites",
+    folder_offsets_title: "App Candle Offsets", folder_offsets_desc: "Per-app candle alignment (advanced)",
+    folder_diagnostics_title: "Diagnostics", folder_diagnostics_desc: "Engineer-facing alignment diagnostics",
+    folder_about_title: "Data & About", folder_about_desc: "Clear cache, reset settings, version, GitHub",
+    back_to_settings: "Back to Settings",
+    lbl_theme: "Theme", opt_theme_dark: "Dark (default)", opt_theme_light: "Light",
+    lbl_language: "Language",
+    lbl_clock_display: "Clock display", opt_tz_utc: "UTC only", opt_tz_local: "Local only", opt_tz_both: "Both UTC + Local",
+    lbl_time_format: "Time format", opt_time_24: "24-hour", opt_time_12: "12-hour (AM/PM)",
+    lbl_polling_mode: "Polling mode",
+    opt_poll_adaptive: "Adaptive (burst 1s, idle 3s)", opt_poll_1: "Every 1 second (aggressive)",
+    opt_poll_3: "Every 3 seconds", opt_poll_5: "Every 5 seconds", opt_poll_10: "Every 10 seconds (battery saver)",
+    lbl_feed_size: "Signal feed size", opt_feed_20: "20 items", opt_feed_50: "50 items", opt_feed_100: "100 items",
+    lbl_sound: "Sound on 3-agree", lbl_notify: "Browser notifications",
+    lbl_min_wr: "Min win rate %", lbl_only_fresh: "Hide signals older than (sec)", lbl_hide_conflicts: "Hide conflicts",
+    placeholder_no_favorites: "No favorites yet — tap ★ next to a pair.",
+    hint_offsets_1: "Per-app candle offset, in whole candles. Set this only if /api/diag reports a consistent non-zero offset between two apps.",
+    lbl_off1: "App 1 (Minimum Pair)", lbl_off2: "App 2 (Binary Signal)", lbl_off3: "App 3 (OTC Live)",
+    opt_offset_default: "0 (default)",
+    hint_offsets_2: "Note: changing offsets here is informational only — to actually apply offsets server-side, set the APP1/2/3_CANDLE_OFFSET environment variables on Railway.",
+    hint_diagnostics: "Engineer-facing alignment diagnostics. Hidden from the main navigation but kept here for power users.",
+    btn_load_diagnostics: "Load diagnostics",
+    btn_clear_cache: "Clear local cache", btn_reset_settings: "Reset settings",
+  },
+  bn: {
+    nav_home: "হোম", nav_signals: "সিগন্যাল", nav_history: "হিস্ট্রি", nav_settings: "সেটিংস",
+    topbar_subtitle: "Quotex সিগন্যাল অ্যাগ্রিগেটর",
+    opt_all_pairs: "সকল পেয়ার", opt_otc_only: "শুধু OTC", opt_real_only: "শুধু রিয়েল",
+    ph_search_pair: "পেয়ার খুঁজুন…",
+    health_alert_title: "সোর্স অ্যাপে সমস্যা সনাক্ত হয়েছে",
+    hero_3agree_label: "৩-বট একমত", hero_2agree_label: "২-বট একমত",
+    hero_conflict_label: "দ্বন্দ্ব", hero_conflict_sub: "বিভক্ত দিক",
+    hero_single_label: "শুধু একক", hero_single_sub: "শুধু একটি সোর্স",
+    home_top_signals: "শীর্ষ সিগন্যাল", home_live_feed: "লাইভ সিগন্যাল ফিড", home_live_tag: "রিয়েল-টাইম",
+    home_consensus_accuracy: "কনসেনসাস নির্ভুলতা (গত ৬ ঘণ্টা)",
+    loading_consensus: "কনসেনসাস লোড হচ্ছে…", loading_feed: "ফিড লোড হচ্ছে…",
+    placeholder_run_backtest_home: "প্রতি-স্তরের নির্ভুলতা দেখতে একটি ব্যাকটেস্ট চালান।",
+    filter_market_type: "মার্কেট টাইপ", filter_candle_utc: "ক্যান্ডেল (UTC)", filter_pair_name: "পেয়ারের নাম",
+    filter_final_prediction: "চূড়ান্ত পূর্বাভাস",
+    filter_app1_prediction: "অ্যাপ ১ পূর্বাভাস", filter_app2_prediction: "অ্যাপ ২ পূর্বাভাস", filter_app3_prediction: "অ্যাপ ৩ পূর্বাভাস",
+    filter_agree: "একমত ২/৩", filter_winrate60: "জয়ের হার (৬০ মি)", filter_freshness: "সতেজতা",
+    opt_all: "সব", opt_real: "রিয়েল", opt_missing: "অনুপস্থিত", opt_any: "যেকোনো", opt_any_age: "যেকোনো বয়স",
+    lvl_conflict: "দ্বন্দ্ব", lvl_single: "একক",
+    lbl_favorites: "ফেভারিট", btn_reset: "রিসেট", btn_export_csv: "CSV এক্সপোর্ট",
+    th_market: "মার্কেট", th_pair: "পেয়ার", th_agree: "একমত", th_final_entry: "চূড়ান্ত + এন্ট্রি", th_winrate60: "জয়ের হার ৬০মি",
+    loading_ellipsis: "লোড হচ্ছে…",
+    folder_backtest_title: "ব্যাকটেস্ট", folder_backtest_desc: "গত ৬ ঘণ্টার কনসেনসাস নির্ভুলতা",
+    folder_perpair_title: "প্রতি-পেয়ার পরিসংখ্যান", folder_perpair_desc: "প্রতি পেয়ারে জয়ের হার, অ্যাপ সমন্বয় অনুযায়ী",
+    folder_apppair_title: "অ্যাপ পেয়ার লিডার", folder_apppair_desc: "কোন অ্যাপ জোড়া সবচেয়ে ভালো পারফর্ম করে, এবং কোথায়",
+    folder_drilldown_title: "পেয়ার ড্রিলডাউন", folder_drilldown_desc: "একটি পেয়ারের ক্যান্ডেল হিস্ট্রি + সিগন্যাল",
+    back_to_history: "হিস্ট্রিতে ফিরে যান",
+    panel_backtest_title: "কনসেনসাস নির্ভুলতা ব্যাকটেস্ট",
+    placeholder_run_backtest_history: '"Run fresh backtest"-এ ক্লিক করে ফলাফল আনুন, অথবা অটো-ক্যাশড ফলাফলের জন্য অপেক্ষা করুন।',
+    panel_perpair_title: "প্রতি-পেয়ার জয়ের হার", th_cat: "ক্যাট", th_overall_wl: "সর্বমোট জয়/হার", th_win_pct: "জয় %",
+    placeholder_loading_perpair: "প্রতি-পেয়ার পরিসংখ্যান লোড হচ্ছে…",
+    panel_apppair_title: "অ্যাপ পেয়ার লিডার", placeholder_loading_apppair: "অ্যাপ-পেয়ার লিডারবোর্ড লোড হচ্ছে…",
+    panel_drilldown_title: "পেয়ার ড্রিলডাউন", opt_select_pair: "একটি পেয়ার বেছে নিন…",
+    placeholder_pick_pair: "ক্যান্ডেল হিস্ট্রি ও প্রতি-অ্যাপ সিগন্যাল দেখতে একটি পেয়ার বেছে নিন।",
+    folder_general_title: "সাধারণ", folder_general_desc: "থিম, ভাষা, ঘড়ি, সময় ফরম্যাট",
+    folder_realtime_title: "রিয়েল-টাইম রিফ্রেশ", folder_realtime_desc: "পোলিং মোড, ফিড সাইজ, সাউন্ড, নোটিফিকেশন",
+    folder_filters_title: "ট্রেডিং ফিল্টার", folder_filters_desc: "সর্বনিম্ন জয়ের হার, সতেজতা, দ্বন্দ্ব, ফেভারিট",
+    folder_offsets_title: "অ্যাপ ক্যান্ডেল অফসেট", folder_offsets_desc: "প্রতি-অ্যাপ ক্যান্ডেল অ্যালাইনমেন্ট (অ্যাডভান্সড)",
+    folder_diagnostics_title: "ডায়াগনস্টিকস", folder_diagnostics_desc: "ইঞ্জিনিয়ার-কেন্দ্রিক অ্যালাইনমেন্ট ডায়াগনস্টিকস",
+    folder_about_title: "ডেটা ও সম্পর্কে", folder_about_desc: "ক্যাশ মুছুন, সেটিংস রিসেট করুন, ভার্সন, GitHub",
+    back_to_settings: "সেটিংসে ফিরে যান",
+    lbl_theme: "থিম", opt_theme_dark: "ডার্ক (ডিফল্ট)", opt_theme_light: "লাইট",
+    lbl_language: "ভাষা",
+    lbl_clock_display: "ঘড়ি প্রদর্শন", opt_tz_utc: "শুধু UTC", opt_tz_local: "শুধু স্থানীয়", opt_tz_both: "UTC + স্থানীয় উভয়ই",
+    lbl_time_format: "সময় ফরম্যাট", opt_time_24: "২৪-ঘণ্টা", opt_time_12: "১২-ঘণ্টা (AM/PM)",
+    lbl_polling_mode: "পোলিং মোড",
+    opt_poll_adaptive: "অ্যাডাপ্টিভ (বার্স্ট ১সে, আইডল ৩সে)", opt_poll_1: "প্রতি ১ সেকেন্ড (অ্যাগ্রেসিভ)",
+    opt_poll_3: "প্রতি ৩ সেকেন্ড", opt_poll_5: "প্রতি ৫ সেকেন্ড", opt_poll_10: "প্রতি ১০ সেকেন্ড (ব্যাটারি সাশ্রয়ী)",
+    lbl_feed_size: "সিগন্যাল ফিড সাইজ", opt_feed_20: "২০টি আইটেম", opt_feed_50: "৫০টি আইটেম", opt_feed_100: "১০০টি আইটেম",
+    lbl_sound: "৩-একমতে সাউন্ড", lbl_notify: "ব্রাউজার নোটিফিকেশন",
+    lbl_min_wr: "সর্বনিম্ন জয়ের হার %", lbl_only_fresh: "কত সেকেন্ডের পুরনো সিগন্যাল লুকাবে", lbl_hide_conflicts: "দ্বন্দ্ব লুকান",
+    placeholder_no_favorites: "এখনও কোনো ফেভারিট নেই — একটি পেয়ারের পাশে ★ ট্যাপ করুন।",
+    hint_offsets_1: "প্রতি-অ্যাপ ক্যান্ডেল অফসেট, পূর্ণ ক্যান্ডেলে। শুধুমাত্র তখনই সেট করুন যখন /api/diag দুটি অ্যাপের মধ্যে একটি ধারাবাহিক নন-জিরো অফসেট রিপোর্ট করে।",
+    lbl_off1: "অ্যাপ ১ (Minimum Pair)", lbl_off2: "অ্যাপ ২ (Binary Signal)", lbl_off3: "অ্যাপ ৩ (OTC Live)",
+    opt_offset_default: "০ (ডিফল্ট)",
+    hint_offsets_2: "নোট: এখানে অফসেট পরিবর্তন শুধুই তথ্যগত — সার্ভার-সাইডে প্রকৃতপক্ষে অফসেট প্রয়োগ করতে Railway-তে APP1/2/3_CANDLE_OFFSET এনভায়রনমেন্ট ভেরিয়েবল সেট করুন।",
+    hint_diagnostics: "ইঞ্জিনিয়ার-কেন্দ্রিক অ্যালাইনমেন্ট ডায়াগনস্টিকস। মূল নেভিগেশন থেকে লুকানো কিন্তু পাওয়ার ইউজারদের জন্য এখানে রাখা হয়েছে।",
+    btn_load_diagnostics: "ডায়াগনস্টিকস লোড করুন",
+    btn_clear_cache: "লোকাল ক্যাশ মুছুন", btn_reset_settings: "সেটিংস রিসেট করুন",
+  },
+};
+
+function t(key) {
+  const dict = TRANSLATIONS[state.settings.lang] || TRANSLATIONS.en;
+  return dict[key] ?? TRANSLATIONS.en[key] ?? key;
+}
+
+function applyTranslations() {
+  document.documentElement.lang = state.settings.lang === "bn" ? "bn" : "en";
+  $$("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n); });
+  $$("[data-i18n-placeholder]").forEach((el) => { el.placeholder = t(el.dataset.i18nPlaceholder); });
+}
+
 // ====== Default settings (must come before `state` because `loadSettings()`
 // ====== is called from inside `state`'s initializer — JS const TDZ would
 // ====== otherwise throw "Cannot access DEFAULT_SETTINGS before initialization".)
@@ -60,6 +202,7 @@ const state = {
   lastPollAt: 0,
   drawerPair: null,
   healthAlertDismissed: false,
+  healthAlertDismissedApps: new Set(), // app ids/names that were bad at dismissal time
 };
 
 const FEED_LIMIT = () => parseInt(state.settings.feedSize, 10) || 50;
@@ -80,6 +223,7 @@ function applySettings() {
   document.body.dataset.theme = state.settings.theme;
   document.body.dataset.tz = state.settings.tz;
   document.body.dataset.lang = state.settings.lang;
+  applyTranslations();
   // Show/hide clock blocks
   const showUtc = state.settings.tz === "utc" || state.settings.tz === "both";
   const showLocal = state.settings.tz === "local" || state.settings.tz === "both";
@@ -230,8 +374,12 @@ wireDropdown("app3-trigger", "app3-menu", "app3-label", (v) => { filters.app3Dir
 wireDropdown("wr60-trigger", "wr60-menu", "wr60-label", (v) => { filters.wr60Min = parseFloat(v) || 0; renderPairTable(); renderActiveFilterTags(); });
 wireDropdown("fresh-trigger", "fresh-menu", "fresh-label", (v) => { filters.freshSec = parseInt(v, 10) || 0; renderPairTable(); renderActiveFilterTags(); });
 
-// Signals-tab pair search (separate from top-bar search)
-$("filter-pair-sp")?.addEventListener("input", (e) => { filters.search = e.target.value; renderPairTable(); renderActiveFilterTags(); });
+// Signals-tab pair search (separate from top-bar search, kept in sync both ways)
+$("filter-pair-sp")?.addEventListener("input", (e) => {
+  filters.search = e.target.value;
+  const si = $("search-input"); if (si) si.value = e.target.value;
+  renderPairTable(); renderActiveFilterTags();
+});
 // Top-bar search also drives the signals filter (for convenience)
 $("search-input").addEventListener("input", (e) => {
   filters.search = e.target.value;
@@ -277,6 +425,48 @@ $("btn-clear-filters")?.addEventListener("click", () => {
   renderActiveFilterTags();
 });
 
+// Export CSV — dumps exactly the filtered + sorted rows currently on
+// screen (the full set, not just the 200-row render cap) so the export
+// always matches what the user is looking at.
+$("btn-export-csv")?.addEventListener("click", exportSignalsCsv);
+
+function exportSignalsCsv() {
+  const rows = state._lastFilteredRows || [];
+  if (rows.length === 0) {
+    alert("No rows to export — adjust your filters first.");
+    return;
+  }
+  const csvEscape = (v) => {
+    const s = v == null ? "" : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const headers = ["Market", "Candle (UTC)", "Pair", "App 1", "App 2", "App 3", "Agree", "Final", "Win Rate 60min (%)", "Graded (60min)"];
+  const lines = [headers.map(csvEscape).join(",")];
+  rows.forEach((r) => {
+    lines.push([
+      r.pair.category,
+      r.candleUtc,
+      r.pair.displayPair,
+      r.app1Dir || "",
+      r.app2Dir || "",
+      r.app3Dir || "",
+      `${r.agreeCount}/3`,
+      r.finalDir || "",
+      r.winRate60Min == null ? "" : r.winRate60Min.toFixed(1),
+      r.gradedTotal60Min || 0,
+    ].map(csvEscape).join(","));
+  });
+  const blob = new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `master-ai-signals-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 // ====== Adaptive polling ======
 function nextPollGapMs() {
   if (state.settings.poll !== "adaptive") {
@@ -306,7 +496,12 @@ async function pollSnapshot() {
 }
 
 async function pollSignalFeed() {
-  if (state.activeTab !== "home" && state.activeTab !== "signals") return;
+  // Fetches on every tab (not just Home/Signals) — sound/browser-notification
+  // settings promise to alert on new 3-agree signals regardless of what the
+  // user is looking at; gating this on activeTab silently broke that promise
+  // the moment someone opened History or Settings. The endpoint just reads
+  // the already-cached snapshot server-side, so polling it from every tab
+  // costs nothing extra upstream.
   try {
     const res = await fetch(`/api/signal-feed?limit=${FEED_LIMIT()}`, { cache: "no-store" });
     if (!res.ok) return;
@@ -345,16 +540,22 @@ function renderHealthAlert(apps) {
   const msgEl = $("app-health-msg");
   if (!alertEl || !msgEl) return;
 
-  // If the user dismissed it this session, don't show again until a
-  // different app goes bad.
+  const badApps = apps.filter((a) => _isAppUnhealthy(a));
+
+  // If the user dismissed it this session, don't show again unless a NEW
+  // app (one that wasn't already bad at dismissal time) has gone bad.
   if (state.healthAlertDismissed) {
-    // Re-show only if a NEW app went bad since dismissal.
-    const stillBad = apps.some((a) => _isAppUnhealthy(a));
-    if (!stillBad) state.healthAlertDismissed = false;
-    if (state.healthAlertDismissed) { alertEl.hidden = true; return; }
+    const dismissedIds = state.healthAlertDismissedApps || new Set();
+    const hasNewBadApp = badApps.some((a) => !dismissedIds.has(a.id ?? a.name));
+    if (badApps.length === 0 || !hasNewBadApp) {
+      alertEl.hidden = true;
+      if (badApps.length === 0) state.healthAlertDismissed = false;
+      return;
+    }
+    // A different app is now unhealthy — re-show for it.
+    state.healthAlertDismissed = false;
   }
 
-  const badApps = apps.filter((a) => _isAppUnhealthy(a));
   if (badApps.length === 0) {
     alertEl.hidden = true;
     state.healthAlertDismissed = false;
@@ -567,6 +768,10 @@ function renderPairTable() {
     return signalsSort.dir === "asc" ? cmp : -cmp;
   });
 
+  // Kept for Export CSV — always the full filtered+sorted set, not just the
+  // first 200 rows the table itself renders.
+  state._lastFilteredRows = rows;
+
   // Update sort indicators on headers
   $$(".sp-th.sortable").forEach((th) => {
     th.classList.toggle("sorted", th.dataset.sort === signalsSort.column);
@@ -579,7 +784,22 @@ function renderPairTable() {
   });
 
   if (rows.length === 0) {
-    body.innerHTML = `<tr><td colspan="11" class="sp-placeholder"><i class="fas fa-inbox" style="font-size:32px;display:block;margin-bottom:10px;opacity:0.3"></i>No pairs match the filter.</td></tr>`;
+    // A Level=Conflict filter combined with the global "Hide conflicts"
+    // setting always nets zero rows with no visible explanation — surface
+    // the actual cause instead of a generic empty state, and offer a
+    // one-tap fix instead of sending the user hunting through Settings.
+    const conflictHidden = filters.level === "conflict" && state.settings.hideConflicts;
+    body.innerHTML = conflictHidden
+      ? `<tr><td colspan="11" class="sp-placeholder"><i class="fas fa-eye-slash" style="font-size:32px;display:block;margin-bottom:10px;opacity:0.3"></i>Level filter is set to "Conflict", but Settings → Trading Filters has "Hide conflicts" turned on — so every conflict row is being filtered out.<br><button class="sp-btn sp-btn-reset" id="btn-show-conflicts-hint" type="button" style="margin-top:10px;">Turn off "Hide conflicts"</button></td></tr>`
+      : `<tr><td colspan="11" class="sp-placeholder"><i class="fas fa-inbox" style="font-size:32px;display:block;margin-bottom:10px;opacity:0.3"></i>No pairs match the filter.</td></tr>`;
+    if (conflictHidden) {
+      $("btn-show-conflicts-hint")?.addEventListener("click", () => {
+        state.settings.hideConflicts = false;
+        const cb = $("set-hide-conflicts"); if (cb) cb.checked = false;
+        saveSettings();
+        renderPairTable();
+      });
+    }
     $("sp-table-count").innerHTML = "<strong>0</strong> pairs";
     $("sp-table-meta").textContent = "cache —";
     return;
@@ -645,6 +865,14 @@ function renderPairTable() {
     return mainRow + detailRow;
   }).join("");
 
+  // Adaptive polling re-renders this table as often as once a second during
+  // the burst window. Rebuilding the tbody every tick replays every row's
+  // entrance animation and thrashes the DOM even when nothing changed —
+  // skip the rebuild (and the listener rewiring below) when the markup is
+  // byte-for-byte identical to the last render.
+  if (state._pairTableHtml === rowsHtml) return;
+  state._pairTableHtml = rowsHtml;
+
   body.innerHTML = rowsHtml;
 
   // ---- Wire row expand/collapse + fav click ----
@@ -653,8 +881,10 @@ function renderPairTable() {
       if (e.target.closest(".fav")) {
         const pair = e.target.closest(".fav").dataset.fav;
         toggleFavorite(pair);
-        const favEl = e.target.closest(".fav");
-        favEl.classList.toggle("is-fav");
+        // Re-render (not just flip the icon class) so "Favorites only" drops
+        // an un-favorited row immediately instead of leaving it visible
+        // until the next poll tick.
+        renderPairTable();
         e.stopPropagation();
         return;
       }
@@ -878,20 +1108,51 @@ function classifyLead(leadSec, candleTime) {
 
 // ====== Live signal feed ======
 function renderSignalFeed(items, containerId) {
-  if (!containerId) return;
-  const container = $(containerId);
-  if (!items || items.length === 0) {
-    container.innerHTML = '<p class="placeholder">No signals yet.</p>';
-    return;
-  }
+  // Track "new" ids from every fetch, even while the Signals tab (which
+  // passes containerId=null) is active — otherwise signalFeedIds only ever
+  // updates while on the Home tab, and returning to Home after a while away
+  // makes every signal that arrived in the meantime look "new" at once,
+  // firing a sound/notification burst for stuff that's minutes old.
   const newIds = new Set();
-  items.forEach((it) => {
+  (items || []).forEach((it) => {
     const id = `${it.pair}|${it.source}|${it.emittedAt}`;
     if (!state.signalFeedIds.has(id)) newIds.add(id);
   });
-  state.signalFeedIds = new Set(items.map((it) => `${it.pair}|${it.source}|${it.emittedAt}`));
+  state.signalFeedIds = new Set((items || []).map((it) => `${it.pair}|${it.source}|${it.emittedAt}`));
 
-  container.innerHTML = `<div class="feed-list">${items.map((it) => {
+  // Sound + browser notifications must fire regardless of which tab is
+  // active (and even when containerId is null, i.e. the Signals tab) —
+  // gating this behind the DOM-render path below meant "Sound on 3-agree"
+  // and "Browser notifications" only ever fired while sitting on the Home
+  // tab, silently doing nothing the rest of the time despite both settings
+  // claiming to alert on new 3-agree signals unconditionally.
+  if (newIds.size > 0) {
+    const isNewThreeAgree = (it) =>
+      newIds.has(`${it.pair}|${it.source}|${it.emittedAt}`) && it.consensusLevel === "3-agree";
+    if (state.settings.sound && items.some(isNewThreeAgree)) playBeep();
+    if (state.settings.notify && "Notification" in window && Notification.permission === "granted") {
+      items.filter(isNewThreeAgree).forEach((it) => {
+        try {
+          new Notification(`${it.displayPair} — 3-bot agree ${it.direction}`, {
+            body: `Signal at ${it.emittedUtc} UTC, candle ${it.candleUtc} UTC`,
+            silent: true,
+          });
+        } catch (e) {}
+      });
+    }
+  }
+
+  if (!containerId) return;
+  const container = $(containerId);
+  if (!items || items.length === 0) {
+    if (state._feedHtml !== "empty") {
+      state._feedHtml = "empty";
+      container.innerHTML = '<p class="placeholder">No signals yet.</p>';
+    }
+    return;
+  }
+
+  const feedHtml = `<div class="feed-list">${items.map((it) => {
     const dir = it.direction || "—";
     const dirCls = dir === "—" ? "null" : dir;
     const age = it.ageSec != null ? `${it.ageSec}s` : "—";
@@ -908,28 +1169,15 @@ function renderSignalFeed(items, containerId) {
       </div>`;
   }).join("")}</div>`;
 
-  // Auto-play sound on new 3-agree signals
-  if (state.settings.sound && newIds.size > 0) {
-    const anyNew3agree = items.some((it) =>
-      newIds.has(`${it.pair}|${it.source}|${it.emittedAt}`) && it.consensusLevel === "3-agree"
-    );
-    if (anyNew3agree) playBeep();
-  }
-
-  // Browser notifications
-  if (state.settings.notify && "Notification" in window && Notification.permission === "granted") {
-    items.forEach((it) => {
-      const id = `${it.pair}|${it.source}|${it.emittedAt}`;
-      if (newIds.has(id) && it.consensusLevel === "3-agree") {
-        try {
-          new Notification(`${it.displayPair} — 3-bot agree ${it.direction}`, {
-            body: `Signal at ${it.emittedUtc} UTC, candle ${it.candleUtc} UTC`,
-            silent: true,
-          });
-        } catch (e) {}
-      }
-    });
-  }
+  // Adaptive polling re-fetches the feed as often as once a second during
+  // the burst window. Rebuilding the list every tick — even when nothing
+  // arrived — replays every item's feedIn slide-in animation and makes
+  // already-visible signals appear to flicker continuously. Skip the DOM
+  // write (and listener rewiring below) when nothing actually changed,
+  // mirroring the same fix already applied to the pair table.
+  if (state._feedHtml === feedHtml) return;
+  state._feedHtml = feedHtml;
+  container.innerHTML = feedHtml;
 
   $$(".feed-item", container).forEach((el) => {
     el.addEventListener("click", () => openPairDrawer(el.dataset.pair));
@@ -1319,7 +1567,7 @@ function populateHistoryPairSelector() {
   const sel = $("drilldown-pair");
   const current = sel.value;
   const pairs = (state.snapshot.pairs || []).slice(0, 100);
-  sel.innerHTML = '<option value="">Select a pair…</option>' + pairs.map((p) => `<option value="${escAttr(p.pair)}">${escHtml(p.displayPair)}</option>`).join("");
+  sel.innerHTML = `<option value="">${escHtml(t("opt_select_pair"))}</option>` + pairs.map((p) => `<option value="${escAttr(p.pair)}">${escHtml(p.displayPair)}</option>`).join("");
   if (current && pairs.some((p) => p.pair === current)) sel.value = current;
 }
 
@@ -1642,7 +1890,7 @@ function renderFavorites() {
   const container = $("favorites-list");
   if (!container) return;
   if (state.favorites.size === 0) {
-    container.innerHTML = '<span class="placeholder">No favorites yet — tap ★ next to a pair.</span>';
+    container.innerHTML = `<span class="placeholder">${escHtml(t("placeholder_no_favorites"))}</span>`;
     return;
   }
   container.innerHTML = Array.from(state.favorites).map((pair) => {
@@ -1853,6 +2101,10 @@ function escAttr(s) {
 $("health-alert-close")?.addEventListener("click", () => {
   $("app-health-alert").hidden = true;
   state.healthAlertDismissed = true;
+  const apps = state.snapshot?.apps || [];
+  state.healthAlertDismissedApps = new Set(
+    apps.filter((a) => _isAppUnhealthy(a)).map((a) => a.id ?? a.name)
+  );
 });
 
 applySettings();

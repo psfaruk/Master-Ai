@@ -363,6 +363,19 @@ def _make_signal(
     """Build a SourceSignal, filling in the derived fields consistently."""
     timestamp = int(base.get("timestamp", 0) or 0)
     age_sec = max(0, now - timestamp)
+    candle_time = int(base.get("candle_time", 0) or 0)
+    # APPx_CANDLE_OFFSET is baked into candle_time so all 3 apps bucket into
+    # the SAME candle for cross-app consensus — it has nothing to do with
+    # whether the signal was emitted at a sane time relative to what it
+    # predicts. Validating "is this a legitimate signal for its candle"
+    # against the SHIFTED candle_time means a negative offset (a supported,
+    # documented value — /api/diag itself recommends setting one) pushes
+    # `lead` past -MAX_LAG_SEC and marks every one of that app's signals
+    # invalid, silently dropping it from consensus. Callers pass the
+    # pre-offset candle time here; callers that don't (offset == 0) get
+    # byte-for-byte the old behavior since raw_candle_time defaults to
+    # candle_time itself.
+    raw_candle_time = int(base.get("raw_candle_time", candle_time) or 0)
     return SourceSignal(
         source=base["source"],
         source_name=base["source_name"],
@@ -372,12 +385,12 @@ def _make_signal(
         confidence=base.get("confidence"),
         strength=base.get("strength"),
         timestamp=timestamp,
-        candle_time=int(base.get("candle_time", 0) or 0),
+        candle_time=candle_time,
         age_sec=age_sec,
         outcome=base.get("outcome"),
         strategy=base.get("strategy"),
         reasons=base.get("reasons"),
-        valid_for_candle=is_signal_valid_for_candle(timestamp, int(base.get("candle_time", 0) or 0)),
+        valid_for_candle=is_signal_valid_for_candle(timestamp, raw_candle_time),
         fresh=age_sec <= freshness_window_sec,
         cached=base.get("cached", False),
     )
@@ -421,7 +434,8 @@ async def fetch_app1(freshness_window_sec: int, now: int) -> NormalizeResult:
         if not (entry_sec > 0):
             skipped["noCandle"] += 1
             continue
-        candle_time = candle_floor(entry_sec) + offset
+        raw_candle_time = candle_floor(entry_sec)
+        candle_time = raw_candle_time + offset
 
         emitted_at = to_unix_seconds(pick_field(s, ["created_at", "signalAt", "signal_at", "createdAt", "ts"]))
         ts = emitted_at if emitted_at > 0 else candle_time
@@ -463,6 +477,7 @@ async def fetch_app1(freshness_window_sec: int, now: int) -> NormalizeResult:
             "strength": strength,
             "timestamp": ts,
             "candle_time": candle_time,
+            "raw_candle_time": raw_candle_time,
             "outcome": outcome,
             "strategy": strategy_raw,
             "reasons": reasons,
@@ -501,6 +516,7 @@ def _app2_cached_to_signal(
         "strength": c.strength,
         "timestamp": c.first_seen_sec if c.first_seen_sec > 0 else candle_time,
         "candle_time": candle_time,
+        "raw_candle_time": c.candle_time,
         "outcome": None,
         "strategy": strategy,
         "reasons": reasons,
@@ -638,7 +654,8 @@ async def fetch_app3(freshness_window_sec: int, now: int) -> NormalizeResult:
                 if not (ctime > 0):
                     skipped["noCandle"] += 1
                     continue
-                candle_time = candle_floor(ctime) + offset
+                raw_candle_time = candle_floor(ctime)
+                candle_time = raw_candle_time + offset
                 conf_raw = s.get("confidence") if isinstance(s.get("confidence"), (int, float)) else None
                 hist_conf = conf_raw if (conf_raw and conf_raw > 0) else None
                 result = str(pick_field(s, ["result", "outcome", "status"]) or "").lower()
@@ -661,6 +678,7 @@ async def fetch_app3(freshness_window_sec: int, now: int) -> NormalizeResult:
                     "strength": strength,
                     "timestamp": ctime,
                     "candle_time": candle_time,
+                    "raw_candle_time": raw_candle_time,
                     "outcome": outcome,
                     "strategy": codes,
                     "reasons": None,
@@ -687,7 +705,8 @@ async def fetch_app3(freshness_window_sec: int, now: int) -> NormalizeResult:
                     skipped["noDirection"] += 1
                     continue
                 t = to_unix_seconds(pick_field(r, ["time", "candle_time", "ctime", "ts"]))
-                candle_time = (candle_floor(t) if t > 0 else candle_floor(now)) + offset
+                raw_candle_time = candle_floor(t) if t > 0 else candle_floor(now)
+                candle_time = raw_candle_time + offset
                 key = f"{pair}|{candle_time}"
                 if key in seen_candles:
                     continue  # historical already has this candle
@@ -710,6 +729,7 @@ async def fetch_app3(freshness_window_sec: int, now: int) -> NormalizeResult:
                     "strength": strength,
                     "timestamp": t if t > 0 else candle_time,
                     "candle_time": candle_time,
+                    "raw_candle_time": raw_candle_time,
                     "outcome": None,  # live signal, not yet resolved
                     "strategy": strategy,
                     "reasons": None,

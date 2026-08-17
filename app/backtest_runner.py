@@ -95,6 +95,10 @@ class NormalizedSignal:
     direction: str
     outcome: Optional[int]  # 1=win, 0=loss, None=unknown (incl. ACTIVE / unresolved / no candle data)
     raw_status: Optional[str] = None
+    # candle_time BEFORE APPx_CANDLE_OFFSET was applied. 0 means "not set by
+    # the caller" — treat as equal to candle_time (offset is 0, or the
+    # caller predates this field, e.g. a test constructing one directly).
+    raw_candle_time: int = 0
 
 
 @dataclass
@@ -225,11 +229,42 @@ def get_cached_backtest() -> Optional[Dict[str, Any]]:
     return _get_cache().result
 
 
+def set_cached_backtest(result: Dict[str, Any]) -> None:
+    """Publish a freshly-run backtest result into the cache.
+
+    Used by ``GET /api/backtest`` (which runs a fresh backtest on every
+    request) so that result also becomes the one subsequent snapshot polls
+    read via ``get_or_refresh_backtest()`` — otherwise the fresh result was
+    computed and thrown away, and the next poll paid the cost again.
+    """
+    c = _get_cache()
+    c.result = result
+    c.fetched_at = time.time()
+
+
 def get_backtest_cache_age_sec() -> float:
     c = _get_cache()
     if c.fetched_at <= 0:
         return -1.0
     return max(0.0, time.time() - c.fetched_at)
+
+
+def _ensure_refresh_task() -> asyncio.Task:
+    """Return the in-flight refresh task, starting one if none is running.
+
+    Every caller that wants a fresh backtest — the poller's background
+    refresh AND a manual ``GET /api/backtest`` — funnels through here so
+    concurrent triggers coordinate onto a single ``run_backtest()`` call
+    instead of racing each other (which used to double the upstream load
+    and let a slower-but-earlier-started run clobber a newer cached result
+    with staler data stamped as fresh).
+    """
+    c = _get_cache()
+    if c.refresh_in_progress and c.refresh_task is not None and not c.refresh_task.done():
+        return c.refresh_task
+    c.refresh_in_progress = True
+    c.refresh_task = asyncio.create_task(_refresh_in_background())
+    return c.refresh_task
 
 
 async def get_or_refresh_backtest() -> Optional[Dict[str, Any]]:
@@ -244,13 +279,34 @@ async def get_or_refresh_backtest() -> Optional[Dict[str, Any]]:
     age = time.time() - c.fetched_at if c.fetched_at > 0 else float("inf")
     if c.result is not None and age < CACHE_TTL_SEC:
         return c.result
-    # Stale (or never run). Trigger a refresh in the background if one
-    # isn't already running, but return whatever we have so the snapshot
-    # doesn't block for ~3s.
-    if not c.refresh_in_progress:
-        c.refresh_in_progress = True
-        c.refresh_task = asyncio.create_task(_refresh_in_background())
+    # Stale (or never run). Trigger a refresh in the background (joining one
+    # already in flight rather than starting a redundant one), but return
+    # whatever we have so the snapshot doesn't block for ~3s.
+    _ensure_refresh_task()
     return c.result
+
+
+async def run_backtest_coordinated() -> Dict[str, Any]:
+    """Like ``run_backtest()``, but joins a refresh already in flight instead
+    of racing it.
+
+    Used by ``GET /api/backtest`` — unlike the poller, this caller needs to
+    see the FRESH result, not just warm the cache for next time. Without
+    this, a manual "Run fresh backtest" click landing while the poller's
+    60s background refresh was already mid-flight ran two full backtests
+    concurrently.
+    """
+    c = _get_cache()
+    task = _ensure_refresh_task()
+    await task
+    if c.result is not None:
+        return c.result
+    # The joined refresh had no prior cache to fall back on and failed —
+    # run once more directly so the caller gets a real exception to surface
+    # as a 500 instead of silently returning nothing.
+    result = await run_backtest()
+    set_cached_backtest(result)
+    return result
 
 
 async def _refresh_in_background() -> None:
@@ -281,7 +337,8 @@ def normalize_app1(d: dict) -> Optional[NormalizedSignal]:
     entry_sec = to_unix_seconds(pick_field(d, ["entry_ts", "entryTime", "entry_time", "candleTime", "ctime"]))
     if not (entry_sec > 0):
         return None
-    candle_time = candle_floor(entry_sec) + get_candle_offset_sec("app1")
+    raw_candle_time = candle_floor(entry_sec)
+    candle_time = raw_candle_time + get_candle_offset_sec("app1")
 
     result_raw = pick_field(d, ["result", "status", "outcome"])
     s = str(result_raw or "").upper()
@@ -298,6 +355,7 @@ def normalize_app1(d: dict) -> Optional[NormalizedSignal]:
         pair=pair,
         ts=emitted_at if emitted_at > 0 else candle_time,
         candle_time=candle_time,
+        raw_candle_time=raw_candle_time,
         direction=direction,
         outcome=outcome,
         raw_status=str(result_raw) if result_raw is not None else None,
@@ -315,7 +373,8 @@ def normalize_app3(d: dict, time_keys: List[str]) -> Optional[NormalizedSignal]:
     ts = to_unix_seconds(pick_field(d, time_keys))
     if not (ts > 0):
         return None
-    candle_time = candle_floor(ts) + get_candle_offset_sec("app3")
+    raw_candle_time = candle_floor(ts)
+    candle_time = raw_candle_time + get_candle_offset_sec("app3")
 
     result = str(pick_field(d, ["result", "outcome", "status"]) or "").lower()
     outcome: Optional[int] = None
@@ -329,6 +388,7 @@ def normalize_app3(d: dict, time_keys: List[str]) -> Optional[NormalizedSignal]:
         pair=pair,
         ts=ts,
         candle_time=candle_time,
+        raw_candle_time=raw_candle_time,
         direction=direction,
         outcome=outcome,
         raw_status=result or None,
@@ -441,6 +501,15 @@ def _grade_with_candles(signals: List[NormalizedSignal]) -> None:
       - PUT  wins if close < open
       - DRAW if close === open (within epsilon)
       - UNKNOWN if candle data is missing
+
+    ``s.candle_time`` already has that source's ``APPx_CANDLE_OFFSET`` baked
+    in (applied in ``normalize_app1``/``normalize_app3``/the App 2 loader) so
+    consensus grouping lines the 3 apps up on the same bucket. But
+    ``candle_fetcher``'s OHLC cache is keyed by the RAW candle time straight
+    off App 3's feed — it never applies an offset. So we grade against
+    ``s.raw_candle_time`` (the pre-offset value each normalizer already
+    computed), or a configured offset would grade every affected signal
+    against the wrong candle (or UNKNOWN).
     """
     for s in signals:
         if s.outcome is not None:
@@ -448,7 +517,8 @@ def _grade_with_candles(signals: List[NormalizedSignal]) -> None:
         if s.raw_status and _DRAW_RE.search(s.raw_status):
             continue
 
-        _, outcome_str = grade_signal(s.pair, s.candle_time, s.direction)
+        raw_candle_time = s.raw_candle_time if s.raw_candle_time > 0 else (s.candle_time - get_candle_offset_sec(s.source))
+        _, outcome_str = grade_signal(s.pair, raw_candle_time, s.direction)
         if outcome_str == "WIN":
             s.outcome = 1
         elif outcome_str == "LOSS":
@@ -478,7 +548,11 @@ def _add_cluster_to_level(s: LevelStat, c: Dict[str, Any]) -> None:
     elif c["outcome"] == 0:
         s.loss += 1
     elif c.get("agreeing_draw", 0) > 0 and c["outcome"] is None:
-        s.draw += c["agreeing_draw"]
+        # +1 per cluster, not per agreeing app — matches total/win/loss,
+        # which are all one increment per cluster regardless of how many
+        # apps are in it. ``agreeing_draw`` (0..3) is only used to detect
+        # "this cluster's outcome was a draw", not to weight the count.
+        s.draw += 1
     else:
         s.unknown += 1
     if c["direction"] == "CALL":
@@ -507,7 +581,11 @@ def _add_cluster_to_app_pair(s: AppPairStat, c: Dict[str, Any]) -> None:
     elif c["outcome"] == 0:
         s.loss += 1
     elif c.get("agreeing_draw", 0) > 0 and c["outcome"] is None:
-        s.draw += c["agreeing_draw"]
+        # +1 per cluster, not per agreeing app — matches total/win/loss,
+        # which are all one increment per cluster regardless of how many
+        # apps are in it. ``agreeing_draw`` (0..3) is only used to detect
+        # "this cluster's outcome was a draw", not to weight the count.
+        s.draw += 1
     else:
         s.unknown += 1
     if c["direction"] == "CALL":
@@ -613,7 +691,12 @@ async def run_backtest() -> Dict[str, Any]:
             return
         if s.candle_time < min_candle:
             return
-        if not is_signal_valid_for_candle(s.ts, s.candle_time):
+        # Validate against the pre-offset candle time (see NormalizedSignal.
+        # raw_candle_time) — candle_time may have APPx_CANDLE_OFFSET baked
+        # in for cross-app bucketing, which would otherwise push a negative
+        # offset's signals past MAX_LAG_SEC and drop the whole app.
+        raw_candle_time = s.raw_candle_time if s.raw_candle_time > 0 else s.candle_time
+        if not is_signal_valid_for_candle(s.ts, raw_candle_time):
             return
         all_signals.append(s)
 
@@ -633,6 +716,7 @@ async def run_backtest() -> Dict[str, Any]:
             pair=c.pair,
             ts=c.first_seen_sec if c.first_seen_sec > 0 else c.candle_time,
             candle_time=c.candle_time + get_candle_offset_sec("app2"),
+            raw_candle_time=c.candle_time,
             direction=c.signal,
             outcome=None,
             raw_status=None,

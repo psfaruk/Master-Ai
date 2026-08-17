@@ -24,7 +24,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from app.api.routes import router as api_router
+from app.api.routes import NO_STORE_HEADERS, router as api_router
 from app.snapshot_poller import start_poller
 
 logging.basicConfig(
@@ -60,6 +60,7 @@ async def lifespan(app: FastAPI):
     # ``task`` for app2_cache / candle_fetcher, and under ``poll_task`` for
     # the snapshot poller (which has multiple background coroutines).
     from app.app2_cache import _get_state as _app2_state
+    from app.backtest_runner import _get_cache as _backtest_state
     from app.candle_fetcher import _get_state as _candle_state
     from app.snapshot_poller import _get_state as _snap_state
 
@@ -68,6 +69,7 @@ async def lifespan(app: FastAPI):
         (_snap_state, "poll_task"),
         (_app2_state, "task"),
         (_candle_state, "task"),
+        (_backtest_state, "refresh_task"),
     ):
         try:
             st = st_getter()
@@ -118,6 +120,9 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
         status_code=500,
         content={"error": "internal_error", "message": str(exc)},
+        # Every /api/* route promises no-store; an unhandled 500 must not
+        # be the one response a browser/proxy is allowed to cache.
+        headers=NO_STORE_HEADERS,
     )
 
 

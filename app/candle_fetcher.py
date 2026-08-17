@@ -263,10 +263,11 @@ async def refresh_candles() -> None:
             if existing is None:
                 _upsert_candle(st, c)
             elif (existing.high is None or existing.low is None) and (c.high is not None and c.low is not None):
-                # Keep the historical close/result but enrich with live OHLC.
+                # Keep the historical open/close/result — those are
+                # authoritative once the candle has a historical row — and
+                # only backfill the high/low the live endpoint uniquely has.
                 existing.high = c.high
                 existing.low = c.low
-                existing.open = c.open
 
         st.total_candles = sum(len(pm) for pm in st.candles.values())
         st.last_fetch_at = time.time() * 1000
