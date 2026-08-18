@@ -79,6 +79,12 @@ const TRANSLATIONS = {
     hint_diagnostics: "Engineer-facing alignment diagnostics. Hidden from the main navigation but kept here for power users.",
     btn_load_diagnostics: "Load diagnostics",
     btn_clear_cache: "Clear local cache", btn_reset_settings: "Reset settings",
+    folder_overall_title: "Overall Win Rate", folder_overall_desc: "Win rate for App 1, App 2, App 3 and every combination (1+2, 1+3, 2+3, all 3) — tap to drill into per-pair breakdown.",
+    folder_open: "Open",
+    panel_overall_title: "Overall Win Rate",
+    placeholder_loading_overall: "Loading overall win rate…",
+    th_signals: "Signals", th_wl: "W/L", th_action: "History",
+    placeholder_loading_subsetpairs: "Loading…",
   },
   bn: {
     nav_home: "হোম", nav_signals: "সিগন্যাল", nav_history: "হিস্ট্রি", nav_settings: "সেটিংস",
@@ -139,6 +145,12 @@ const TRANSLATIONS = {
     hint_diagnostics: "ইঞ্জিনিয়ার-কেন্দ্রিক অ্যালাইনমেন্ট ডায়াগনস্টিকস। মূল নেভিগেশন থেকে লুকানো কিন্তু পাওয়ার ইউজারদের জন্য এখানে রাখা হয়েছে।",
     btn_load_diagnostics: "ডায়াগনস্টিকস লোড করুন",
     btn_clear_cache: "লোকাল ক্যাশ মুছুন", btn_reset_settings: "সেটিংস রিসেট করুন",
+    folder_overall_title: "সর্বমোট জয়ের হার", folder_overall_desc: "অ্যাপ ১, অ্যাপ ২, অ্যাপ ৩ এবং প্রতিটি সমন্বয়ের (১+২, ১+৩, ২+৩, সব ৩) জয়ের হার — প্রতি-পেয়ার বিস্তারিত দেখতে ট্যাপ করুন।",
+    folder_open: "খুলুন",
+    panel_overall_title: "সর্বমোট জয়ের হার",
+    placeholder_loading_overall: "সর্বমোট জয়ের হার লোড হচ্ছে…",
+    th_signals: "সিগন্যাল", th_wl: "জয়/হার", th_action: "হিস্ট্রি",
+    placeholder_loading_subsetpairs: "লোড হচ্ছে…",
   },
 };
 
@@ -191,6 +203,14 @@ function loadFavorites() {
 const state = {
   activeTab: "home",
   activeHistorySubtab: "backtest",
+  // Currently-selected app subset on the History → Overall Win Rate →
+  // per-subset pair list view. Set when the user taps a card in the
+  // Overall Win Rate grid; read by renderSubsetPairList().
+  activeSubset: null,
+  // Cached payload from /api/app-pair-leaders so the Overall Win Rate
+  // view can re-render without an extra round-trip on every History
+  // tab open.
+  cachedAppPairLeaders: null,
   snapshot: null,
   snapshotAt: 0,
   backtestStatus: null,
@@ -201,6 +221,11 @@ const state = {
   clockTimer: null,
   lastPollAt: 0,
   drawerPair: null,
+  // Subset to pre-filter the Signal History table on the next drawer
+  // open. Set when the user clicks "History" link on a per-subset pair
+  // row — we open the drawer AND auto-click the matching subset chip
+  // so the table starts filtered to that subset.
+  drawerSubsetPrefilter: null,
   healthAlertDismissed: false,
   healthAlertDismissedApps: new Set(), // app ids/names that were bad at dismissal time
 };
@@ -272,6 +297,10 @@ function switchTab(name) {
     populateHistoryPairSelector();
     renderPerPairTable();
     refreshBacktestStatus();
+    // Pre-render the Overall Win Rate view too, so when the user taps
+    // the headline "Overall Win Rate" folder card the data is already
+    // there — no flash of "Loading…" for the most important screen.
+    renderOverallWinRate();
   }
   if (name === "settings") resetFolderView("settings-folder-grid", "settings-folder-detail");
   window.scrollTo(0, 0);
@@ -300,9 +329,11 @@ $("history-folder-back")?.addEventListener("click", () => {
   window.scrollTo(0, 0);
 });
 
-function switchHistorySubtab(name) {
+function switchHistorySubtab(name, opts = {}) {
   state.activeHistorySubtab = name;
   $$(".history-panel").forEach((p) => p.classList.toggle("history-panel--active", p.id === `history-${name}`));
+  if (name === "overall") renderOverallWinRate();
+  if (name === "subsetpairs") renderSubsetPairList(opts.subset || state.activeSubset);
   if (name === "perpair") renderPerPairTable();
   if (name === "apppair") renderAppPairLeaders();
   if (name === "drilldown") populateHistoryPairSelector();
@@ -1317,16 +1348,22 @@ function renderBacktest(bt) {
     { key: "app1+app2+app3", label: "All 3 agree" },
   ];
   const appPairCards = APP_SUBSET_LABELS.map(({ key, label }) => {
-    const g = appPairGlobal[key] || { win: 0, loss: 0, gradedTotal: 0, winRate: null, draw: 0 };
+    const g = appPairGlobal[key] || { win: 0, loss: 0, gradedTotal: 0, winRate: null, draw: 0, total: 0 };
     const wr = g.winRate;
     const wrCls = wr == null ? "none" : wr >= 60 ? "high" : wr < 45 ? "low" : "";
     const wrTxt = wr == null ? "—" : `${wr.toFixed(0)}%`;
+    // Make each card a button → opens the per-subset pair list view
+    // (History → Overall → subsetpairs) filtered to this subset.
+    // This is the same destination as tapping the matching card on
+    // the Overall Win Rate sub-tab — both surface every pair that has
+    // signals in this subset, with per-pair signal count + W/L + WR.
     return `
-      <div class="sp-app-pair-card">
-        <div class="sp-app-pair-card__head"><span>${escHtml(label)}</span><span class="sp-app-pair-card__sub">${g.gradedTotal} graded</span></div>
+      <button type="button" class="sp-app-pair-card sp-app-pair-card--link" data-subset-link="${escAttr(key)}" title="View every pair where ${escHtml(label)} produced signals">
+        <div class="sp-app-pair-card__head"><span>${escHtml(label)}</span><span class="sp-app-pair-card__sub">${g.total || g.gradedTotal || 0} signals</span></div>
         <div class="sp-app-pair-card__wr ${wrCls}">${wrTxt}</div>
         <div class="sp-app-pair-card__sub">${g.win}W / ${g.loss}L${g.draw ? ` · ${g.draw} draw` : ""}</div>
-      </div>`;
+        <div class="sp-app-pair-card__hint"><i class="fas fa-arrow-right"></i> View pairs</div>
+      </button>`;
   }).join("");
 
   $("backtest-content").innerHTML = `
@@ -1338,7 +1375,7 @@ function renderBacktest(bt) {
     <div class="level-stats">${levelStats}</div>
     <div class="panel__header" style="padding-left:0;border-bottom:1px solid var(--border);margin-bottom:10px;margin-top:18px;">
       <h3 style="font-size:12px;">Win rate by app pair (global)</h3>
-      <span class="panel__meta"><button class="btn btn--ghost" id="btn-goto-apppair" style="padding:4px 10px;font-size:11px;">View per-pair leaders →</button></span>
+      <span class="panel__meta"><button class="btn btn--ghost" id="btn-goto-overall" style="padding:4px 10px;font-size:11px;">View Overall Win Rate →</button></span>
     </div>
     <div class="sp-app-pair-grid">${appPairCards}</div>
     <div class="panel__header" style="padding-left:0;border-bottom:1px solid var(--border);margin-bottom:10px;margin-top:18px;">
@@ -1347,9 +1384,17 @@ function renderBacktest(bt) {
     <div class="level-stats">${sourceStats}</div>
   `;
 
-  // Wire the "View per-pair leaders" button → switch to the App Pair Leaders sub-tab.
-  $("btn-goto-apppair")?.addEventListener("click", () => {
-    switchHistorySubtab("apppair");
+  // Wire the "View Overall Win Rate" button → switch to the Overall Win Rate sub-tab.
+  $("btn-goto-overall")?.addEventListener("click", () => {
+    switchHistorySubtab("overall");
+  });
+  // Wire each app-pair card → switch to the per-subset pair list view.
+  $$("#backtest-content .sp-app-pair-card[data-subset-link]").forEach((card) => {
+    card.addEventListener("click", () => {
+      const subset = card.dataset.subsetLink;
+      state.activeSubset = subset;
+      switchHistorySubtab("subsetpairs", { subset });
+    });
   });
 }
 
@@ -1379,7 +1424,11 @@ function renderPerPairTable() {
       const wr = s.winRate;
       const wrCls = wr == null ? "none" : wr >= 60 ? "good" : wr >= 45 ? "mid" : "low";
       const wrTxt = wr == null ? "?" : `${wr.toFixed(0)}%`;
-      return `<span class="mono"><strong>${s.win}/${s.loss}</strong> <span class="wr-bar wr-bar--${wrCls}" style="font-size:10px;padding:1px 5px">${wrTxt}</span></span>`;
+      // Wrap the per-subset cell in a clickable button so the user can
+      // jump straight from "app1+app2 on EURUSD: 9W/3L (75%)" → the
+      // per-pair drawer with the app1+app2 subset chip pre-selected,
+      // showing only the EURUSD signals where app1+app2 agreed.
+      return `<button type="button" class="cell-link" data-pair-cell="${escAttr(p.pair)}" data-subset-cell="${escAttr(key)}" title="View ${escHtml(p.displayPair)} history for ${escAttr(key)}"><span class="mono"><strong>${s.win}/${s.loss}</strong> <span class="wr-bar wr-bar--${wrCls}" style="font-size:10px;padding:1px 5px">${wrTxt}</span></span></button>`;
     };
     const fmt = (lvl) => {
       const s = ls[lvl];
@@ -1408,6 +1457,13 @@ function renderPerPairTable() {
 
   $$("#perpair-table-body tr[data-pair]").forEach((row) => {
     row.addEventListener("click", (e) => {
+      // Per-subset cell click → open drawer with that subset pre-filtered.
+      const cellBtn = e.target.closest("[data-pair-cell]");
+      if (cellBtn) {
+        e.stopPropagation();
+        openPairDrawer(cellBtn.dataset.pairCell, { subset: cellBtn.dataset.subsetCell });
+        return;
+      }
       if (e.target.classList.contains("fav")) {
         const pair = e.target.dataset.fav;
         toggleFavorite(pair);
@@ -1561,6 +1617,268 @@ function _aggregateAppPairGlobal(perPair) {
   return out;
 }
 
+// ====== Overall Win Rate (History → Overall Win Rate headline folder) ======
+// The landing screen for the most important question the user has:
+// "Of App 1, App 2, App 3, and every combination (1+2, 1+3, 2+3, all-3),
+//  who wins most?".
+//
+// Layout: a 7-card grid. Each card shows:
+//   - subset name (e.g. "App 1 + App 2")
+//   - global win rate (large, color-coded by 60%/45% thresholds)
+//   - signal count (total signals produced by that subset across all pairs)
+//   - W/L / draw breakdown
+// Tapping a card switches to the per-subset pair list (renderSubsetPairList)
+// which shows EVERY pair that has signals in that subset, with per-pair
+// signal count, W/L, win rate, and a "view history" link that opens the
+// per-pair drawer with the subset pre-filtered on the Signal History table.
+//
+// Everything is cross-linked:
+//   - Backtest sub-tab → "Win rate by app pair (global)" grid card → here
+//   - Per-Pair Stats table → app1+app2 / app1+app3 / app2+app3 / all-3
+//     cells → here (filtered to that subset)
+//   - App Pair Leaders sub-tab → top-pair row → per-pair drawer
+//   - Per-subset pair list → row click → per-pair drawer
+const OVERALL_SUBSET_DEFS = [
+  { key: "app1", label: "App 1 only", short: "App 1", color: "amber", icon: "fa-1" },
+  { key: "app2", label: "App 2 only", short: "App 2", color: "violet", icon: "fa-2" },
+  { key: "app3", label: "App 3 only", short: "App 3", color: "emerald", icon: "fa-3" },
+  { key: "app1+app2", label: "App 1 + App 2", short: "App 1+2", color: "blue", icon: "fa-link" },
+  { key: "app1+app3", label: "App 1 + App 3", short: "App 1+3", color: "violet", icon: "fa-link" },
+  { key: "app2+app3", label: "App 2 + App 3", short: "App 2+3", color: "amber", icon: "fa-link" },
+  { key: "app1+app2+app3", label: "All 3 agree", short: "All 3", color: "emerald", icon: "fa-star" },
+];
+
+async function renderOverallWinRate() {
+  const meta = $("overall-meta");
+  const content = $("overall-content");
+  if (!content) return;
+
+  // Try cached payload first (set whenever this view, /api/app-pair-leaders,
+  // or the cached backtest is fetched). Fall back to fetching the leaders
+  // endpoint which returns both leaders AND the global aggregates.
+  let payload = state.cachedAppPairLeaders;
+  if (!payload) {
+    // Fall back to the cached backtest, if available — it carries
+    // perPair[] which we can aggregate client-side via the same helper
+    // the Backtest sub-tab uses.
+    const bt = state.cachedBacktest;
+    if (bt && (bt.perPair || []).length > 0) {
+      payload = {
+        appPairGlobal: _aggregateAppPairGlobal(bt.perPair || []),
+        appPairLeaders: bt.appPairLeaders || {},
+        cacheAgeSec: state.snapshot?.backtestCacheAgeSec ?? null,
+        verdict: bt.verdict,
+      };
+    }
+  }
+  if (!payload) {
+    try {
+      if (meta) meta.textContent = "loading…";
+      const res = await fetch("/api/app-pair-leaders", { cache: "no-store" });
+      if (res.ok) {
+        payload = await res.json();
+        state.cachedAppPairLeaders = payload;
+      }
+    } catch (e) {
+      console.warn("[overall-winrate] fetch failed", e);
+    }
+  } else {
+    // Always reuse the cached payload, but refresh it in the background.
+    fetch("/api/app-pair-leaders", { cache: "no-store" })
+      .then((r) => r.ok ? r.json() : null)
+      .then((p) => { if (p) { state.cachedAppPairLeaders = p; /* re-render only if user is still on this view */ if (state.activeTab === "history" && state.activeHistorySubtab === "overall") renderOverallWinRate(); } })
+      .catch(() => {});
+  }
+
+  if (!payload) {
+    content.innerHTML = '<p class="placeholder">No backtest data yet. Tap "Run fresh backtest" on the Backtest folder first, or wait for the auto-cache.</p>';
+    if (meta) meta.textContent = "—";
+    return;
+  }
+
+  const global = payload.appPairGlobal || {};
+  const verdict = payload.verdict;
+  const ageSec = payload.cacheAgeSec;
+
+  // Headline: global aggregate across ALL subsets (sum of all 7).
+  let headTotal = 0, headWin = 0, headLoss = 0, headDraw = 0, headUnknown = 0;
+  for (const def of OVERALL_SUBSET_DEFS) {
+    const g = global[def.key] || {};
+    headTotal += g.total || 0;
+    headWin += g.win || 0;
+    headLoss += g.loss || 0;
+    headDraw += g.draw || 0;
+    headUnknown += g.unknown || 0;
+  }
+  const headGraded = headWin + headLoss;
+  const headWr = headGraded > 0 ? Math.round((headWin / headGraded) * 1000) / 10 : null;
+  const headWrTxt = headWr == null ? "—" : `${headWr.toFixed(1)}%`;
+  const headWrCls = headWr == null ? "" : headWr >= 60 ? "high" : headWr < 45 ? "low" : "mid";
+
+  if (meta) {
+    const verdictTxt = verdict ? verdict.kind : "—";
+    meta.textContent = `cache ${ageSec != null ? ageSec.toFixed(0) + "s" : "—"} · ${headTotal} signals · verdict: ${verdictTxt}`;
+  }
+
+  // 7-card grid. Each card is a button → switchHistorySubtab("subsetpairs", { subset }).
+  const cards = OVERALL_SUBSET_DEFS.map((def) => {
+    const g = global[def.key] || { total: 0, win: 0, loss: 0, draw: 0, unknown: 0, gradedTotal: 0, winRate: null };
+    const wr = g.winRate;
+    const wrCls = wr == null ? "" : wr >= 60 ? "high" : wr < 45 ? "low" : "mid";
+    const wrTxt = wr == null ? "—" : `${wr.toFixed(1)}%`;
+    const graded = g.gradedTotal || (g.win + g.loss);
+    // Pick the best pair from the leaders list for this subset (if any)
+    // to show a "best pair" hint under the headline.
+    const leader = (payload.appPairLeaders?.[def.key] || [])[0];
+    const leaderTxt = leader
+      ? `Best: ${escHtml(leader.displayPair)} ${leader.winRate == null ? "—" : leader.winRate.toFixed(0) + "%"} (${leader.wins}/${leader.losses})`
+      : '<span style="color:var(--text-dim)">No qualified pair yet</span>';
+    return `
+      <button type="button" class="overall-card overall-card--${def.color}" data-subset="${escAttr(def.key)}">
+        <div class="overall-card__head">
+          <span class="overall-card__label">${escHtml(def.label)}</span>
+          <span class="overall-card__signals">${g.total || 0} signals</span>
+        </div>
+        <div class="overall-card__wr ${wrCls}">${wrTxt}</div>
+        <div class="overall-card__wl">${g.win || 0}W / ${g.loss || 0}L${g.draw ? ` · ${g.draw} draw` : ""}${g.unknown ? ` · ${g.unknown}?` : ""}</div>
+        <div class="overall-card__best">${leaderTxt}</div>
+        <div class="overall-card__hint"><i class="fas fa-arrow-right"></i> <span>View ${graded} graded signals across all pairs</span></div>
+      </button>`;
+  }).join("");
+
+  content.innerHTML = `
+    <div class="overall-headline">
+      <div class="overall-headline__label">Overall Win Rate (all apps, all combinations)</div>
+      <div class="overall-headline__wr ${headWrCls}">${headWrTxt}</div>
+      <div class="overall-headline__sub">${headWin}W / ${headLoss}L${headDraw ? ` · ${headDraw} draw` : ""} · ${headTotal} signals · ${headGraded} graded</div>
+    </div>
+    <div class="overall-grid">${cards}</div>
+    <p class="placeholder" style="margin-top:14px;font-size:11px">
+      <i class="fas fa-info-circle"></i>
+      Tap any card to see every pair that has signals in that subset, with per-pair signal count, W/L, win rate, and a link to the per-pair signal history (already filtered to that subset).
+    </p>
+  `;
+
+  $$("#overall-content .overall-card[data-subset]").forEach((card) => {
+    card.addEventListener("click", () => {
+      const subset = card.dataset.subset;
+      state.activeSubset = subset;
+      switchHistorySubtab("subsetpairs", { subset });
+      window.scrollTo(0, 0);
+    });
+  });
+}
+
+// ====== Per-Subset Pair List (History → Overall → tap a card) ======
+// Shows EVERY pair that has signals for ONE app subset, with per-pair:
+//   - Pair (clickable → opens per-pair drawer)
+//   - Signal count in this subset
+//   - W/L + win rate
+//   - "History" link → opens per-pair drawer with the subset chip
+//     pre-selected, so the Signal History table starts filtered to
+//     just that subset.
+async function renderSubsetPairList(subset) {
+  const title = $("subsetpairs-title");
+  const meta = $("subsetpairs-meta");
+  const body = $("subsetpairs-table-body");
+  if (!body) return;
+  if (!subset) {
+    body.innerHTML = '<tr><td colspan="7" class="placeholder">No subset selected. Go back to Overall Win Rate and tap a card.</td></tr>';
+    if (meta) meta.textContent = "—";
+    if (title) title.textContent = "Subset";
+    return;
+  }
+  state.activeSubset = subset;
+  const def = OVERALL_SUBSET_DEFS.find((d) => d.key === subset) || { label: subset };
+  if (title) title.innerHTML = `<i class="fas fa-arrow-left" style="cursor:pointer;margin-right:8px" id="subsetpairs-back"></i> ${escHtml(def.label)}`;
+  // Wire the inline back-arrow → return to Overall Win Rate view.
+  $("subsetpairs-back")?.addEventListener("click", () => switchHistorySubtab("overall"));
+
+  if (meta) meta.textContent = "loading…";
+  body.innerHTML = '<tr><td colspan="7" class="placeholder">Loading…</td></tr>';
+
+  let payload = null;
+  try {
+    const res = await fetch(`/api/app-pair/${encodeURIComponent(subset)}/pairs`, { cache: "no-store" });
+    if (res.ok) payload = await res.json();
+    else if (res.status === 400) {
+      body.innerHTML = `<tr><td colspan="7" class="placeholder">Invalid subset. Pick one of: app1, app2, app3, app1+app2, app1+app3, app2+app3, app1+app2+app3.</td></tr>`;
+      if (meta) meta.textContent = "error";
+      return;
+    }
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="7" class="placeholder">Failed: ${e.message}</td></tr>`;
+    if (meta) meta.textContent = "error";
+    return;
+  }
+  if (!payload) {
+    body.innerHTML = '<tr><td colspan="7" class="placeholder">No data.</td></tr>';
+    return;
+  }
+
+  const g = payload.global || {};
+  const pairs = payload.pairs || [];
+  const ageSec = payload.cacheAgeSec;
+  if (meta) {
+    const wr = g.winRate;
+    const wrTxt = wr == null ? "—" : `${wr.toFixed(1)}%`;
+    meta.textContent = `${g.total || 0} signals · ${g.gradedTotal || 0} graded · ${g.win || 0}W / ${g.loss || 0}L · win rate ${wrTxt} · cache ${ageSec != null ? ageSec.toFixed(0) + "s" : "—"}`;
+  }
+
+  if (pairs.length === 0) {
+    body.innerHTML = '<tr><td colspan="7" class="placeholder">No pairs have signals in this subset yet.</td></tr>';
+    return;
+  }
+
+  body.innerHTML = pairs.map((p) => {
+    const wr = p.winRate;
+    const wrCls = wr == null ? "none" : wr >= 60 ? "good" : wr >= 45 ? "mid" : "low";
+    const wrTxt = wr == null ? "—" : `${wr.toFixed(0)}%`;
+    const isFav = state.favorites.has(p.pair);
+    return `
+      <tr data-pair="${escAttr(p.pair)}" data-subset="${escAttr(subset)}">
+        <td class="fav ${isFav ? "is-fav" : ""}" data-fav="${escAttr(p.pair)}" data-label="★">${isFav ? "★" : "☆"}</td>
+        <td data-label="Pair"><strong>${escHtml(p.displayPair)}</strong></td>
+        <td data-label="Cat"><span class="pill pill--${p.category}">${p.category}</span></td>
+        <td data-label="Signals" class="mono">${p.signals}</td>
+        <td data-label="W/L" class="mono">${p.win}/${p.loss}${p.draw ? ` <span style="color:var(--text-dim)">(${p.draw} draw)</span>` : ""}</td>
+        <td data-label="Win %"><span class="wr-bar wr-bar--${wrCls}">${wrTxt}</span></td>
+        <td data-label="History"><button class="btn btn--ghost btn--mini" data-pair-history="${escAttr(p.pair)}" data-subset="${escAttr(subset)}"><i class="fas fa-clock-rotate-left"></i> History</button></td>
+      </tr>`;
+  }).join("");
+
+  // Row click → open drawer (no subset pre-filter; user wants to see
+  // everything for this pair). The dedicated History button below opens
+  // drawer with subset pre-filtered.
+  $$("#subsetpairs-table-body tr[data-pair]").forEach((row) => {
+    row.addEventListener("click", (e) => {
+      // Ignore clicks on the favorite ★ cell and on the History button
+      // (those have their own handlers).
+      if (e.target.closest(".fav") || e.target.closest("[data-pair-history]")) return;
+      openPairDrawer(row.dataset.pair);
+    });
+  });
+  // History button → drawer with subset pre-filtered.
+  $$("#subsetpairs-table-body [data-pair-history]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const pair = btn.dataset.pairHistory;
+      const sub = btn.dataset.subset;
+      openPairDrawer(pair, { subset: sub });
+    });
+  });
+  // Favorite toggle.
+  $$("#subsetpairs-table-body .fav[data-fav]").forEach((cell) => {
+    cell.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const pair = cell.dataset.fav;
+      toggleFavorite(pair);
+      cell.classList.toggle("is-fav");
+      cell.textContent = state.favorites.has(pair) ? "★" : "☆";
+    });
+  });
+}
+
 // ====== Pair drilldown (History → Pair Drilldown) ======
 function populateHistoryPairSelector() {
   if (!state.snapshot) return;
@@ -1588,8 +1906,16 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !drawerOverlay.hidden) closePairDrawer();
 });
 
-async function openPairDrawer(pair, targetId = null) {
+async function openPairDrawer(pair, opts = {}) {
+  // opts can carry:
+  //   - targetId  : render into a non-drawer element too (drilldown view)
+  //   - subset    : pre-select this app-subset on the Signal History table
+  //                 — used when the user clicks "History" on a per-subset
+  //                 pair row so the drawer opens already filtered.
+  const targetId = typeof opts === "string" ? opts : opts.targetId;
+  const preSubset = (typeof opts === "object" && opts.subset) || null;
   state.drawerPair = pair;
+  state.drawerSubsetPrefilter = preSubset;
   drawerOverlay.hidden = false;
   document.body.style.overflow = "hidden";
   $("drawer-body").innerHTML = '<p class="placeholder">Loading…</p>';
@@ -1624,6 +1950,15 @@ function renderPairDrawer(data) {
   // Cache the cluster history on the drawer body so the subset-chip filter
   // can re-render the history table client-side without re-fetching.
   $("drawer-body").__clusterHistory = data.clusterHistory || [];
+  // If the caller asked for a specific subset to be pre-selected, click
+  // the matching chip now — re-renders the history table filtered to
+  // just that subset. This is what makes the "History" link on the
+  // per-subset pair list open the drawer already scoped.
+  if (state.drawerSubsetPrefilter) {
+    const chip = document.querySelector(`#subset-strip .subset-chip[data-subset="${CSS.escape(state.drawerSubsetPrefilter)}"]`);
+    if (chip) chip.click();
+    state.drawerSubsetPrefilter = null;
+  }
 }
 
 function renderPairDetailHtml(data) {

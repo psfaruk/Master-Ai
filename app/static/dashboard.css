@@ -1864,3 +1864,290 @@ a { color: var(--blue); }
   /* Very narrow phones — stack app-pair cards in a single column */
   .sp-app-pair-grid { grid-template-columns: 1fr; }
 }
+
+/* ============================================================
+   HISTORY — OVERALL WIN RATE (headline folder + 7-card grid)
+   ============================================================ */
+
+/* Headline folder card — the FIRST card on the History tab landing.
+   Spans full width on every breakpoint so it dominates the grid and
+   the user's eye lands on it first ("Overall Win Rate" is the most
+   important question this app answers). */
+.folder-grid--with-headline {
+  grid-template-columns: 1fr;
+}
+@media (min-width: 640px) {
+  /* On wider screens, keep headline at full width but let the other
+     4 folders flow as a 2x2 (or 4x1) grid below it. */
+  .folder-grid--with-headline {
+    grid-template-columns: 1fr;
+  }
+  .folder-grid--with-headline .folder-card:not(.folder-card--headline) {
+    /* We use a 2-col layout for the non-headline cards via a sub-grid
+       trick: each non-headline card places itself on column auto, and
+       we set the parent to grid-template-columns: repeat(2, 1fr) but
+       only for rows below the headline. Easiest: nest via grid-row. */
+  }
+  .folder-grid--with-headline {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    grid-auto-flow: row dense;
+  }
+  .folder-grid--with-headline .folder-card--headline {
+    grid-column: 1 / -1;  /* span both columns = full width */
+  }
+}
+@media (min-width: 900px) {
+  .folder-grid--with-headline {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .folder-grid--with-headline .folder-card--headline {
+    grid-column: 1 / -1;
+  }
+}
+
+.folder-card--headline {
+  flex-direction: row;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 22px;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.10), var(--bg-card) 60%);
+  border-color: color-mix(in srgb, var(--emerald) 35%, var(--border));
+}
+.folder-card--headline:hover {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.16), var(--bg-card-hover) 60%);
+  border-color: var(--emerald);
+}
+.folder-card--headline .folder-card__icon {
+  width: 48px;
+  height: 48px;
+  font-size: 20px;
+}
+.folder-card--headline .folder-card__title {
+  font-size: 18px;
+  font-weight: 700;
+}
+.folder-card--headline .folder-card__desc {
+  font-size: 12px;
+  margin-top: 2px;
+}
+.folder-card__hint {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--emerald);
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 6px 12px;
+  background: rgba(16, 185, 129, 0.12);
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+.folder-card__hint i { font-size: 10px; }
+
+/* Overall Win Rate view — headline + 7-card grid */
+.overall-headline {
+  text-align: center;
+  padding: 22px 16px 18px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+}
+.overall-headline__label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+.overall-headline__wr {
+  font-size: 44px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  line-height: 1.1;
+}
+.overall-headline__wr.high { color: var(--emerald); }
+.overall-headline__wr.mid { color: var(--amber); }
+.overall-headline__wr.low { color: var(--red); }
+.overall-headline__sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 6px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+.overall-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+@media (min-width: 640px) {
+  .overall-grid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (min-width: 900px) {
+  .overall-grid { grid-template-columns: repeat(4, 1fr); }
+}
+@media (min-width: 1200px) {
+  /* 7 cards: 4 cols x 2 rows = 8 slots, leaving 1 empty — looks fine. */
+  .overall-grid { grid-template-columns: repeat(4, 1fr); }
+}
+
+/* Each per-subset card — a button. */
+.overall-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+.overall-card:hover {
+  background: var(--bg-card-hover);
+  transform: translateY(-1px);
+}
+.overall-card:active { transform: scale(0.99); }
+/* Color-coded left border per subset */
+.overall-card--blue { border-left-color: var(--blue); }
+.overall-card--violet { border-left-color: var(--violet); }
+.overall-card--emerald { border-left-color: var(--emerald); }
+.overall-card--amber { border-left-color: var(--amber); }
+.overall-card--red { border-left-color: var(--red); }
+.overall-card--yellow { border-left-color: var(--yellow); }
+
+.overall-card__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+}
+.overall-card__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.overall-card__signals {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  white-space: nowrap;
+}
+.overall-card__wr {
+  font-size: 28px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  line-height: 1;
+  margin-top: 2px;
+}
+.overall-card__wr.high { color: var(--emerald); }
+.overall-card__wr.mid { color: var(--amber); }
+.overall-card__wr.low { color: var(--red); }
+.overall-card__wl {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.overall-card__best {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  border-top: 1px dashed var(--border);
+  padding-top: 6px;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.overall-card__hint {
+  font-size: 10px;
+  color: var(--blue);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+}
+.overall-card__hint i { font-size: 9px; }
+
+/* ============================================================
+   HISTORY — PER-SUBSET PAIR LIST
+   (reached by tapping a card on Overall Win Rate)
+   ============================================================ */
+
+/* The History button column on per-subset pair list rows */
+.btn--mini {
+  padding: 4px 10px;
+  font-size: 11px;
+  gap: 4px;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Clickable per-subset cell on Per-Pair Stats table */
+.cell-link {
+  background: transparent;
+  border: 1px dashed transparent;
+  border-radius: var(--radius-xs);
+  padding: 2px 6px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.cell-link:hover {
+  background: rgba(59, 130, 246, 0.08);
+  border-color: var(--blue);
+}
+
+/* Backtest → "Win rate by app pair (global)" cards — make them
+   look clickable since they now navigate to the per-subset pair list. */
+.sp-app-pair-card--link {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+}
+.sp-app-pair-card--link:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--text-muted);
+  transform: translateY(-1px);
+}
+.sp-app-pair-card--link:active { transform: scale(0.99); }
+.sp-app-pair-card__hint {
+  font-size: 10px;
+  color: var(--blue);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+/* Per-subset pair list — title row with back arrow */
+#subsetpairs-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The subset pair list table cells — make the row feel clickable */
+.pair-table--subsetpairs tbody tr[data-pair] {
+  cursor: pointer;
+}
+.pair-table--subsetpairs tbody tr[data-pair]:hover {
+  background: rgba(59, 130, 246, 0.05);
+}
+

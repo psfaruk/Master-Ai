@@ -141,13 +141,60 @@ best on which pairs?"** — directly:
   subset), each showing the global aggregate win rate for that subset plus
   the top 10 pairs by graded win rate (min 3 graded samples).
 
+#### History tab IA (revamped 2026-08)
+
+The History tab landing now leads with a **headline "Overall Win Rate"
+folder card** (full-width, emerald-tinted) — the single most important
+question this app answers ("of App 1, App 2, App 3, and every
+combination, who wins most?"). The 4 existing folders (Backtest /
+Per-Pair Stats / App Pair Leaders / Pair Drilldown) sit below it.
+
+Tapping the **Overall Win Rate** folder opens a 7-card grid — one card
+per app subset (App 1, App 2, App 3, App 1+2, App 1+3, App 2+3, All 3).
+Each card shows the global aggregate win rate, signal count, W/L
+breakdown, and the best pair for that subset. **Tapping a card drills
+into a per-subset pair list** that shows every pair that has signals in
+that subset, with per-pair signal count, W/L, win rate, and a "History"
+link that opens the per-pair drawer with the subset chip pre-selected
+on the Signal History table — so the user goes from "App 1+App 2 wins
+54% globally" → "EUR/GBP is its best pair at 72%" → "let me see every
+EUR/GBP signal where app1+app2 agreed" in three taps, with the table
+already filtered to that subset.
+
+#### Cross-linking
+
+Everything on the History tab is now cross-linked:
+
+- History → Overall Win Rate → tap a card → per-subset pair list
+- History → Backtest → "Win rate by app pair (global)" grid cards →
+  tap a card → per-subset pair list (same destination as Overall above)
+- History → Per-Pair Stats table → app1+app2 / app1+app3 / app2+app3 /
+  all-3 cells → tap a cell → per-pair drawer with that subset
+  pre-filtered on the Signal History table
+- History → App Pair Leaders → top-pair row → tap → per-pair drawer
+- History → Pair Drilldown → select a pair → drawer
+- Per-subset pair list → row tap → per-pair drawer
+- Per-subset pair list → row's "History" button → per-pair drawer
+  with the subset chip pre-selected
+- Per-pair drawer → subset chip (1+2 / 1+3 / 2+3 / All 3 / singletons)
+  → re-filters the Signal History table in-place (no extra fetch)
+
 #### API additions
 
 - `/api/snapshot`, `/api/pairs`, `/api/pair/{pair}`, `/api/backtest` now
   return `appPairStats` for each pair (a dict keyed by app-subset).
 - `/api/backtest` returns a top-level `appPairLeaders` field.
-- New endpoint `GET /api/app-pair-leaders` returns both the leaderboards
+- `GET /api/app-pair-leaders` returns both the leaderboards
   and a global aggregate per app-subset.
+- **NEW** `GET /api/app-pair/{subset}/pairs` returns every pair that has
+  signals for ONE app subset (no top-N cap), with per-pair signal count,
+  W/L, win rate, and a global aggregate for that subset. Path param
+  `subset` is one of `app1`, `app2`, `app3`, `app1+app2`, `app1+app3`,
+  `app2+app3`, `app1+app2+app3`. Differs from `/api/app-pair-leaders`
+  in two ways: (1) leaders returns top-10 per subset across ALL subsets;
+  this returns ALL pairs for ONE subset, and (2) leaders requires
+  `LEADERBOARD_MIN_GRADED=3` samples to include a pair; this includes
+  every pair with ≥1 signal so the user can see the full distribution.
 - New CLI: `python -m app.backtest_runner` runs a fresh backtest, prints
   a JSON summary (verdict + per-level + per-app-pair stats + top pairs),
   and exits with non-zero on anomaly/error — usable as a pre-push

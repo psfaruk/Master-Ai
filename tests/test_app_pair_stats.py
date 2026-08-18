@@ -538,3 +538,227 @@ def test_run_backtest_app_pair_stats_end_to_end(monkeypatch, fake_app_signals):
     assert leaders["app1+app3"] == []
     assert leaders["app2+app3"] == []
     assert leaders["app1+app2+app3"] == []
+
+
+# ---------------------------------------------------------------------------
+# /api/app-pair/{subset}/pairs  — full per-subset pair list endpoint
+# ---------------------------------------------------------------------------
+
+
+def test_app_pair_subset_pairs_endpoint_returns_all_pairs(monkeypatch):
+    """GET /api/app-pair/app1+app2/pairs returns every pair that has
+    signals in the app1+app2 subset, with per-pair signal count + W/L +
+    win rate, plus a global aggregate for that subset.
+
+    Differs from /api/app-pair-leaders in that:
+      - leaders returns top-10 per subset; this returns ALL pairs
+      - leaders requires LEADERBOARD_MIN_GRADED=3 samples; this returns
+        every pair with ≥1 signal so the user can see the full
+        distribution.
+    """
+    # Build a cached backtest with 3 pairs, each contributing to app1+app2
+    # with different win rates so we can verify sorting.
+    cached_backtest = {
+        "verdict": {"kind": "validated", "message": "ok"},
+        "perPair": [
+            {
+                "pair": "EURUSD_otc",
+                "displayPair": "EUR/USD OTC",
+                "category": "otc",
+                "appPairStats": {
+                    "app1+app2": {"total": 5, "win": 4, "loss": 1, "draw": 0, "unknown": 0,
+                                  "call": 3, "put": 2, "callWin": 3, "callLoss": 0,
+                                  "putWin": 1, "putLoss": 1, "winRate": 80.0},
+                    "app1+app3": {"total": 0, "win": 0, "loss": 0, "draw": 0, "unknown": 0,
+                                  "call": 0, "put": 0, "callWin": 0, "callLoss": 0,
+                                  "putWin": 0, "putLoss": 0, "winRate": None},
+                },
+                "levels": {},
+            },
+            {
+                "pair": "GBPJPY_otc",
+                "displayPair": "GBP/JPY OTC",
+                "category": "otc",
+                "appPairStats": {
+                    "app1+app2": {"total": 10, "win": 7, "loss": 3, "draw": 0, "unknown": 0,
+                                  "call": 5, "put": 5, "callWin": 4, "callLoss": 1,
+                                  "putWin": 3, "putLoss": 2, "winRate": 70.0},
+                },
+                "levels": {},
+            },
+            {
+                "pair": "AUDCAD_otc",
+                "displayPair": "AUD/CAD OTC",
+                "category": "otc",
+                "appPairStats": {
+                    "app1+app2": {"total": 3, "win": 1, "loss": 2, "draw": 0, "unknown": 0,
+                                  "call": 2, "put": 1, "callWin": 1, "callLoss": 1,
+                                  "putWin": 0, "putLoss": 1, "winRate": 33.3},
+                },
+                "levels": {},
+            },
+            # This pair has NO signals in app1+app2 — should be excluded.
+            {
+                "pair": "NZDUSD_otc",
+                "displayPair": "NZD/USD OTC",
+                "category": "otc",
+                "appPairStats": {
+                    "app1+app3": {"total": 5, "win": 3, "loss": 2, "draw": 0, "unknown": 0,
+                                  "call": 3, "put": 2, "callWin": 2, "callLoss": 1,
+                                  "putWin": 1, "putLoss": 1, "winRate": 60.0},
+                },
+                "levels": {},
+            },
+        ],
+    }
+
+    import app.api.routes as routes
+    import app.backtest_runner as br
+
+    monkeypatch.setattr(routes, "start_app2_cache_poller", lambda: None)
+    monkeypatch.setattr(routes, "start_candle_poller", lambda: None)
+    monkeypatch.setattr(routes, "get_cached_backtest", lambda: cached_backtest)
+    monkeypatch.setattr(routes, "get_backtest_cache_age_sec", lambda: 12.3)
+    # Make get_or_refresh_backtest a no-op (we already have cached data).
+    async def _noop():
+        return None
+    monkeypatch.setattr(routes, "get_or_refresh_backtest", _noop)
+
+    from fastapi.testclient import TestClient
+    from main import app as fastapi_app
+    client = TestClient(fastapi_app)
+
+    r = client.get("/api/app-pair/app1+app2/pairs")
+    assert r.status_code == 200, r.text
+    data = r.json()
+
+    assert data["subset"] == "app1+app2"
+    assert data["subsetLabel"] == "App 1 + App 2"
+    # Global aggregate across the 3 contributing pairs.
+    g = data["global"]
+    assert g["total"] == 18  # 5 + 10 + 3
+    assert g["win"] == 12    # 4 + 7 + 1
+    assert g["loss"] == 6    # 1 + 3 + 2
+    assert g["gradedTotal"] == 18
+    assert g["winRate"] == round((12 / 18) * 100, 1)
+    assert g["call"] == 10  # 3 + 5 + 2
+    assert g["put"] == 8    # 2 + 5 + 1
+    # 3 pairs returned (NZDUSD excluded because it has no app1+app2 signals).
+    pairs = data["pairs"]
+    assert len(pairs) == 3
+    # Sorted by win rate desc.
+    assert pairs[0]["pair"] == "EURUSD_otc"   # 80%
+    assert pairs[1]["pair"] == "GBPJPY_otc"   # 70%
+    assert pairs[2]["pair"] == "AUDCAD_otc"   # 33.3%
+    # Per-pair shape.
+    p0 = pairs[0]
+    assert p0["displayPair"] == "EUR/USD OTC"
+    assert p0["category"] == "otc"
+    assert p0["signals"] == 5
+    assert p0["win"] == 4
+    assert p0["loss"] == 1
+    assert p0["gradedTotal"] == 5
+    assert p0["winRate"] == 80.0
+    assert p0["call"] == 3
+    assert p0["put"] == 2
+    assert p0["callWin"] == 3
+    assert p0["callLoss"] == 0
+    assert p0["putWin"] == 1
+    assert p0["putLoss"] == 1
+    assert data["cacheAgeSec"] == 12.3
+    assert data["verdict"]["kind"] == "validated"
+
+
+def test_app_pair_subset_pairs_endpoint_rejects_invalid_subset(monkeypatch):
+    """GET /api/app-pair/INVALID/pairs returns 400 with the list of
+    valid subsets so the client can recover gracefully."""
+    import app.api.routes as routes
+    monkeypatch.setattr(routes, "start_app2_cache_poller", lambda: None)
+    monkeypatch.setattr(routes, "start_candle_poller", lambda: None)
+    monkeypatch.setattr(routes, "get_cached_backtest", lambda: None)
+    async def _noop():
+        return None
+    monkeypatch.setattr(routes, "get_or_refresh_backtest", _noop)
+
+    from fastapi.testclient import TestClient
+    from main import app as fastapi_app
+    client = TestClient(fastapi_app)
+
+    r = client.get("/api/app-pair/INVALID/pairs")
+    assert r.status_code == 400
+    data = r.json()
+    assert data["error"] == "invalid_subset"
+    assert "validSubsets" in data
+    assert "app1+app2" in data["validSubsets"]
+
+
+def test_app_pair_subset_pairs_endpoint_handles_cold_cache(monkeypatch):
+    """When the backtest cache is cold (None), the endpoint triggers a
+    background refresh and returns empty pairs (rather than 500ing)."""
+    import app.api.routes as routes
+    monkeypatch.setattr(routes, "start_app2_cache_poller", lambda: None)
+    monkeypatch.setattr(routes, "start_candle_poller", lambda: None)
+    monkeypatch.setattr(routes, "get_cached_backtest", lambda: None)
+    monkeypatch.setattr(routes, "get_backtest_cache_age_sec", lambda: -1.0)
+    refresh_called = {"count": 0}
+    async def _refresh():
+        refresh_called["count"] += 1
+        return None
+    monkeypatch.setattr(routes, "get_or_refresh_backtest", _refresh)
+
+    from fastapi.testclient import TestClient
+    from main import app as fastapi_app
+    client = TestClient(fastapi_app)
+
+    r = client.get("/api/app-pair/app1+app2/pairs")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["subset"] == "app1+app2"
+    assert data["pairs"] == []
+    assert data["global"]["total"] == 0
+    assert data["global"]["winRate"] is None
+    assert refresh_called["count"] == 1  # did trigger a refresh
+
+
+def test_app_pair_subset_pairs_endpoint_singleton_subset(monkeypatch):
+    """A singleton subset like 'app1' (app1 alone, no agreement) returns
+    every pair where app1 emitted a signal without any other app agreeing
+    with it."""
+    cached_backtest = {
+        "verdict": {"kind": "validated", "message": "ok"},
+        "perPair": [
+            {
+                "pair": "USDJPY_otc",
+                "displayPair": "USD/JPY OTC",
+                "category": "otc",
+                "appPairStats": {
+                    "app1": {"total": 7, "win": 5, "loss": 2, "draw": 0, "unknown": 0,
+                             "call": 4, "put": 3, "callWin": 3, "callLoss": 1,
+                             "putWin": 2, "putLoss": 1, "winRate": 71.4},
+                },
+                "levels": {},
+            },
+        ],
+    }
+    import app.api.routes as routes
+    monkeypatch.setattr(routes, "start_app2_cache_poller", lambda: None)
+    monkeypatch.setattr(routes, "start_candle_poller", lambda: None)
+    monkeypatch.setattr(routes, "get_cached_backtest", lambda: cached_backtest)
+    monkeypatch.setattr(routes, "get_backtest_cache_age_sec", lambda: 0.0)
+    async def _noop():
+        return None
+    monkeypatch.setattr(routes, "get_or_refresh_backtest", _noop)
+
+    from fastapi.testclient import TestClient
+    from main import app as fastapi_app
+    client = TestClient(fastapi_app)
+
+    r = client.get("/api/app-pair/app1/pairs")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["subset"] == "app1"
+    assert data["subsetLabel"] == "App 1 only"
+    assert len(data["pairs"]) == 1
+    assert data["pairs"][0]["pair"] == "USDJPY_otc"
+    assert data["pairs"][0]["signals"] == 7
+    assert data["pairs"][0]["winRate"] == 71.4

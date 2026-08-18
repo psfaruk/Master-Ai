@@ -813,6 +813,166 @@ async def get_app_pair_leaders(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# /api/app-pair/{subset}/pairs  — every pair that has signals for ONE subset
+# ---------------------------------------------------------------------------
+
+
+@router.get("/app-pair/{subset}/pairs")
+async def get_app_pair_subset_pairs(request: Request, subset: str):
+    """All pairs that have signals for ONE app subset.
+
+    Path param ``subset`` is one of the canonical app-subset keys:
+    ``app1``, ``app2``, ``app3``, ``app1+app2``, ``app1+app3``,
+    ``app2+app3``, ``app1+app2+app3``.
+
+    Returns every pair (sorted by win rate desc, then graded total desc)
+    that has at least 1 signal in that subset, with the per-pair stats for
+    that subset only:
+
+        {
+          "subset": "app1+app2",
+          "subsetLabel": "App 1 + App 2",
+          "global": { "total": 100, "win": 67, "loss": 33, ...,
+                      "gradedTotal": 100, "winRate": 67.0 },
+          "pairs": [
+            { "pair": "EURUSD_otc", "displayPair": "EURUSD OTC",
+              "category": "otc",
+              "signals": 12, "win": 9, "loss": 3, "draw": 0,
+              "gradedTotal": 12, "winRate": 75.0,
+              "call": 7, "put": 5, "callWin": 6, "callLoss": 1,
+              "putWin": 3, "putLoss": 2 },
+            ...
+          ],
+          "cacheAgeSec": 12.3,
+          "verdict": {...}
+        }
+
+    Used by the History tab's "Overall Win Rate" → per-subset drill-down view
+    so the user can see, for any ONE app subset:
+        - how many signals that subset produced across all pairs
+        - per-pair signal count, W/L, win rate
+        - a "view history" link for each pair that opens the per-pair drawer
+          with the subset pre-filtered on the Signal History table.
+
+    Differs from ``/api/app-pair-leaders`` in two ways:
+        - leaders returns top-10 per subset, ALL subsets at once; this
+          returns ALL pairs (no top-N cap) for ONE subset.
+        - leaders requires LEADERBOARD_MIN_GRADED=3 samples to include a
+          pair; this includes every pair that has ≥1 signal in the subset
+          so the user can see the full distribution.
+    """
+    start_app2_cache_poller()
+    start_candle_poller()
+    cached = get_cached_backtest()
+    if cached is None:
+        # Cold cache — trigger a background refresh; client can re-poll.
+        await get_or_refresh_backtest()
+        cached = get_cached_backtest()
+
+    APP_SUBSET_KEYS = ["app1", "app2", "app3", "app1+app2", "app1+app3", "app2+app3", "app1+app2+app3"]
+    APP_SUBSET_LABELS = {
+        "app1": "App 1 only",
+        "app2": "App 2 only",
+        "app3": "App 3 only",
+        "app1+app2": "App 1 + App 2",
+        "app1+app3": "App 1 + App 3",
+        "app2+app3": "App 2 + App 3",
+        "app1+app2+app3": "All 3 agree",
+    }
+    if subset not in APP_SUBSET_KEYS:
+        return _json({
+            "error": "invalid_subset",
+            "message": f"subset must be one of: {', '.join(APP_SUBSET_KEYS)}",
+            "validSubsets": APP_SUBSET_KEYS,
+        }, status=400)
+
+    pairs_out: List[Dict[str, Any]] = []
+    global_total = 0
+    global_win = 0
+    global_loss = 0
+    global_unknown = 0
+    global_draw = 0
+    global_call = 0
+    global_put = 0
+    global_call_win = 0
+    global_call_loss = 0
+    global_put_win = 0
+    global_put_loss = 0
+
+    for p in (cached.get("perPair", []) if cached else []):
+        aps = p.get("appPairStats") or {}
+        s = aps.get(subset)
+        if s is None:
+            continue
+        # Skip pairs that contributed nothing to this subset.
+        if (s.get("total", 0) or 0) == 0 and (s.get("win", 0) or 0) == 0 and (s.get("loss", 0) or 0) == 0:
+            continue
+        graded = (s.get("win", 0) or 0) + (s.get("loss", 0) or 0)
+        wr = round((s.get("win", 0) / graded) * 100, 1) if graded > 0 else None
+        pairs_out.append({
+            "pair": p.get("pair"),
+            "displayPair": p.get("displayPair"),
+            "category": p.get("category"),
+            "signals": s.get("total", 0),
+            "win": s.get("win", 0),
+            "loss": s.get("loss", 0),
+            "draw": s.get("draw", 0),
+            "unknown": s.get("unknown", 0),
+            "gradedTotal": graded,
+            "winRate": wr,
+            "call": s.get("call", 0),
+            "put": s.get("put", 0),
+            "callWin": s.get("callWin", 0),
+            "callLoss": s.get("callLoss", 0),
+            "putWin": s.get("putWin", 0),
+            "putLoss": s.get("putLoss", 0),
+        })
+        global_total += s.get("total", 0) or 0
+        global_win += s.get("win", 0) or 0
+        global_loss += s.get("loss", 0) or 0
+        global_unknown += s.get("unknown", 0) or 0
+        global_draw += s.get("draw", 0) or 0
+        global_call += s.get("call", 0) or 0
+        global_put += s.get("put", 0) or 0
+        global_call_win += s.get("callWin", 0) or 0
+        global_call_loss += s.get("callLoss", 0) or 0
+        global_put_win += s.get("putWin", 0) or 0
+        global_put_loss += s.get("putLoss", 0) or 0
+
+    # Sort: win rate desc (nulls last), then graded total desc (more
+    # confidence wins ties), then display pair asc for stable ordering.
+    pairs_out.sort(key=lambda r: (
+        -(r["winRate"] if r["winRate"] is not None else -1),
+        -(r["gradedTotal"]),
+        r["displayPair"] or "",
+    ))
+
+    global_graded = global_win + global_loss
+    return _json({
+        "subset": subset,
+        "subsetLabel": APP_SUBSET_LABELS.get(subset, subset),
+        "global": {
+            "total": global_total,
+            "win": global_win,
+            "loss": global_loss,
+            "unknown": global_unknown,
+            "draw": global_draw,
+            "gradedTotal": global_graded,
+            "winRate": round((global_win / global_graded) * 100, 1) if global_graded > 0 else None,
+            "call": global_call,
+            "put": global_put,
+            "callWin": global_call_win,
+            "callLoss": global_call_loss,
+            "putWin": global_put_win,
+            "putLoss": global_put_loss,
+        },
+        "pairs": pairs_out,
+        "cacheAgeSec": round(get_backtest_cache_age_sec(), 1),
+        "verdict": cached.get("verdict") if cached else None,
+    })
+
+
+# ---------------------------------------------------------------------------
 # /api/diag  — alignment diagnostics (engineer-facing; hidden from main nav)
 # ---------------------------------------------------------------------------
 

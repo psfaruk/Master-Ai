@@ -356,8 +356,20 @@
 
     <!-- ============ HISTORY ============ -->
     <section id="tab-history" class="tab-panel">
-      <!-- Folder-menu landing view — tap a card to open that function -->
-      <div class="folder-grid" id="history-folder-grid">
+      <!-- Folder-menu landing view — tap a card to open that function.
+           "Overall Win Rate" is the headline folder (first card, spans
+           full width) so the user lands on the single most important
+           question: "of all 3 apps and their combinations, who wins
+           most?". Tapping it opens a 7-card grid of per-app-subset
+           global win rates, each of which drills into a per-pair list
+           for that subset. -->
+      <div class="folder-grid folder-grid--with-headline" id="history-folder-grid">
+        <button class="folder-card folder-card--headline" data-folder="overall" type="button">
+          <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-trophy"></i></span>
+          <span class="folder-card__title" data-i18n="folder_overall_title">Overall Win Rate</span>
+          <span class="folder-card__desc" data-i18n="folder_overall_desc">Win rate for App 1, App 2, App 3 and every combination (1+2, 1+3, 2+3, all 3) — tap to drill into per-pair breakdown.</span>
+          <span class="folder-card__hint"><i class="fas fa-arrow-right"></i> <span data-i18n="folder_open">Open</span></span>
+        </button>
         <button class="folder-card" data-folder="backtest" type="button">
           <span class="folder-card__icon folder-card__icon--blue"><i class="fas fa-chart-line"></i></span>
           <span class="folder-card__title" data-i18n="folder_backtest_title">Backtest</span>
@@ -384,8 +396,59 @@
       <div class="folder-detail" id="history-folder-detail" hidden>
         <button class="folder-back" id="history-folder-back" type="button"><i class="fas fa-arrow-left"></i> <span data-i18n="back_to_history">Back to History</span></button>
 
+        <!-- Overall Win Rate sub-tab — 7 app-subset cards (App1, App2,
+             App3, 1+2, 1+3, 2+3, all-3), each showing the global
+             aggregate win rate + signal count + W/L for that subset.
+             Tapping a card opens the per-subset pair list. -->
+        <div class="history-panel history-panel--active" id="history-overall">
+          <div class="panel">
+            <div class="panel__header">
+              <h2 data-i18n="panel_overall_title">Overall Win Rate</h2>
+              <span class="panel__meta" id="overall-meta">—</span>
+            </div>
+            <div class="panel__body" id="overall-content">
+              <p class="placeholder" data-i18n="placeholder_loading_overall">Loading overall win rate…</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Per-subset pair list sub-tab — shows EVERY pair that has
+             signals for ONE app subset, with per-pair signal count,
+             W/L, win rate, and a "view history" link that opens the
+             per-pair drawer with the subset pre-filtered on the
+             Signal History table. Reached by tapping a card in the
+             Overall Win Rate view. -->
+        <div class="history-panel" id="history-subsetpairs">
+          <div class="panel">
+            <div class="panel__header">
+              <h2 id="subsetpairs-title">Subset</h2>
+              <span class="panel__meta" id="subsetpairs-meta">—</span>
+            </div>
+            <div class="panel__body panel__body--scroll">
+              <div class="table-scroll">
+                <table class="pair-table pair-table--interactive pair-table--subsetpairs">
+                  <thead>
+                    <tr>
+                      <th>★</th>
+                      <th data-i18n="th_pair">Pair</th>
+                      <th data-i18n="th_cat">Cat</th>
+                      <th data-i18n="th_signals">Signals</th>
+                      <th data-i18n="th_wl">W/L</th>
+                      <th data-i18n="th_win_pct">Win %</th>
+                      <th data-i18n="th_action">History</th>
+                    </tr>
+                  </thead>
+                  <tbody id="subsetpairs-table-body">
+                    <tr><td colspan="7" class="placeholder" data-i18n="placeholder_loading_subsetpairs">Loading…</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
       <!-- Backtest sub-tab -->
-      <div class="history-panel history-panel--active" id="history-backtest">
+      <div class="history-panel" id="history-backtest">
         <div class="panel">
           <div class="panel__header">
             <h2 data-i18n="panel_backtest_title">Consensus Accuracy Backtest</h2>
