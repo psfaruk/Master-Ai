@@ -29,8 +29,10 @@ logger = logging.getLogger("master-ai.snapshot_poller")
 
 # Fast poll interval — used during the first BURST_WINDOW_SEC of a candle.
 BURST_INTERVAL_SEC = 0.8
-# Slow poll interval — used for the remainder of the candle.
-IDLE_INTERVAL_SEC = 3.0
+# Slow poll interval — used for the remainder of the candle. No new signal
+# is expected during this window, so it's kept slow to cut idle request
+# volume (and Railway compute cost) without affecting candle-open latency.
+IDLE_INTERVAL_SEC = 6.0
 # Window after candle open during which we poll fast.
 BURST_WINDOW_SEC = 12
 

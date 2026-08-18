@@ -41,7 +41,7 @@ from .signal_normalize import (
 logger = logging.getLogger("master-ai.app2_cache")
 
 APP2_URL = "https://binary-signals-app-production.up.railway.app/api/share-signals"
-POLL_INTERVAL_SEC = 5.0
+POLL_INTERVAL_SEC = 8.0
 CACHE_TTL_SEC = 60 * 60  # keep 1 hour of history
 
 # Wall-clock string accepted by App 2's ``time`` field: "HH:MM" or "HH:MM:SS".
