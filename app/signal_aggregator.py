@@ -180,7 +180,7 @@ SOURCES: List[Dict[str, Any]] = [
         "id": "app3",
         "name": "OTC Live Trading",
         "short_name": "App 3",
-        "base_url": "https://otc-live-trading-production.up.railway.app",
+        "base_url": "https://otclivedata.up.railway.app",
         "signals_path": "/api/share-signals",
         "historical_path": "/api/signals?limit=300",
         "health_path": "/api/token-status",

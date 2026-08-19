@@ -81,8 +81,8 @@ _DRAW_RE = re.compile(r"draw|void", re.IGNORECASE)
 SOURCES = {
     "app1": {"name": "Minimum Pair", "url": "https://minimum-pair-production.up.railway.app/api/history?limit=500"},
     "app2": {"name": "Binary Signal Terminal", "url": "https://binary-signals-app-production.up.railway.app/api/share-signals"},
-    "app3": {"name": "OTC Live Trading", "url": "https://otc-live-trading-production.up.railway.app/api/signals?limit=500"},
-    "app3_live": {"name": "OTC Live Trading", "url": "https://otc-live-trading-production.up.railway.app/api/share-signals"},
+    "app3": {"name": "OTC Live Trading", "url": "https://otclivedata.up.railway.app/api/signals?limit=500"},
+    "app3_live": {"name": "OTC Live Trading", "url": "https://otclivedata.up.railway.app/api/share-signals"},
 }
 
 

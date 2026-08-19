@@ -19,7 +19,7 @@ from app import app2_cache, signal_aggregator
 
 APP1 = "https://minimum-pair-production.up.railway.app"
 APP2 = "https://binary-signals-app-production.up.railway.app"
-APP3 = "https://otc-live-trading-production.up.railway.app"
+APP3 = "https://otclivedata.up.railway.app"
 
 
 def _utc(y, mo, d, h, mi, s=0):

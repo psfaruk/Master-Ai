@@ -459,7 +459,7 @@ def test_run_backtest_app_pair_stats_end_to_end(monkeypatch, fake_app_signals):
     async def fake_fetch_v2(url, **kw):
         if "minimum-pair" in url:
             return {"signals": app1_signals_raw}
-        if "otc-live-trading" in url and "share-signals" not in url:
+        if "otclivedata" in url and "share-signals" not in url:
             return {"signals": app3_signals_raw}
         return {"signals": []}
 

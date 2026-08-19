@@ -45,8 +45,8 @@ from .signal_normalize import (
 
 logger = logging.getLogger("master-ai.candle_fetcher")
 
-APP3_HIST_URL = "https://otc-live-trading-production.up.railway.app/api/signals?limit=500"
-APP3_LIVE_URL = "https://otc-live-trading-production.up.railway.app/api/share-signals"
+APP3_HIST_URL = "https://otclivedata.up.railway.app/api/signals?limit=500"
+APP3_LIVE_URL = "https://otclivedata.up.railway.app/api/share-signals"
 
 REFETCH_SEC = 45.0
 FAIL_BACKOFF_SEC = 5.0
