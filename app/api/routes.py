@@ -771,8 +771,11 @@ async def get_backtest_status(request: Request):
     """Cheap status check — backtest cache age + verdict + total signals.
 
     Used by the History tab header so we can show "last backtest 47s ago"
-    without re-running it."""
+    without re-running it. Also surfaces whether a background refresh is
+    running or failing, so a stale cache is diagnosable remotely."""
+    from ..backtest_runner import _get_cache as _bt_cache_state
     cached = get_cached_backtest()
+    bt_state = _bt_cache_state()
     return _json({
         "cacheAgeSec": (round(age, 1) if (age := get_backtest_cache_age_sec()) is not None else None),
         "hasResult": cached is not None,
@@ -781,6 +784,8 @@ async def get_backtest_status(request: Request):
         "totalClusters": cached.get("totalClusters") if cached else 0,
         "perPairCount": len(cached.get("perPair", [])) if cached else 0,
         "timestamp": cached.get("timestamp") if cached else None,
+        "refreshInProgress": bool(bt_state.refresh_in_progress),
+        "lastRefreshError": bt_state.last_refresh_error,
     })
 
 

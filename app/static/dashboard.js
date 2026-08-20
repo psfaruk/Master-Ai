@@ -1304,10 +1304,13 @@ async function refreshBacktestStatus() {
 function renderBacktestStatus() {
   if (!state.backtestStatus) return;
   const s = state.backtestStatus;
-  const age = s.cacheAgeSec >= 0 ? `cache ${s.cacheAgeSec.toFixed(0)}s old` : "no cache";
-  $("backtest-status").textContent = `${age} · ${s.totalSignals || 0} signals · ${s.totalClusters || 0} clusters · ${s.perPairCount || 0} pairs`;
+  const age = s.cacheAgeSec != null && s.cacheAgeSec >= 0 ? `cache ${s.cacheAgeSec.toFixed(0)}s old` : "no cache";
+  const refreshNote = s.lastRefreshError
+    ? ` · ⚠ refresh failing: ${s.lastRefreshError}`
+    : (s.refreshInProgress ? " · refreshing…" : "");
+  $("backtest-status").textContent = `${age} · ${s.totalSignals || 0} signals · ${s.totalClusters || 0} clusters · ${s.perPairCount || 0} pairs${refreshNote}`;
   const cacheAgeEl = $("bt-cache-age");
-  if (cacheAgeEl) cacheAgeEl.textContent = age;
+  if (cacheAgeEl) cacheAgeEl.textContent = age + (s.lastRefreshError ? ` · ⚠ ${s.lastRefreshError}` : "");
   renderHomeBacktestSummary(s);
 }
 

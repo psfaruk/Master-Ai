@@ -164,6 +164,11 @@ SOURCES: List[Dict[str, Any]] = [
         # array of recent signals across ALL pairs. We pull a generous limit
         # so the candle-aligned consensus has enough history.
         "signals_path": "/api/history?limit=500",
+        # /api/live returns the CURRENT per-pair signals (not yet resolved
+        # into history). Merged into the history rows (deduped by candle)
+        # so App 1's column shows the live prediction the moment the
+        # upstream publishes it, instead of waiting for the history row.
+        "live_path": "/api/live",
         "health_path": "/api/status",
         "accent": "amber",
     },
@@ -182,7 +187,10 @@ SOURCES: List[Dict[str, Any]] = [
         "short_name": "App 3",
         "base_url": "https://otclivedata.up.railway.app",
         "signals_path": "/api/share-signals",
-        "historical_path": "/api/signals?limit=300",
+        # App 3 caps its history window at 500 rows regardless of limit
+        # (verified live) — ask for the full 500 instead of 300 so the
+        # resolved-history consensus has every row the upstream will give.
+        "historical_path": "/api/signals?limit=500",
         "health_path": "/api/token-status",
         "accent": "emerald",
     },
@@ -403,28 +411,47 @@ def _make_signal(
 
 
 async def fetch_app1(freshness_window_sec: int, now: int) -> NormalizeResult:
-    """App 1 (Minimum Pair — FastAPI edition): GET /api/history?limit=N.
+    """App 1 (Minimum Pair — FastAPI edition): /api/history?limit=N + /api/live.
 
-    Returns a BARE JSON ARRAY of recent signals across all tracked pairs. Each
-    row has shape::
+    ``/api/history`` returns a BARE JSON ARRAY of recent (resolved) signals
+    across all tracked pairs; ``/api/live`` returns the current per-pair
+    signals. We merge both — deduped by (pair, candle) with history rows
+    winning (they carry a resolved ``result``) — so the dashboard shows
+    App 1's live prediction for the current candle AND its resolved history.
+
+    Each row has shape::
 
         { id, pair, direction, created_at, entry_ts, target_close_ts,
           confidence, source, entry_price, close_price, result }
+
+    ``/api/live`` rows also carry ``stale`` / ``age_seconds`` — when the
+    upstream's Quotex session is down the rows are duplicates of history
+    and the dedup simply drops them.
     """
     src = SOURCES[0]
     skipped = {"noPair": 0, "noDirection": 0, "noCandle": 0}
-    try:
-        data = await fetch_json_with_timeout(f"{src['base_url']}{src['signals_path']}", FETCH_TIMEOUT_SEC)
-    except Exception:
-        return NormalizeResult(signals=[], health="down", skipped=skipped, error="fetch_failed")
-    if not data:
-        return NormalizeResult(signals=[], health="down", skipped=skipped, error="empty_response")
-
-    arr = pick_array(data, ["history", "signals", "rows", "data"])
     offset = get_candle_offset_sec("app1")
     out: List[SourceSignal] = []
+    seen_candles: set = set()  # "pair|candleTime" — history rows win
 
-    for s in arr:
+    async def _try(url: str) -> Any:
+        try:
+            return await fetch_json_with_timeout(url, FETCH_TIMEOUT_SEC)
+        except Exception:
+            return None
+
+    hist_data, live_data = await asyncio.gather(
+        _try(f"{src['base_url']}{src['signals_path']}"),
+        _try(f"{src['base_url']}{src['live_path']}"),
+    )
+    if hist_data is None and live_data is None:
+        return NormalizeResult(signals=[], health="down", skipped=skipped, error="fetch_failed")
+
+    hist_arr = pick_array(hist_data, ["history", "signals", "rows", "data"]) if hist_data else []
+    live_arr = pick_array(live_data, ["signals", "rows", "data", "live"]) if live_data else []
+    # History first — resolved rows are authoritative for their candle.
+    # Live rows fill in candles history doesn't have yet (the current one).
+    for s in [*hist_arr, *live_arr]:
         if not isinstance(s, dict):
             continue
         pair = canonical_pair(pick_field(s, PAIR_KEYS))
@@ -442,6 +469,11 @@ async def fetch_app1(freshness_window_sec: int, now: int) -> NormalizeResult:
             continue
         raw_candle_time = candle_floor(entry_sec)
         candle_time = raw_candle_time + offset
+
+        key = f"{pair}|{candle_time}"
+        if key in seen_candles:
+            continue  # history row already covers this candle
+        seen_candles.add(key)
 
         emitted_at = to_unix_seconds(pick_field(s, ["created_at", "signalAt", "signal_at", "createdAt", "ts"]))
         ts = emitted_at if emitted_at > 0 else candle_time
@@ -489,7 +521,12 @@ async def fetch_app1(freshness_window_sec: int, now: int) -> NormalizeResult:
             "reasons": reasons,
         }, now, freshness_window_sec))
 
-    return NormalizeResult(signals=out, health="ok", raw_count=len(arr), skipped=skipped)
+    return NormalizeResult(
+        signals=out,
+        health="ok",
+        raw_count=len(hist_arr) + len(live_arr),
+        skipped=skipped,
+    )
 
 
 def _app2_cached_to_signal(
@@ -638,7 +675,7 @@ async def fetch_app3(freshness_window_sec: int, now: int) -> NormalizeResult:
     live_ok = False
 
     # --- 1. RESOLVED historical signals (carry WIN/LOSS outcomes) ---
-    hist_path = src.get("historical_path", "/api/signals?limit=300")
+    hist_path = src.get("historical_path", "/api/signals?limit=500")
     try:
         hist_data = await fetch_json_with_timeout(f"{src['base_url']}{hist_path}", FETCH_TIMEOUT_SEC)
         if hist_data:

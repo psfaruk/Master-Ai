@@ -79,8 +79,19 @@ MIN_SAMPLE_60MIN = 3
 _DRAW_RE = re.compile(r"draw|void", re.IGNORECASE)
 
 SOURCES = {
-    "app1": {"name": "Minimum Pair", "url": "https://minimum-pair-production.up.railway.app/api/history?limit=500"},
+    # App 1's /api/history accepts limit=5000 (verified live — it returned
+    # 5000 rows ≈ 4.75h of history). The previous limit=500 only reached
+    # ~28 minutes back, which silently starved the per-pair win-rate
+    # calculations of data (the "win rate looks wrong / data missing"
+    # complaint). The backtest runs once per ~60s (CACHE_TTL_SEC), so the
+    # larger payload (~1.2MB) is cheap here. Do NOT raise the aggregator's
+    # hot-path limit the same way — the snapshot poller refetches every
+    # few seconds and would hammer the upstream.
+    "app1": {"name": "Minimum Pair", "url": "https://minimum-pair-production.up.railway.app/api/history?limit=5000"},
     "app2": {"name": "Binary Signal Terminal", "url": "https://binary-signals-app-production.up.railway.app/api/share-signals"},
+    # App 3 caps its history window at 500 rows (~41 min) regardless of the
+    # requested limit — verified live with limit=2000/offset/before probes.
+    # No pagination params exist; 500 is the ceiling we can use.
     "app3": {"name": "OTC Live Trading", "url": "https://otclivedata.up.railway.app/api/signals?limit=500"},
     "app3_live": {"name": "OTC Live Trading", "url": "https://otclivedata.up.railway.app/api/share-signals"},
 }
@@ -221,6 +232,16 @@ class BacktestCache:
     fetched_at: float = 0.0  # unix seconds
     refresh_in_progress: bool = False
     refresh_task: Optional[asyncio.Task] = None
+    # When the in-flight refresh started — used to detect a refresh that is
+    # WEDGED (see _ensure_refresh_task). A hung refresh used to hold
+    # refresh_in_progress=True forever, which starved the cache: every
+    # subsequent get_or_refresh_backtest() joined the same dead task and the
+    # dashboard silently served an ever-staling win-rate cache (observed
+    # live: cache age 2.76h on the production instance).
+    refresh_started_at: float = 0.0
+    # Last background-refresh failure (message or "timeout"), for /api/diag
+    # and /api/backtest/status so a failing refresh is diagnosable remotely.
+    last_refresh_error: Optional[str] = None
 
 
 _cache: Optional[BacktestCache] = None
@@ -264,6 +285,19 @@ def get_backtest_cache_age_sec() -> Optional[float]:
     return max(0.0, time.time() - c.fetched_at)
 
 
+# Hard cap on a single backtest run. Every fetch inside has its own ~10s
+# timeout, so a healthy run finishes well under this; the cap exists so a
+# wedged run (upstream that accepts the connection but never answers, a
+# pathological grading loop, etc.) cannot hold ``refresh_in_progress``
+# forever and starve the win-rate cache.
+REFRESH_MAX_SEC = 120.0
+
+# A refresh is considered WEDGED after this long and gets cancelled + replaced
+# by _ensure_refresh_task. Must be > REFRESH_MAX_SEC (the wait_for cap) so a
+# legitimately slow run is never killed twice.
+REFRESH_STUCK_SEC = 3 * REFRESH_MAX_SEC
+
+
 def _ensure_refresh_task() -> asyncio.Task:
     """Return the in-flight refresh task, starting one if none is running.
 
@@ -273,11 +307,24 @@ def _ensure_refresh_task() -> asyncio.Task:
     instead of racing each other (which used to double the upstream load
     and let a slower-but-earlier-started run clobber a newer cached result
     with staler data stamped as fresh).
+
+    Safety valve: a refresh that has been "in progress" past
+    ``REFRESH_STUCK_SEC`` is treated as wedged — cancelled and replaced so a
+    hung task can't silently freeze the win-rate cache forever (the
+    production symptom this guards against: a multi-hour-stale cache while
+    the dashboard kept polling).
     """
     c = _get_cache()
     if c.refresh_in_progress and c.refresh_task is not None and not c.refresh_task.done():
-        return c.refresh_task
+        if time.time() - c.refresh_started_at < REFRESH_STUCK_SEC:
+            return c.refresh_task
+        logger.error(
+            "[backtest-cache] refresh wedged for %.0fs — cancelling and restarting",
+            time.time() - c.refresh_started_at,
+        )
+        c.refresh_task.cancel()
     c.refresh_in_progress = True
+    c.refresh_started_at = time.time()
     c.refresh_task = asyncio.create_task(_refresh_in_background())
     return c.refresh_task
 
@@ -313,7 +360,13 @@ async def run_backtest_coordinated() -> Dict[str, Any]:
     """
     c = _get_cache()
     task = _ensure_refresh_task()
-    await task
+    try:
+        await task
+    except asyncio.CancelledError:
+        # _ensure_refresh_task cancelled a wedged refresh and started a new
+        # one — join THAT instead of surfacing the cancellation.
+        logger.warning("[backtest-cache] joined refresh was cancelled (wedged) — joining replacement")
+        return await run_backtest_coordinated()
     if c.result is not None:
         return c.result
     # The joined refresh had no prior cache to fall back on and failed —
@@ -327,11 +380,18 @@ async def run_backtest_coordinated() -> Dict[str, Any]:
 async def _refresh_in_background() -> None:
     c = _get_cache()
     try:
-        result = await run_backtest()
+        # wait_for caps the run so a wedged upstream can't hold the refresh
+        # flag forever (see _ensure_refresh_task's safety valve).
+        result = await asyncio.wait_for(run_backtest(), timeout=REFRESH_MAX_SEC)
         c.result = result
         c.fetched_at = time.time()
+        c.last_refresh_error = None
+    except asyncio.TimeoutError:
+        c.last_refresh_error = f"timeout after {REFRESH_MAX_SEC:.0f}s"
+        logger.error("[backtest-cache] background refresh %s", c.last_refresh_error)
     except Exception as e:
-        logger.warning("[backtest-cache] background refresh failed: %s", e)
+        c.last_refresh_error = str(e) or type(e).__name__
+        logger.warning("[backtest-cache] background refresh failed: %s", c.last_refresh_error)
     finally:
         c.refresh_in_progress = False
 

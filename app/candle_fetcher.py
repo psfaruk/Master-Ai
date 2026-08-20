@@ -65,6 +65,11 @@ class Candle:
     # App 3's signal direction for this candle (used only to detect "no signal").
     app3_direction: Optional[str]
     fetched_at: float  # unix ms
+    # True for candles from the RESOLVED historical endpoint (final open/close
+    # of a closed candle). False for candles captured from the live feed,
+    # whose ``close`` is the price at capture time (mid-candle) and must not
+    # grade signals until the candle's minute has fully ended.
+    is_final: bool = True
 
 
 def grade_signal_against_candle(direction: str, candle: Optional[Candle]) -> str:
@@ -75,9 +80,15 @@ def grade_signal_against_candle(direction: str, candle: Optional[Candle]) -> str
     - DRAW when close == open (no movement — neither won nor lost)
 
     Returns ``"UNKNOWN"`` when the candle data is missing (the candle hasn't
-    closed yet, or App 3 doesn't track this pair).
+    closed yet, or App 3 doesn't track this pair). A live-captured candle
+    (``is_final=False``) is only gradable once its minute has fully ended —
+    grading a still-forming candle against a mid-minute close produces a
+    verdict that can flip seconds later and silently corrupted the win rate.
     """
     if candle is None:
+        return "UNKNOWN"
+    if not candle.is_final and candle.candle_time >= candle_floor(int(time.time())):
+        # The candle is still forming — its close keeps moving. Do NOT grade.
         return "UNKNOWN"
     if candle.close is None or not math.isfinite(candle.close):
         return "UNKNOWN"
@@ -216,6 +227,10 @@ async def _fetch_live_candles() -> List[Candle]:
             result=None,  # live candle, not yet resolved
             app3_direction=dir_,
             fetched_at=now_ms,
+            # Live capture — ``close`` is the price at capture time, NOT the
+            # final close. grade_signal_against_candle refuses to grade a
+            # forming candle and only allows it once the minute has ended.
+            is_final=False,
         ))
 
     return out
