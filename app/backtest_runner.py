@@ -242,10 +242,16 @@ def set_cached_backtest(result: Dict[str, Any]) -> None:
     c.fetched_at = time.time()
 
 
-def get_backtest_cache_age_sec() -> float:
+def get_backtest_cache_age_sec() -> Optional[float]:
+    """Age of the most recent cached backtest result, in seconds.
+    Returns ``None`` for "never fetched" instead of the previous ``-1.0``
+    sentinel — callers (routes.py:149 / 406) round it before shipping, so
+    `round(None, 1)` would crash; the routes already guard with a
+    None-check now. The dashboard renders `None` as "—" instead of the
+    confusing literal "cache -1s" on cold start. (REVIEW-1 L57.)"""
     c = _get_cache()
     if c.fetched_at <= 0:
-        return -1.0
+        return None
     return max(0.0, time.time() - c.fetched_at)
 
 
@@ -429,7 +435,15 @@ def _classify_cluster(cluster_apps: Dict[AppId, NormalizedSignal], ts_anchor: in
         direction = "CALL" if call_c > put_c else "PUT" if put_c > call_c else None
 
     # Grade only the apps that voted for the consensus direction.
-    gradable: List[NormalizedSignal] = [] if level == "conflict" or direction is None else [a for a in signal_list if a.direction == direction]
+    # NOTE: a "conflict" cluster with a clear majority (call_c > put_c, say)
+    # still HAS a consensus direction — the majority. We DO want to grade it:
+    # the majority's apps won/lost together. Previously the `level == "conflict"`
+    # short-circuit forced `gradable = []` for every conflict cluster, so the
+    # per-pair "conflict" win-rate was always None and conflict clusters
+    # always landed in the "unknown" bucket. The aggregator's
+    # `_classify_candle` already treats conflict-with-majority as having a
+    # real consensus direction; the backtest should agree. (REVIEW-1 H4.)
+    gradable: List[NormalizedSignal] = [] if direction is None else [a for a in signal_list if a.direction == direction]
 
     # The list of apps that agreed on the consensus direction. Sorted so
     # the app_subset_key is deterministic regardless of dict ordering.
@@ -541,39 +555,15 @@ def _new_app_pair_stat() -> AppPairStat:
     return AppPairStat()
 
 
-def _add_cluster_to_level(s: LevelStat, c: Dict[str, Any]) -> None:
-    s.total += 1
-    if c["outcome"] == 1:
-        s.win += 1
-    elif c["outcome"] == 0:
-        s.loss += 1
-    elif c.get("agreeing_draw", 0) > 0 and c["outcome"] is None:
-        # +1 per cluster, not per agreeing app — matches total/win/loss,
-        # which are all one increment per cluster regardless of how many
-        # apps are in it. ``agreeing_draw`` (0..3) is only used to detect
-        # "this cluster's outcome was a draw", not to weight the count.
-        s.draw += 1
-    else:
-        s.unknown += 1
-    if c["direction"] == "CALL":
-        s.call += 1
-        if c["outcome"] == 1:
-            s.call_win += 1
-        elif c["outcome"] == 0:
-            s.call_loss += 1
-    elif c["direction"] == "PUT":
-        s.put += 1
-        if c["outcome"] == 1:
-            s.put_win += 1
-        elif c["outcome"] == 0:
-            s.put_loss += 1
+def _add_cluster_to_stat(s: Any, c: Dict[str, Any]) -> None:
+    """Accumulate one cluster's outcome into a LevelStat or AppPairStat.
 
-
-def _add_cluster_to_app_pair(s: AppPairStat, c: Dict[str, Any]) -> None:
-    """Same accumulation as ``_add_cluster_to_level`` but on an AppPairStat.
-
-    Reuses the exact same semantics so the per-app-pair win rate is directly
-    comparable to the per-level win rate.
+    The two dataclasses have the SAME set of stat fields (total/win/loss/
+    unknown/draw/call/put/call_win/call_loss/put_win/put_loss), so the
+    accumulation logic is byte-for-byte identical. This used to be two
+    near-duplicate functions (``_add_cluster_to_level`` and
+    ``_add_cluster_to_app_pair``); the duplication was a drift hazard
+    (REVIEW-1 M11). The single helper accepts either type.
     """
     s.total += 1
     if c["outcome"] == 1:
@@ -600,6 +590,11 @@ def _add_cluster_to_app_pair(s: AppPairStat, c: Dict[str, Any]) -> None:
             s.put_win += 1
         elif c["outcome"] == 0:
             s.put_loss += 1
+
+
+# Backwards-compat aliases — used in run_backtest below.
+_add_cluster_to_level = _add_cluster_to_stat
+_add_cluster_to_app_pair = _add_cluster_to_stat
 
 
 def _display_pair_local(canonical: str) -> str:
@@ -635,11 +630,44 @@ APP_SUBSET_KEYS: List[str] = [
 ]
 
 
+def _stat_to_camel_dict(d: Dict[str, Any], *, with_win_rate: bool = False,
+                         graded: int = 0) -> Dict[str, Any]:
+    """Emit a JSON-friendly dict with BOTH snake_case (dataclass-native)
+    AND camelCase (UI contract) keys for every stat field.
+
+    The dashboard.js expects camelCase keys (`callWin`, `callLoss`, `putWin`,
+    `putLoss`), but `asdict()` produces snake_case. Emitting both keeps
+    backwards-compat with any snake_case consumer while satisfying the UI.
+    The duplicate keys add a few bytes per row but eliminate a whole class
+    of "undefined" rendering bugs (REVIEW-1 C2 / REVIEW-2 C2).
+    """
+    camel_map = {
+        "call_win": "callWin",
+        "call_loss": "callLoss",
+        "put_win": "putWin",
+        "put_loss": "putLoss",
+    }
+    out: Dict[str, Any] = {}
+    for k, v in d.items():
+        out[k] = v
+        if k in camel_map:
+            out[camel_map[k]] = v
+    if with_win_rate:
+        # graded is computed by the caller; the win-rate helper already
+        # produced a value or None.
+        win = d.get("win", 0)
+        out["winRate"] = (round((win / graded) * 100, 1)
+                          if graded else None)
+        out["gradedTotal"] = graded
+    return out
+
+
 def _serialize_app_pair_stats(stats: Dict[str, AppPairStat]) -> Dict[str, dict]:
     """Return a stable JSON-friendly dict covering ALL canonical app subsets.
 
     Subsets that didn't occur in this pair's backtest history are emitted
-    with zeroed counters and ``winRate: None``.
+    with zeroed counters and ``winRate: None``. Both snake_case (native)
+    and camelCase (UI-contract) keys are emitted.
     """
     out: Dict[str, dict] = {}
     for key in APP_SUBSET_KEYS:
@@ -647,8 +675,8 @@ def _serialize_app_pair_stats(stats: Dict[str, AppPairStat]) -> Dict[str, dict]:
         if s is None:
             s = _new_app_pair_stat()
         d = asdict(s)
-        d["winRate"] = _app_pair_win_rate(s)
-        d["gradedTotal"] = s.win + s.loss
+        graded = s.win + s.loss
+        d = _stat_to_camel_dict(d, with_win_rate=True, graded=graded)
         out[key] = d
     # Preserve any non-canonical subsets (defensive — shouldn't happen, but
     # don't silently drop them if a future caller introduces one).
@@ -656,8 +684,8 @@ def _serialize_app_pair_stats(stats: Dict[str, AppPairStat]) -> Dict[str, dict]:
         if key in out:
             continue
         d = asdict(s)
-        d["winRate"] = _app_pair_win_rate(s)
-        d["gradedTotal"] = s.win + s.loss
+        graded = s.win + s.loss
+        d = _stat_to_camel_dict(d, with_win_rate=True, graded=graded)
         out[key] = d
     return out
 
@@ -665,6 +693,17 @@ def _serialize_app_pair_stats(stats: Dict[str, AppPairStat]) -> Dict[str, dict]:
 # ---------------------------------------------------------------------------
 # Main runner
 # ---------------------------------------------------------------------------
+
+
+async def _try_fetch(url: str, label: str) -> Any:
+    """Fetch URL, returning None on failure. Logs the exception at debug
+    level so /api/diag can show a 'fetch failed for X' line in the logs
+    without making a single bad upstream fail the whole backtest."""
+    try:
+        return await fetch_json_with_timeout(url)
+    except Exception as e:
+        logger.debug("[backtest] %s fetch failed: %s", label, e)
+        return None
 
 
 async def run_backtest() -> Dict[str, Any]:
@@ -700,14 +739,21 @@ async def run_backtest() -> Dict[str, Any]:
             return
         all_signals.append(s)
 
-    # App1 — historical signals with WIN/LOSS outcome
-    try:
-        d = await fetch_json_with_timeout(SOURCES["app1"]["url"])
-        for s in pick_array(d, ["signals", "rows", "data"]):
+    # Fetch App 1 + App 3 historical + App 3 live IN PARALLEL.
+    # Previously these three were sequential `await` calls — each up to 10s
+    # — which made a single slow upstream add 2-4s to every backtest run
+    # (and the snapshot poller blocks on backtest refresh, so the whole
+    # dashboard stalled). (REVIEW-1 H11.)
+    app1_d, app3_hist_d, app3_live_d = await asyncio.gather(
+        _try_fetch(SOURCES["app1"]["url"], "app1"),
+        _try_fetch(SOURCES["app3"]["url"], "app3 history"),
+        _try_fetch(SOURCES["app3_live"]["url"], "app3 live"),
+    )
+
+    if app1_d is not None:
+        for s in pick_array(app1_d, ["signals", "rows", "data"]):
             if isinstance(s, dict):
                 push(normalize_app1(s))
-    except Exception as e:
-        logger.debug("[backtest] app1 fetch failed: %s", e)
 
     # App2 — historical candles recorded by our own poller.
     for c in get_all_cached_app2_signals():
@@ -722,21 +768,14 @@ async def run_backtest() -> Dict[str, Any]:
             raw_status=None,
         ))
 
-    # App3 — resolved history (has correct/wrong) + the current live candle.
-    try:
-        d = await fetch_json_with_timeout(SOURCES["app3"]["url"])
-        for s in pick_array(d, ["signals", "rows", "data"]):
+    if app3_hist_d is not None:
+        for s in pick_array(app3_hist_d, ["signals", "rows", "data"]):
             if isinstance(s, dict):
                 push(normalize_app3(s, ["ctime", "candle_time", "time", "ts"]))
-    except Exception as e:
-        logger.debug("[backtest] app3 history fetch failed: %s", e)
-    try:
-        d = await fetch_json_with_timeout(SOURCES["app3_live"]["url"])
-        for s in pick_array(d, ["signals", "rows", "data"]):
+    if app3_live_d is not None:
+        for s in pick_array(app3_live_d, ["signals", "rows", "data"]):
             if isinstance(s, dict):
                 push(normalize_app3(s, ["time", "candle_time", "ctime", "ts"]))
-    except Exception as e:
-        logger.debug("[backtest] app3 live fetch failed: %s", e)
 
     # Grade signals that lack an outcome, using candle close data.
     _grade_with_candles(all_signals)
@@ -869,6 +908,13 @@ async def run_backtest() -> Dict[str, Any]:
 
     def level_to_dict(s: LevelStat) -> dict:
         d = asdict(s)
+        # Emit camelCase aliases so dashboard.js's `${s.callWin}/${s.callLoss}`
+        # (and similar) reads real values instead of `undefined`. asdict()
+        # produces snake_case, which the UI doesn't read.
+        d["callWin"] = s.call_win
+        d["callLoss"] = s.call_loss
+        d["putWin"] = s.put_win
+        d["putLoss"] = s.put_loss
         d["winRate"] = _level_win_rate(s)
         return d
 
@@ -876,11 +922,11 @@ async def run_backtest() -> Dict[str, Any]:
         return asdict(s)
 
     def app_pair_stat_to_dict(s: AppPairStat) -> dict:
+        # Reuse the module-level helper so level/app-pair stats always
+        # emit the same set of keys (snake_case + camelCase aliases).
         d = asdict(s)
-        d["winRate"] = _app_pair_win_rate(s)
         graded = s.win + s.loss
-        d["gradedTotal"] = graded
-        return d
+        return _stat_to_camel_dict(d, with_win_rate=True, graded=graded)
 
     def cluster_to_dict(c: ClassifiedCluster) -> dict:
         d = asdict(c)
@@ -890,8 +936,12 @@ async def run_backtest() -> Dict[str, Any]:
             d["outcomeLabel"] = "WIN"
         elif d.get("outcome") == 0:
             d["outcomeLabel"] = "LOSS"
-        elif any(rs and isinstance(rs, str) and rs.lower() in ("draw", "void")
-                 for rs in [d.get("agreeing_draw")]):
+        elif d.get("agreeing_draw", 0) > 0:
+            # DRAW clusters: outcome is None but one of the agreeing apps
+            # reported a draw/void outcome. agreeing_draw is an int (0..3),
+            # so a simple `> 0` check is correct — the previous `any(...)`
+            # branch iterated over a single int and the isinstance(rs, str)
+            # test made it always False, silently mapping DRAW → "—".
             d["outcomeLabel"] = "DRAW"
         else:
             d["outcomeLabel"] = "—"

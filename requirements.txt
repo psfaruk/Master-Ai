@@ -11,8 +11,11 @@
 # `httptools` and `uvloop` which sometimes need to compile against glibc.
 # Plain uvicorn falls back to h11+asyncio which is plenty fast for this
 # workload (the bottleneck is the 3 upstream HTTP fetches, not the parser).
-fastapi==0.115.6
-uvicorn==0.34.0
+# fastapi bumped to >=0.115.7 to fix CVE-2024-11829 (multipart form info
+# disclosure). We don't actually use multipart forms, but the pin was 26
+# minor releases stale and pip-audit flagged it. (REVIEW-2 H15.)
+fastapi>=0.115.7,<0.150
+uvicorn>=0.34.0,<1.0
 
 # Template engine for the dashboard UI.
 jinja2==3.1.5

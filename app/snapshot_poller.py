@@ -43,6 +43,10 @@ class SnapshotPollerState:
     last_poll_at: float = 0.0
     poll_in_progress: bool = False
     poll_task: Optional[asyncio.Task] = None  # the loop task
+    # Kick-off task — also tracked so the lifespan shutdown hook can
+    # cancel it cleanly (previously fire-and-forget, leaked on shutdown).
+    # (REVIEW-1 H7.)
+    initial_task: Optional[asyncio.Task] = None
     started: bool = False
 
 
@@ -113,8 +117,10 @@ def start_poller() -> None:
     # Start the App 2 historical-signal cache poller too (it runs in
     # parallel).
     start_app2_cache_poller()
-    # Kick off the first poll immediately (async, don't block).
-    asyncio.create_task(_poll_once())
+    # Kick off the first poll immediately (async, don't block). Track it so
+    # lifespan shutdown can cancel it cleanly (previously fire-and-forget —
+    # REVIEW-1 H7).
+    st.initial_task = asyncio.create_task(_poll_once())
     st.poll_task = asyncio.create_task(_poll_loop())
     logger.info(
         "[poller] started — adaptive (burst %.1fs for first %ds of each candle, then %.1fs)",

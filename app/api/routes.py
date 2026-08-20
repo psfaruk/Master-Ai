@@ -26,11 +26,14 @@ Diagnostics:
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
+
+logger = logging.getLogger("master-ai.api")
 
 from ..app2_cache import (
     get_app2_cache_stats,
@@ -146,7 +149,7 @@ async def get_snapshot_route(
 
     out = _serialize_aggregated(snapshot, winrate_lookup=winrate_lookup)
     out["ageMs"] = age_ms
-    out["backtestCacheAgeSec"] = round(get_backtest_cache_age_sec(), 1)
+    out["backtestCacheAgeSec"] = round(age, 1) if (age := get_backtest_cache_age_sec()) is not None else None
     out["now"] = int(datetime.now(timezone.utc).timestamp())
     return _json(out)
 
@@ -403,7 +406,7 @@ async def get_pairs(
         "items": out,
         "total": len(out),
         "now": now_sec,
-        "backtestCacheAgeSec": round(get_backtest_cache_age_sec(), 1),
+        "backtestCacheAgeSec": (round(age, 1) if (age := get_backtest_cache_age_sec()) is not None else None),
     })
 
 
@@ -463,8 +466,11 @@ async def get_pair_detail(
     if not candles:
         try:
             await refresh_candles()
-        except Exception:
-            pass
+        except Exception as e:
+            # Surface the failure rather than silently serving an empty
+            # cache — without this log, "no candles" looks indistinguishable
+            # from "the candle endpoint is down". (REVIEW-1 H8, first site.)
+            logger.warning("[pair detail] candle refresh failed: %s", e)
         candles = get_candles_for_pair(pair, candle_limit)
 
     # ---- Per-candle cluster history (last N minutes) ----
@@ -487,9 +493,19 @@ async def get_pair_detail(
                 break
         cluster_history = [c for c in full_history if c.get("ts", 0) >= cutoff]
     # Attach candleUtc + relative age so the UI doesn't have to compute it.
-    for c in cluster_history:
-        c["candleUtc"] = _fmt_hm(c.get("ts", 0)) if c.get("ts", 0) else None
-        c["ageSec"] = now_sec - c.get("ts", 0) if c.get("ts", 0) else None
+    # IMPORTANT: copy each cluster dict before adding per-request fields — the
+    # dicts inside `wr["history60Min"]` are SHARED references into the
+    # BacktestCache singleton. Mutating them in place stamp's the FIRST
+    # request's ageSec onto every subsequent request inside the 60s cache
+    # TTL (REVIEW-1 C5).
+    cluster_history = [
+        {
+            **c,
+            "candleUtc": _fmt_hm(c.get("ts", 0)) if c.get("ts", 0) else None,
+            "ageSec": (now_sec - c.get("ts", 0)) if c.get("ts", 0) else None,
+        }
+        for c in cluster_history
+    ]
     # Per-subset summary already shipped in wr["history60BySubset"] for the
     # default 60-min window; for other windows we re-derive it on the fly.
     history_by_subset = wr.get("history60BySubset", {})
@@ -646,9 +662,17 @@ async def get_pair_history(
     history = [c for c in full_history if c.get("ts", 0) >= cutoff]
     if subset:
         history = [c for c in history if c.get("app_subset_key") == subset]
-    for c in history:
-        c["candleUtc"] = _fmt_hm(c.get("ts", 0)) if c.get("ts", 0) else None
-        c["ageSec"] = now_sec - c.get("ts", 0) if c.get("ts", 0) else None
+    # IMPORTANT: copy each cluster dict before adding per-request fields — the
+    # dicts inside `cached["perPair"][i]["history"]` are SHARED references
+    # into the BacktestCache singleton (REVIEW-1 C5, second site).
+    history = [
+        {
+            **c,
+            "candleUtc": _fmt_hm(c.get("ts", 0)) if c.get("ts", 0) else None,
+            "ageSec": (now_sec - c.get("ts", 0)) if c.get("ts", 0) else None,
+        }
+        for c in history
+    ]
     history.sort(key=lambda c: c.get("ts", 0), reverse=True)
 
     history_by_subset = _build_subset_summary(history)
@@ -705,8 +729,11 @@ async def get_candles(
         # Cold cache — refresh and retry once.
         try:
             await refresh_candles()
-        except Exception:
-            pass
+        except Exception as e:
+            # Surface the failure — without this log, the user sees an
+            # empty chart with no indication that the candle endpoint is
+            # down rather than just cold-starting. (REVIEW-1 H8, second site.)
+            logger.warning("[candles] refresh failed for pair=%s: %s", pair, e)
         candles = get_candles_for_pair(pair, limit)
 
     return _json({
@@ -747,7 +774,7 @@ async def get_backtest_status(request: Request):
     without re-running it."""
     cached = get_cached_backtest()
     return _json({
-        "cacheAgeSec": round(get_backtest_cache_age_sec(), 1),
+        "cacheAgeSec": (round(age, 1) if (age := get_backtest_cache_age_sec()) is not None else None),
         "hasResult": cached is not None,
         "verdict": cached.get("verdict") if cached else None,
         "totalSignals": cached.get("totalSignals") if cached else 0,
@@ -806,7 +833,7 @@ async def get_app_pair_leaders(request: Request):
     return _json({
         "appPairLeaders": leaders,
         "appPairGlobal": global_summary,
-        "cacheAgeSec": round(get_backtest_cache_age_sec(), 1),
+        "cacheAgeSec": (round(age, 1) if (age := get_backtest_cache_age_sec()) is not None else None),
         "verdict": cached.get("verdict") if cached else None,
         "subsetKeys": APP_SUBSET_KEYS,
     })
@@ -967,7 +994,7 @@ async def get_app_pair_subset_pairs(request: Request, subset: str):
             "putLoss": global_put_loss,
         },
         "pairs": pairs_out,
-        "cacheAgeSec": round(get_backtest_cache_age_sec(), 1),
+        "cacheAgeSec": (round(age, 1) if (age := get_backtest_cache_age_sec()) is not None else None),
         "verdict": cached.get("verdict") if cached else None,
     })
 
@@ -1158,6 +1185,63 @@ def _fmt_hms(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%H:%M:%S")
 
 
+# Canonical outcome normalization. The three source apps currently ship:
+#   App 1: "WIN" | "LOSS" | "DRAW" | None
+#   App 3: "CORRECT" | "WRONG" | "DRAW" | None
+# Map everything to a single canonical form so the dashboard's truthy
+# check (`outcome ? "WIN" : "LOSS"`) renders the right chip. (REVIEW-1 C3.)
+_WIN_TOKENS = frozenset({"WIN", "CORRECT", "UP"})
+_LOSS_TOKENS = frozenset({"LOSS", "WRONG", "DOWN"})
+_DRAW_TOKENS = frozenset({"DRAW", "VOID", "NEUTRAL"})
+
+
+def _normalize_signal_outcome(raw: Any) -> Optional[int]:
+    """Map any source-app outcome string to {1, 0, None}.
+
+    DRAW clusters are returned as ``None`` so the UI truthy check falls
+    through to "LOSS" only for actual losses — DRAW is a separate UI
+    state (rendered via outcomeLabel)."""
+    if raw is None:
+        return None
+    if isinstance(raw, int):
+        # Already 1/0 — pass through (covers the cluster outcome schema).
+        if raw in (1, 0):
+            return raw
+        return None
+    s = str(raw).strip().upper()
+    if not s:
+        return None
+    if s in _WIN_TOKENS:
+        return 1
+    if s in _LOSS_TOKENS:
+        return 0
+    # DRAW is technically a graded-but-neutral outcome; the UI renders it
+    # separately via outcomeLabel, so the numeric outcome is None.
+    if s in _DRAW_TOKENS:
+        return None
+    return None
+
+
+def _signal_outcome_label(raw: Any) -> str:
+    """Human-readable label for the per-app signal chip in the drawer."""
+    if raw is None:
+        return "—"
+    s = str(raw).strip().upper() if not isinstance(raw, int) else str(raw)
+    if isinstance(raw, int):
+        if raw == 1:
+            return "WIN"
+        if raw == 0:
+            return "LOSS"
+        return "—"
+    if s in _WIN_TOKENS:
+        return "WIN"
+    if s in _LOSS_TOKENS:
+        return "LOSS"
+    if s in _DRAW_TOKENS:
+        return "DRAW"
+    return "—"
+
+
 def _signal_timing_status(lead_sec: int, lag_sec: int) -> str:
     """Classify a signal's timing for the UI:
     - 'prediction'  — emitted before its candle (lead > 0)
@@ -1293,7 +1377,17 @@ def _serialize_signal(s) -> dict:
         "candleUtc": _fmt_hm(s.candle_time) if s.candle_time > 0 else None,
         "leadSec": lead,
         "ageSec": s.age_sec,
-        "outcome": s.outcome,
+        # Normalize the outcome to the cluster's representation (1=win,
+        # 0=loss, null=unknown/draw) so the dashboard's truthy check
+        # `s.outcome ? "WIN" : "LOSS"` works correctly. Previously the
+        # backend shipped a 5-token string soup ("WIN"/"LOSS"/"DRAW"/
+        # "CORRECT"/"WRONG") and the JS truthy check mapped every non-null
+        # value to "WIN". (REVIEW-1 C3 / REVIEW-2 C1.)
+        "outcome": _normalize_signal_outcome(s.outcome),
+        # Also expose the raw label string for the UI to render a DRAW
+        # chip distinctly from WIN/LOSS (since 1/0/null doesn't encode
+        # DRAW as a separate state).
+        "outcomeLabel": _signal_outcome_label(s.outcome),
         "strategy": s.strategy,
         "reasons": s.reasons,
         "validForCandle": s.valid_for_candle,

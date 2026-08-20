@@ -17,9 +17,9 @@ Data sources:
 - ``/api/share-signals`` — current live candle per pair: ``{asset, time,
   signal, prediction_candle: {open, high, low, close}}``
 
-The cache is in-memory. TTL is short (30s) because we want fresh prices for
-the chart, but we DON'T prune historical candles — those are stable forever
-(a closed candle never changes).
+The cache is in-memory. Refresh interval is short (currently REFETCH_SEC = 45s)
+because we want fresh prices for the chart, but we DON'T prune historical
+candles — those are stable forever (a closed candle never changes).
 """
 
 from __future__ import annotations
@@ -104,6 +104,9 @@ class CandleCacheState:
     fetch_in_progress: bool = False
     total_candles: int = 0
     task: Optional[asyncio.Task] = None
+    # Initial kick-off refresh — tracked so lifespan shutdown can cancel
+    # it (previously fire-and-forget, leaked on shutdown). (REVIEW-1 H7.)
+    initial_task: Optional[asyncio.Task] = None
 
 
 _state: Optional[CandleCacheState] = None
@@ -301,7 +304,9 @@ def start_candle_poller() -> None:
     st = _get_state()
     if st.task is not None and not st.task.done():
         return
-    asyncio.create_task(refresh_candles())
+    # Track the kick-off refresh so lifespan shutdown can cancel it cleanly
+    # (previously fire-and-forget — REVIEW-1 H7).
+    st.initial_task = asyncio.create_task(refresh_candles())
     st.task = asyncio.create_task(_poll_loop())
     logger.info("[candle-cache] started — refreshing every %.1fs", REFETCH_SEC)
 
@@ -331,7 +336,11 @@ def get_candles_for_pair(pair: str, min_count: Optional[int] = None) -> List[Can
     out.sort(key=lambda c: c.candle_time, reverse=True)
     if min_count and len(out) < min_count:
         # Trigger a refresh in the background — caller gets stale data now,
-        # fresh data on next poll.
+        # fresh data on next poll. We do NOT track this task on the state
+        # object because it's a one-shot per-call refresh (not a long-lived
+        # loop) — but log it so /api/diag can see the trigger fired.
+        # (REVIEW-1 H7, third site.)
+        logger.debug("[candle-cache] below min_count=%d for %s, refreshing", min_count, pair)
         asyncio.create_task(refresh_candles())
     return out
 

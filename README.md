@@ -68,8 +68,9 @@ thumb-reachable):
 │ SIGNALS — filter bar (Level ▾ Direction ▾ ★ Favorites        │
 │           Only-3-agree ☐) + per-pair table with              │
 │           Signal Time UTC, Candle UTC, Lead, Win Rate, Graded │
-│           Row-tap → drawer with candle chart + per-app       │
-│           signal breakdown + per-pair win rate                │
+│           Row-tap → drawer with per-app signal breakdown      │
+│           + per-pair win rate + Signal History (last 60 min) │
+│           per-app-subset table.                              │
 │                                                              │
 │ HISTORY — sub-tabs: Backtest | Per-Pair Stats | Pair         │
 │           Drilldown. Cached backtest + manual rerun.          │
@@ -175,9 +176,11 @@ Everything on the History tab is now cross-linked:
 - History → Pair Drilldown → select a pair → drawer
 - Per-subset pair list → row tap → per-pair drawer
 - Per-subset pair list → row's "History" button → per-pair drawer
-  with the subset chip pre-selected
-- Per-pair drawer → subset chip (1+2 / 1+3 / 2+3 / All 3 / singletons)
-  → re-filters the Signal History table in-place (no extra fetch)
+  with the Signal History (Last 60 min) table already filtered to
+  that subset via the URL hash `?subset=app1+app2`
+- Per-pair drawer → Signal History table filters in-place (subset chip
+  coming in a follow-up — currently filtered via the row's "History"
+  button only)
 
 #### API additions
 

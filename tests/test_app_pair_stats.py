@@ -106,13 +106,15 @@ def test_classify_cluster_1_only_singleton_subset():
 
 
 def test_classify_cluster_conflict_majority_subset():
-    """Conflict with majority app1+app2 vs app3 — gradable is empty (no
-    agreement), so app_subset_key is empty.
+    """Conflict with majority app1+app2 vs app3 — gradable now follows
+    the consensus direction (CALL), so app_subset_key is ``app1+app2``.
 
-    This is intentional: conflicts don't have a true consensus, so they don't
-    contribute to per-app-pair win rate stats. The user's question is
-    'WHEN two apps agree, what's their win rate?' — a conflict isn't an
-    agreement, so it shouldn't pollute the app-pair stats.
+    Previously this was deliberately empty (no agreement = no subset
+    attribution). REVIEW-1 H4 changed that: a conflict with a clear
+    majority (2-1) has a real consensus direction — the majority's apps
+    won/lost together, and the per-app-pair stats should attribute the
+    outcome to that subset. This matches how `_classify_candle` in the
+    aggregator treats conflict-with-majority.
     """
     apps = {
         "app1": _mk_signal("app1", "CALL", 1000),
@@ -121,11 +123,10 @@ def test_classify_cluster_conflict_majority_subset():
     }
     out = _classify_cluster(apps, 1000)
     assert out["level"] == "conflict"
-    # direction is CALL (majority) but gradable is empty so no apps are
-    # attributed to a subset.
+    # direction is CALL (majority) — gradable follows the majority direction.
     assert out["direction"] == "CALL"
-    assert out["agreeing_apps"] == []
-    assert out["app_subset_key"] == ""
+    assert out["agreeing_apps"] == ["app1", "app2"]
+    assert out["app_subset_key"] == "app1+app2"
 
 
 def test_classify_cluster_conflict_tie_no_subset():

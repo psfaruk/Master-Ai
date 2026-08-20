@@ -171,7 +171,9 @@ def test_backtest_cache_age_is_negative_when_never_run(monkeypatch):
     # Force a fresh cache singleton
     import app.backtest_runner as br
     monkeypatch.setattr(br, "_cache", BacktestCache())
-    assert get_backtest_cache_age_sec() == -1.0
+    # REVIEW-1 L57 fix: returns None for "never fetched" instead of -1.0.
+    # The dashboard renders None as "—" rather than the literal "cache -1s".
+    assert get_backtest_cache_age_sec() is None
 
 
 def test_backtest_cache_age_returns_elapsed_since_fetched(monkeypatch):

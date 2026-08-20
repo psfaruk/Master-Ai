@@ -261,7 +261,11 @@ async def _fetch_app1_health() -> Dict[str, Any]:
             "active_streams": len(active_pairs),
             "detail": " · ".join(parts),
         }
-    except Exception:
+    except Exception as e:
+        # Log the real exception — without it, "App X token expired" vs
+        # "App X timeout" vs "App X returned HTML" are indistinguishable
+        # in the logs. (REVIEW-1 H10, app1.)
+        logger.warning("[app1] health fetch failed: %s", e)
         return {"error": "health_fetch_failed"}
 
 
@@ -281,7 +285,8 @@ async def _fetch_app2_health() -> Dict[str, Any]:
             "active_streams": len(streams),
             "detail": f"connected · {len(streams)} streams" if connected else "disconnected",
         }
-    except Exception:
+    except Exception as e:
+        logger.warning("[app2] health fetch failed: %s", e)
         return {"error": "health_fetch_failed"}
 
 
@@ -308,7 +313,8 @@ async def _fetch_app3_health() -> Dict[str, Any]:
             "token_expired": not has_token,
             "detail": detail,
         }
-    except Exception:
+    except Exception as e:
+        logger.warning("[app3] health fetch failed: %s", e)
         return {"error": "health_fetch_failed"}
 
 
@@ -683,9 +689,12 @@ async def fetch_app3(freshness_window_sec: int, now: int) -> NormalizeResult:
                     "strategy": codes,
                     "reasons": None,
                 }, now, freshness_window_sec))
-    except Exception:
+    except Exception as e:
         # Historical fetch failed — keep going, we still want the live signals.
-        pass
+        # Surface the error in logs so /api/diag debugging is possible — the
+        # previous bare `except: pass` made App 3 history failures invisible.
+        # (REVIEW-1 H9, first site.)
+        logger.warning("[app3] historical fetch failed: %s", e)
 
     # --- 2. CURRENT live signals from /api/share-signals ---
     try:
@@ -734,8 +743,10 @@ async def fetch_app3(freshness_window_sec: int, now: int) -> NormalizeResult:
                     "strategy": strategy,
                     "reasons": None,
                 }, now, freshness_window_sec))
-    except Exception:
-        pass  # fall through to the health decision below
+    except Exception as e:
+        # Live fetch failed — surface the failure rather than silently
+        # setting live_ok=False. (REVIEW-1 H9, second site.)
+        logger.warning("[app3] live fetch failed: %s", e)
 
     error: Optional[str] = None
     if not hist_ok and not live_ok:
@@ -744,6 +755,12 @@ async def fetch_app3(freshness_window_sec: int, now: int) -> NormalizeResult:
     elif not live_ok:
         health = "disconnected"
         error = "live_fetch_failed"
+    elif not hist_ok:
+        # Live is OK but the historical fetch failed — surface a "degraded"
+        # state instead of silently dropping to "ok". The dashboard can then
+        # show "App 3: degraded" rather than falsely green. (REVIEW-1 M16.)
+        health = "disconnected"
+        error = "hist_fetch_failed"
 
     return NormalizeResult(
         signals=out,
@@ -849,6 +866,12 @@ def _pick_latest_candle(candles: List[CandleConsensus], now: int) -> Optional[Ca
     further ahead than one candle from the current minute: apps legitimately
     publish a signal for the NEXT candle, but anything beyond that is a bad
     timestamp, and letting such a bucket win used to blank out the whole row.
+
+    If every candle is implausibly far in the future (a bad-upstream case),
+    we return the newest one we have (``candles[0]``) rather than the oldest
+    — the docstring promises "latest", and the previous ``candles[-1]``
+    fallback highlighted the OLDEST candle, contradicting both the docstring
+    and the user's expectation. (REVIEW-1 H1.)
     """
     if not candles:
         return None
@@ -856,7 +879,7 @@ def _pick_latest_candle(candles: List[CandleConsensus], now: int) -> Optional[Ca
     for c in candles:
         if c.candle_time <= max_candle:
             return c
-    return candles[-1]
+    return candles[0]
 
 
 # ---------------------------------------------------------------------------
@@ -929,7 +952,14 @@ async def aggregate_signals(freshness_window_sec: int = 600) -> AggregatedRespon
     apps: List[AppStatus] = []
     for src in SOURCES:
         r = results[src["id"]]
-        online = r.health not in ("down", "unknown")
+        # `online` should mean "this app is producing signals right now".
+        # `health == "ok"` is the only state that qualifies — token-expired
+        # apps can't fetch signals, and "disconnected" means the upstream
+        # is unreachable. The previous `health not in ("down", "unknown")`
+        # mapped token_expired/disconnected to online=True, which the UI
+        # then had to second-guess using health/live/token_expired fields.
+        # (REVIEW-1 H5.)
+        online = r.health == "ok"
         apps.append(AppStatus(
             id=src["id"],
             name=src["name"],

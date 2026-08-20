@@ -1,8 +1,12 @@
 // Master-Ai dashboard client — mobile-first, real-time, bottom-nav.
 //
-// Adaptive polling mirrors the server's snapshot_poller:
-//   - burst (1s) for the first 12s of each candle (new signals arriving)
-//   - idle  (3s) for the rest of the minute
+// Client adaptive polling: burst (1s) for the first 12s of each candle
+// (when new signals are arriving) and idle (3s) for the rest of the minute.
+// The SERVER's snapshot poller runs at 0.8s burst / 6s idle — the client
+// polls MORE aggressively than the server refreshes, intentionally, so the
+// UI stays snappy even if the data is the same snapshot. The "wasted" idle
+// polls are a small price (a JSON read from cache, <50ms server-side) for
+// sub-second perceived freshness when new signals land.
 // The user can override this in Settings.
 //
 // Settings are persisted to localStorage. The server is stateless — all
@@ -243,27 +247,33 @@ function applySettings() {
   document.body.dataset.theme = state.settings.theme;
   document.body.dataset.tz = state.settings.tz;
   document.body.dataset.lang = state.settings.lang;
-  applyTranslations();
+  // Translations are now triggered explicitly by the lang-change handler
+  // in the settingsInputs block — re-translating 153 [data-i18n] elements
+  // on every settings change was wasted work. (REVIEW-2 M46.)
   // Show/hide clock blocks
   const showUtc = state.settings.tz === "utc" || state.settings.tz === "both";
   const showLocal = state.settings.tz === "local" || state.settings.tz === "both";
-  $("clock-utc").style.display = showUtc ? "" : "none";
-  $("clock-local").style.display = showLocal ? "" : "none";
-  // Populate settings inputs
-  $("set-theme").value = state.settings.theme;
-  $("set-lang").value = state.settings.lang;
-  $("set-tz").value = state.settings.tz;
-  $("set-timefmt").value = state.settings.timeFmt;
-  $("set-poll").value = state.settings.poll;
-  $("set-feed-size").value = state.settings.feedSize;
-  $("set-sound").checked = state.settings.sound;
-  $("set-notify").checked = state.settings.notify;
-  $("set-min-wr").value = state.settings.minWr;
-  $("set-only-fresh").value = state.settings.onlyFresh;
-  $("set-hide-conflicts").checked = state.settings.hideConflicts;
-  $("set-off1").value = state.settings.app1Offset;
-  $("set-off2").value = state.settings.app2Offset;
-  $("set-off3").value = state.settings.app3Offset;
+  const clockUtcEl = $("clock-utc"); if (clockUtcEl) clockUtcEl.style.display = showUtc ? "" : "none";
+  const clockLocalEl = $("clock-local"); if (clockLocalEl) clockLocalEl.style.display = showLocal ? "" : "none";
+  // Populate settings inputs — use ?.() null-safe form so a missing
+  // element (HTML edits) doesn't throw and halt the rest of applySettings.
+  // (REVIEW-2 M2, partial.)
+  const setSel = (id, val) => { const el = $(id); if (el) el.value = val; };
+  const setChk = (id, val) => { const el = $(id); if (el) el.checked = val; };
+  setSel("set-theme", state.settings.theme);
+  setSel("set-lang", state.settings.lang);
+  setSel("set-tz", state.settings.tz);
+  setSel("set-timefmt", state.settings.timeFmt);
+  setSel("set-poll", state.settings.poll);
+  setSel("set-feed-size", state.settings.feedSize);
+  setChk("set-sound", state.settings.sound);
+  setChk("set-notify", state.settings.notify);
+  setSel("set-min-wr", state.settings.minWr);
+  setSel("set-only-fresh", state.settings.onlyFresh);
+  setChk("set-hide-conflicts", state.settings.hideConflicts);
+  setSel("set-off1", state.settings.app1Offset);
+  setSel("set-off2", state.settings.app2Offset);
+  setSel("set-off3", state.settings.app3Offset);
   renderFavorites();
 }
 
@@ -407,12 +417,12 @@ $("filter-pair-sp")?.addEventListener("input", (e) => {
   renderPairTable(); renderActiveFilterTags();
 });
 // Top-bar search also drives the signals filter (for convenience)
-$("search-input").addEventListener("input", (e) => {
+$("search-input")?.addEventListener("input", (e) => {
   filters.search = e.target.value;
   const sp = $("filter-pair-sp"); if (sp) sp.value = e.target.value;
   renderPairTable(); renderActiveFilterTags();
 });
-$("favorites-only").addEventListener("change", (e) => { filters.favoritesOnly = e.target.checked; renderPairTable(); renderActiveFilterTags(); });
+$("favorites-only")?.addEventListener("change", (e) => { filters.favoritesOnly = e.target.checked; renderPairTable(); renderActiveFilterTags(); });
 
 // Sortable column headers — click to toggle sort
 $$(".sp-th.sortable").forEach((th) => {
@@ -494,12 +504,21 @@ function exportSignalsCsv() {
 }
 
 // ====== Adaptive polling ======
+// Shared constants with the backend's snapshot_poller.py (where applicable).
+// The backend ships BURST_WINDOW_SEC=12, BURST_INTERVAL_SEC=0.8,
+// IDLE_INTERVAL_SEC=6.0. The client uses 1s/3s — intentionally polling
+// more aggressively than the server refreshes for snappy UI (see the
+// file header comment). (REVIEW-2 L4 / H1.)
+const POLL_BURST_WINDOW_SEC = 12;
+const POLL_BURST_INTERVAL_MS = 1000;
+const POLL_IDLE_INTERVAL_MS = 3000;
+
 function nextPollGapMs() {
   if (state.settings.poll !== "adaptive") {
     return parseInt(state.settings.poll, 10) * 1000;
   }
   const secIntoCandle = Math.floor(Date.now() / 1000) % 60;
-  return secIntoCandle < 12 ? 1000 : 3000;
+  return secIntoCandle < POLL_BURST_WINDOW_SEC ? POLL_BURST_INTERVAL_MS : POLL_IDLE_INTERVAL_MS;
 }
 
 async function pollSnapshot() {
@@ -623,9 +642,11 @@ function renderHeroStats(summary) {
   $("stat-2agree").textContent = summary.twoBotAgree.length;
   $("stat-conflict").textContent = summary.conflicts.length;
   $("stat-single").textContent = summary.singleOnly.length;
-  const now = new Date(state.snapshot.timestamp);
-  $("stat-3agree-sub").textContent = fmtTime(now, false);
-  $("stat-2agree-sub").textContent = fmtTime(now, false);
+  // Don't override the i18n-translatable "across all pairs" sub-text with
+  // a timestamp. The timestamp is already surfaced in the Top Signals panel
+  // meta + in the topbar clock. Previously this overwrote the data-i18n
+  // copy with `fmtTime(now, false)`, making the "across all pairs" text
+  // dead and the hero cards' subtitle visually noisy. (REVIEW-2 M3.)
 }
 
 // ====== App status cards ======
@@ -663,7 +684,10 @@ function fmtUptime(sec) {
 function renderConsensusHighlights(pairs) {
   const container = $("consensus-highlights");
   let highlights = pairs.filter((p) => ["3-agree", "2-agree"].includes(p.consensus.level));
-  if (state.settings.hideConflicts) highlights = highlights.filter((p) => p.consensus.level !== "conflict");
+  // `highlights` is already filtered to just 3-agree + 2-agree above, so
+  // `p.consensus.level !== "conflict"` is always true here. The hideConflicts
+  // setting affects the Signals tab table (renderPairTable), not the Home
+  // tab's top-signal strip — drop the dead filter. (REVIEW-2 M4.)
   highlights = highlights.slice(0, 8);
   if (highlights.length === 0) {
     container.innerHTML = '<p class="placeholder">No 2-bot or 3-bot agreements right now.</p>';
@@ -828,11 +852,24 @@ function renderPairTable() {
     }
     $("sp-table-count").innerHTML = "<strong>0</strong> pairs";
     $("sp-table-meta").textContent = "cache —";
+    // Invalidate the table HTML cache so the NEXT non-empty render path
+    // doesn't short-circuit on a stale cache hit. Previously this branch
+    // returned without touching `state._pairTableHtml`, so going from
+    // "5 rows" → "0 rows" → "5 rows" left the DOM stuck on the empty-state
+    // message. (REVIEW-2 C3.)
+    state._pairTableHtml = "";
     return;
   }
 
   $("sp-table-count").innerHTML = `<strong>${rows.length}</strong> pairs`;
-  $("sp-table-meta").textContent = `cache ${state.snapshot.backtestCacheAgeSec?.toFixed(0) ?? "—"}s`;
+  // Format backtest cache age; the backend returns -1 for "never fetched"
+  // (cold start), which previously rendered as literal "cache -1s". Treat
+  // any non-positive value as "no data yet" and show "—". (REVIEW-2 H2.)
+  const _cacheAgeTxt = (ageSec) => {
+    if (ageSec == null || ageSec < 0) return "—";
+    return `${ageSec.toFixed(0)}s`;
+  };
+  $("sp-table-meta").textContent = `cache ${_cacheAgeTxt(state.snapshot.backtestCacheAgeSec)}`;
 
   // ---- Render rows + expandable detail rows ----
   const rowsHtml = rows.slice(0, 200).map((r) => {
@@ -1018,8 +1055,18 @@ function renderDetailRow(r) {
           <span class="sp-detail-signal__outcome sp-detail-signal__outcome--unknown">—</span>
         </div>`;
     }
-    const outcomeTxt = s.outcome == null ? "—" : s.outcome ? "WIN" : "LOSS";
-    const outcomeCls = s.outcome == null ? "unknown" : s.outcome ? "WIN" : "LOSS";
+    // Use the new camelCase outcomeLabel ("WIN"|"LOSS"|"DRAW"|"—") if the
+    // backend shipped it; fall back to the numeric outcome check for
+    // backwards-compat with cached older payloads. Previously this did
+    // `s.outcome ? "WIN" : "LOSS"` which mapped every non-null string
+    // (incl. "LOSS" / "DRAW" / "CORRECT" / "WRONG") to "WIN".
+    // (REVIEW-1 C3 / REVIEW-2 C1.)
+    const outcomeTxt = s.outcomeLabel != null ? s.outcomeLabel
+      : (s.outcome == null ? "—" : s.outcome ? "WIN" : "LOSS");
+    const outcomeCls = outcomeTxt === "WIN" ? "WIN"
+      : outcomeTxt === "LOSS" ? "LOSS"
+      : outcomeTxt === "DRAW" ? "DRAW"
+      : "unknown";
     const conf = s.confidence != null ? `${(s.confidence * 100).toFixed(0)}%` : "—";
     return `
       <div class="sp-detail-signal">
@@ -1123,12 +1170,23 @@ function renderDetailRow(r) {
     </tr>`;
 }
 
+// Timing classification — mirrors the backend's `_signal_timing_status`
+// in routes.py (lines ~1245-1260). Magic numbers -65 and 120 used to be
+// inline; named constants make the cross-file parity obvious and easy
+// to keep in sync. (REVIEW-2 H4 / L5 / L6.)
+//   - LOOK_AHEAD_THRESHOLD_SEC = -CANDLE_SEC - 5 = -60 - 5 = -65
+//     (a signal emitted more than 5s AFTER its candle closed is suspicious)
+//   - STALE_LAG_SEC = 120  (candle is well in the past)
+const CANDLE_SEC_JS = 60;
+const LOOK_AHEAD_THRESHOLD_SEC = -(CANDLE_SEC_JS + 5);
+const STALE_LAG_SEC = 120;
+
 function classifyLead(leadSec, candleTime) {
   if (leadSec == null) return "live";
-  if (leadSec < -65) return "look-ahead";
+  if (leadSec < LOOK_AHEAD_THRESHOLD_SEC) return "look-ahead";
   if (leadSec > 0) return "prediction";
   const now = Math.floor(Date.now() / 1000);
-  if (candleTime && (now - candleTime) > 120) return "stale";
+  if (candleTime && (now - candleTime) > STALE_LAG_SEC) return "stale";
   return "live";
 }
 
@@ -1284,7 +1342,10 @@ async function runBacktest() {
     renderBacktest(bt);
     refreshBacktestStatus();
   } catch (e) {
-    $("backtest-content").innerHTML = `<p class="placeholder">Backtest failed: ${e.message}</p>`;
+    // escHtml() the error message — `e.message` could be reflected from
+    // user-controlled path segment / query param if the backend ever
+    // echoes them. Plain innerHTML is an XSS vector. (REVIEW-2 H3.)
+    $("backtest-content").innerHTML = `<p class="placeholder">Backtest failed: ${escHtml(e.message)}</p>`;
   } finally {
     btn.disabled = false;
     btn.textContent = "Run fresh backtest";
@@ -1407,7 +1468,7 @@ function renderPerPairTable() {
     body.innerHTML = '<tr><td colspan="9" class="placeholder">No pairs.</td></tr>';
     return;
   }
-  $("perpair-meta").textContent = `${pairs.length} pairs · cached ${state.snapshot.backtestCacheAgeSec?.toFixed(0) ?? "—"}s`;
+  $("perpair-meta").textContent = `${pairs.length} pairs · cached ${(state.snapshot.backtestCacheAgeSec != null && state.snapshot.backtestCacheAgeSec >= 0) ? state.snapshot.backtestCacheAgeSec.toFixed(0) + "s" : "—"}`;
 
   body.innerHTML = pairs.slice(0, 100).map((p) => {
     const ls = p.levelStats || {};
@@ -1518,7 +1579,9 @@ async function renderAppPairLeaders() {
 
   if (meta) {
     const verdictTxt = verdict ? `${verdict.kind}` : "—";
-    meta.textContent = `cache ${ageSec != null ? ageSec.toFixed(0) + "s" : "—"} · verdict: ${verdictTxt}`;
+    // Treat negative cacheAgeSec as "no cache yet" — backend returns -1
+    // for "never fetched" on cold start. (REVIEW-2 H2.)
+    meta.textContent = `cache ${(ageSec != null && ageSec >= 0) ? ageSec.toFixed(0) + "s" : "—"} · verdict: ${verdictTxt}`;
   }
 
   const APP_SUBSET_LABELS = [
@@ -1712,7 +1775,7 @@ async function renderOverallWinRate() {
 
   if (meta) {
     const verdictTxt = verdict ? verdict.kind : "—";
-    meta.textContent = `cache ${ageSec != null ? ageSec.toFixed(0) + "s" : "—"} · ${headTotal} signals · verdict: ${verdictTxt}`;
+    meta.textContent = `cache ${(ageSec != null && ageSec >= 0) ? ageSec.toFixed(0) + "s" : "—"} · ${headTotal} signals · verdict: ${verdictTxt}`;
   }
 
   // 7-card grid. Each card is a button → switchHistorySubtab("subsetpairs", { subset }).
@@ -1802,7 +1865,7 @@ async function renderSubsetPairList(subset) {
       return;
     }
   } catch (e) {
-    body.innerHTML = `<tr><td colspan="7" class="placeholder">Failed: ${e.message}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="7" class="placeholder">Failed: ${escHtml(e.message)}</td></tr>`;
     if (meta) meta.textContent = "error";
     return;
   }
@@ -1817,7 +1880,7 @@ async function renderSubsetPairList(subset) {
   if (meta) {
     const wr = g.winRate;
     const wrTxt = wr == null ? "—" : `${wr.toFixed(1)}%`;
-    meta.textContent = `${g.total || 0} signals · ${g.gradedTotal || 0} graded · ${g.win || 0}W / ${g.loss || 0}L · win rate ${wrTxt} · cache ${ageSec != null ? ageSec.toFixed(0) + "s" : "—"}`;
+    meta.textContent = `${g.total || 0} signals · ${g.gradedTotal || 0} graded · ${g.win || 0}W / ${g.loss || 0}L · win rate ${wrTxt} · cache ${(ageSec != null && ageSec >= 0) ? ageSec.toFixed(0) + "s" : "—"}`;
   }
 
   if (pairs.length === 0) {
@@ -1884,7 +1947,7 @@ function populateHistoryPairSelector() {
   if (current && pairs.some((p) => p.pair === current)) sel.value = current;
 }
 
-$("drilldown-pair").addEventListener("change", async (e) => {
+$("drilldown-pair")?.addEventListener("change", async (e) => {
   const pair = e.target.value;
   if (!pair) return;
   await openPairDrawer(pair, "drilldown-content");
@@ -1921,7 +1984,7 @@ async function openPairDrawer(pair, opts = {}) {
       if (alt) alt.innerHTML = renderPairDetailHtml(data);
     }
   } catch (e) {
-    $("drawer-body").innerHTML = `<p class="placeholder">Failed: ${e.message}</p>`;
+    $("drawer-body").innerHTML = `<p class="placeholder">Failed: ${escHtml(e.message)}</p>`;
   }
 }
 
@@ -2063,7 +2126,7 @@ function renderFavorites() {
 }
 
 // ====== Diagnostics (Settings → Diagnostics) ======
-$("btn-refresh-diag").addEventListener("click", fetchDiag);
+$("btn-refresh-diag")?.addEventListener("click", fetchDiag);
 
 async function fetchDiag() {
   $("diag-content").innerHTML = '<p class="placeholder">Loading diagnostics…</p>';
@@ -2073,7 +2136,7 @@ async function fetchDiag() {
     const d = await res.json();
     renderDiag(d);
   } catch (e) {
-    $("diag-content").innerHTML = `<p class="placeholder">Failed: ${e.message}</p>`;
+    $("diag-content").innerHTML = `<p class="placeholder">Failed: ${escHtml(e.message)}</p>`;
   }
 }
 
@@ -2165,6 +2228,11 @@ settingsInputs.forEach(([id, key, kind]) => {
     state.settings[key] = kind === "checkbox" ? el.checked : el.value;
     saveSettings();
     applySettings();
+    // applySettings() calls applyTranslations() on every change, but
+    // re-translating every [data-i18n] (153 elements) is wasted work
+    // when only the polling/theme/etc. changed. The language change
+    // handler below calls applyTranslations() explicitly. (REVIEW-2 M46.)
+    if (key === "lang") applyTranslations();
     if (key === "poll") restartPolling();
     if (key === "notify" && el.checked && "Notification" in window && Notification.permission !== "granted") {
       Notification.requestPermission().then(() => {});
@@ -2172,17 +2240,19 @@ settingsInputs.forEach(([id, key, kind]) => {
   });
 });
 
-$("btn-clear-cache").addEventListener("click", () => {
+$("btn-clear-cache")?.addEventListener("click", () => {
   if (!confirm("Clear local cache?")) return;
   state.pairDetailCache.clear();
   state.signalFeedIds.clear();
   location.reload();
 });
-$("btn-reset-settings").addEventListener("click", () => {
+$("btn-reset-settings")?.addEventListener("click", () => {
   if (!confirm("Reset all settings to defaults?")) return;
   state.settings = Object.assign({}, DEFAULT_SETTINGS);
   saveSettings();
   applySettings();
+  // Reset implies lang may have changed back to default — re-translate.
+  applyTranslations();
   restartPolling();
 });
 
@@ -2264,5 +2334,9 @@ $("health-alert-close")?.addEventListener("click", () => {
 });
 
 applySettings();
+// applySettings() no longer calls applyTranslations() on every change
+// (perf optimization, REVIEW-2 M46) — but the INITIAL load needs the
+// translations applied once, so do it explicitly here.
+applyTranslations();
 startPolling();
 refreshBacktestStatus();

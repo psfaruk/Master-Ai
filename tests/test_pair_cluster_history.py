@@ -74,10 +74,11 @@ def test_classify_cluster_captures_per_app_directions():
     App 3: PUT" per candle.
 
     Note: with 3 apps where 2 say CALL and 1 says PUT, the level is
-    "conflict" (not 2-agree) — see _classify_cluster. The agreeing_apps
-    list still picks the majority (app1+app2), but only when gradable
-    is non-empty. For conflict, app_subset_key is "" and that's expected —
-    the per-app direction chips in the UI still show all 3 apps' raw
+    "conflict" (not 2-agree) — see _classify_cluster. After the REVIEW-1
+    H4 fix, the agreeing_apps list ALSO picks the majority (app1+app2)
+    for conflict clusters — the majority has a real consensus direction
+    and the per-app-pair stats should attribute the outcome to that
+    subset. The per-app direction chips still show all 3 apps' raw
     directions."""
     apps = {
         "app1": _mk_signal("app1", "CALL", 1000),
@@ -89,8 +90,9 @@ def test_classify_cluster_captures_per_app_directions():
     # 2-vs-1 with 3 apps → conflict (the existing _classify_cluster behavior).
     assert out["level"] == "conflict"
     assert out["direction"] == "CALL"  # majority
-    # For conflict, app_subset_key is "" (no clear agreement to attribute to).
-    assert out["app_subset_key"] == ""
+    # H4 fix: conflict-with-majority grades the majority's apps, so
+    # app_subset_key is now "app1+app2" (not "" as before).
+    assert out["app_subset_key"] == "app1+app2"
 
     # The pure 2-agree case (only 2 apps, both CALL) → app1+app2.
     apps2 = {

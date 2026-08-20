@@ -5,14 +5,16 @@ Once a new candle starts, the previous signal is gone. To build a proper
 candle-aligned consensus across the 3 apps, we need App 2's signal for each
 historical candle — not just the current one.
 
-This module polls App 2 every 5s (in the background) and stores, for each
-``(pair, candleMinute)``, the signal App 2 produced. The aggregator then reads
-from this cache to align with App 1 and App 3.
+This module polls App 2 every ``POLL_INTERVAL_SEC`` seconds (default 8s) in
+the background and stores, for each ``(pair, candleMinute)``, the signal
+App 2 produced. The aggregator then reads from this cache to align with
+App 1 and App 3.
 
-The cache is in-memory and keeps the last ``CACHE_TTL_SEC`` of history. It
-lives on a module-level singleton — the asyncio task is started idempotently
-so multiple route handlers can call ``start_app2_cache_poller()`` without
-spinning up duplicate intervals.
+The cache is in-memory and keeps the last ``CACHE_TTL_SEC`` of history
+(currently 7 hours, sized to comfortably cover the 6-hour backtest
+lookback window plus a buffer). It lives on a module-level singleton —
+the asyncio task is started idempotently so multiple route handlers can
+call ``start_app2_cache_poller()`` without spinning up duplicate intervals.
 """
 
 from __future__ import annotations
@@ -42,7 +44,12 @@ logger = logging.getLogger("master-ai.app2_cache")
 
 APP2_URL = "https://binary-signals-app-production.up.railway.app/api/share-signals"
 POLL_INTERVAL_SEC = 8.0
-CACHE_TTL_SEC = 60 * 60  # keep 1 hour of history
+# Keep at least LOOKBACK_SEC + 1h of history so the 6-hour backtest actually
+# has App 2 data to grade across the full window. App 2 has no historical
+# endpoint — this in-memory cache is the ONLY source of past App 2 candles.
+# Previously 1h, which silently truncated the backtest's App 2 stats to
+# ~1h of data and produced misleading per-pair win rates (REVIEW-1 C4).
+CACHE_TTL_SEC = 7 * 60 * 60
 
 # Wall-clock string accepted by App 2's ``time`` field: "HH:MM" or "HH:MM:SS".
 # Rows for a pair with no stream carry ``time`` = "—" and must be skipped
@@ -76,6 +83,9 @@ class App2CacheState:
     last_skipped: Dict[str, int] = field(default_factory=lambda: {"noPair": 0, "neutral": 0})
     poll_in_progress: bool = False
     task: Optional[asyncio.Task] = None  # background loop task
+    # Initial kick-off poll — tracked so lifespan shutdown can cancel it
+    # (previously fire-and-forget, leaked on shutdown). (REVIEW-1 H7.)
+    initial_task: Optional[asyncio.Task] = None
 
 
 _state: Optional[App2CacheState] = None
@@ -268,12 +278,9 @@ def start_app2_cache_poller() -> None:
     st = _get_state()
     if st.task is not None and not st.task.done():
         return
-    # Kick off the first poll immediately. The loop itself also runs an
-    # initial poll, so we don't strictly need this fire-and-forget task, but
-    # we keep it for fast boot responsiveness. We DON'T track it on st.task
-    # (that slot is reserved for the loop task) — the loop will start its
-    # own poll within milliseconds anyway.
-    asyncio.create_task(_poll_app2())
+    # Kick off the first poll immediately. Track it so lifespan shutdown can
+    # cancel it cleanly (previously fire-and-forget — REVIEW-1 H7).
+    st.initial_task = asyncio.create_task(_poll_app2())
     st.task = asyncio.create_task(_poll_loop())
     logger.info("[app2-cache] started — polling every %.1fs", POLL_INTERVAL_SEC)
 

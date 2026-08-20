@@ -51,5 +51,15 @@ EXPOSE 8000
 # installing curl, which requires apt-get, which fails on Railway's
 # smallest plan.
 
-# Run uvicorn directly — no extra shell wrapper needed.
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Run uvicorn via `exec` so uvicorn replaces sh as PID 1 and receives
+# SIGTERM directly when Railway/docker stop sends it. Without `exec`, sh
+# becomes PID 1 and uvicorn is its child — SIGTERM hits sh, which exits
+# without propagating the signal to uvicorn, so uvicorn is force-KILLed
+# after the grace period without running its lifespan shutdown hook
+# (cancelling the app2_cache / candle_fetcher / snapshot_poller background
+# tasks cleanly). In-flight HTTP requests are dropped. (REVIEW-2 C6.)
+# Also: run as a non-root user (app) so an RCE in any dependency doesn't
+# give the attacker root inside the container. (REVIEW-2 H8.)
+RUN useradd -r -m -u 1000 app && chown -R app:app /app
+USER app
+CMD ["sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]

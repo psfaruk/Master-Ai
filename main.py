@@ -57,28 +57,36 @@ async def lifespan(app: FastAPI):
     logger.info("shutting down Master-Ai…")
     # Cancel background pollers cleanly so the event loop drains before exit.
     # Each poller exposes its asyncio task on its state object — under
-    # ``task`` for app2_cache / candle_fetcher, and under ``poll_task`` for
-    # the snapshot poller (which has multiple background coroutines).
+    # ``task`` / ``initial_task`` for app2_cache / candle_fetcher, and under
+    # ``poll_task`` / ``initial_task`` for the snapshot poller (which has
+    # multiple background coroutines). The initial_task slots were added in
+    # REVIEW-1 H7 to track the previously fire-and-forget kick-off polls.
     from app.app2_cache import _get_state as _app2_state
     from app.backtest_runner import _get_cache as _backtest_state
     from app.candle_fetcher import _get_state as _candle_state
     from app.snapshot_poller import _get_state as _snap_state
 
     pending = []
-    for st_getter, task_attr in (
-        (_snap_state, "poll_task"),
-        (_app2_state, "task"),
-        (_candle_state, "task"),
-        (_backtest_state, "refresh_task"),
+    # (state getter, primary task attr, initial task attr)
+    for st_getter, task_attr, init_attr in (
+        (_snap_state, "poll_task", "initial_task"),
+        (_app2_state, "task", "initial_task"),
+        (_candle_state, "task", "initial_task"),
+        (_backtest_state, None, "refresh_task"),  # backtest cache uses refresh_task
     ):
         try:
             st = st_getter()
-            task = getattr(st, task_attr, None)
-            if task is not None and not task.done():
-                task.cancel()
-                pending.append(task)
-        except Exception:
-            pass
+            for attr in (task_attr, init_attr):
+                if attr is None:
+                    continue
+                task = getattr(st, attr, None)
+                if task is not None and not task.done():
+                    task.cancel()
+                    pending.append(task)
+        except Exception as e:
+            # Don't let a single state object's failure cascade — keep
+            # cancelling the others. (Defensive, REVIEW-1 M1.)
+            logger.debug("shutdown: state cleanup error: %s", e)
     if pending:
         await asyncio.gather(*pending, return_exceptions=True)
 
@@ -116,10 +124,17 @@ async def health():
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Catches any uncaught exception, logs it with the full traceback, and
+    returns a generic 500 to the client. We DO NOT echo ``str(exc)`` to the
+    response body — the original behavior leaked library internals / file
+    paths to anyone with a CORS-* response. (REVIEW-1 M2.)"""
     logger.exception("unhandled error on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=500,
-        content={"error": "internal_error", "message": str(exc)},
+        content={
+            "error": "internal_error",
+            "message": "Internal server error — see server logs for details.",
+        },
         # Every /api/* route promises no-store; an unhandled 500 must not
         # be the one response a browser/proxy is allowed to cache.
         headers=NO_STORE_HEADERS,
