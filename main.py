@@ -90,6 +90,15 @@ async def lifespan(app: FastAPI):
     if pending:
         await asyncio.gather(*pending, return_exceptions=True)
 
+    # Flush the App 2 history cache to disk so the last polled candles
+    # survive the shutdown (the poller's debounced save can lag a few
+    # seconds behind the last poll).
+    try:
+        from app.app2_cache import save_app2_cache_now
+        save_app2_cache_now()
+    except Exception:
+        logger.debug("shutdown: app2 cache flush failed", exc_info=True)
+
 
 app = FastAPI(
     title="Master-Ai",

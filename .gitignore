@@ -30,3 +30,6 @@ build/
 
 # Logs
 *.log
+
+# App 2 history cache persisted to disk (rebuilt automatically)
+data/

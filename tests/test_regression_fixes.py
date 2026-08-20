@@ -539,3 +539,201 @@ def test_wr2_pair_headline_winrate_includes_conflict_level(monkeypatch):
     # breakdown instead of coming back None/0.
     assert entry["gradedTotal"] == 5
     assert entry["winRate"] == 80.0
+
+
+# ---------------------------------------------------------------------------
+# Bug #12 (live-app follow-up): fetch_app1 must merge /api/live rows that
+# history doesn't cover yet, with history rows winning on candle overlap.
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_app1_merges_live_rows_with_history_winning():
+    import asyncio as _asyncio
+    import time
+    from app import signal_aggregator
+
+    now = int(time.time())
+    candle = (now // 60) * 60
+
+    history_rows = [
+        {"pair": "EUR/USD", "direction": "CALL", "entry_ts": candle - 120,
+         "created_at": candle - 120, "result": "WIN"},
+    ]
+    live_rows = [
+        # Same candle as the history row — must be dropped (history wins).
+        {"pair": "EUR/USD", "direction": "PUT", "entry_ts": candle - 120,
+         "created_at": candle - 120, "result": None},
+        # Current candle — history doesn't have it, must be included.
+        {"pair": "EUR/USD", "direction": "CALL", "entry_ts": candle,
+         "created_at": candle, "result": None},
+    ]
+
+    async def fake_fetch(url, timeout_sec=None, **kw):
+        if "/api/live" in url:
+            return live_rows
+        if "/api/history" in url:
+            return history_rows
+        raise AssertionError(f"unexpected url {url}")
+
+    async def run():
+        original = signal_aggregator.fetch_json_with_timeout
+        signal_aggregator.fetch_json_with_timeout = fake_fetch
+        try:
+            return await signal_aggregator.fetch_app1(1800, now)
+        finally:
+            signal_aggregator.fetch_json_with_timeout = original
+
+    res = _asyncio.run(run())
+
+    pairs = [(s.candle_time, s.direction, s.outcome) for s in res.signals]
+    # Current candle live row is present…
+    assert (candle, "CALL", None) in pairs
+    # …and the overlapping candle kept the HISTORY row (CALL, WIN), not the live PUT.
+    assert (candle - 120, "CALL", "WIN") in pairs
+    assert not any(d == "PUT" for _, d, _ in pairs)
+    assert res.health == "ok"
+    assert res.raw_count == 3  # 1 history + 2 live rows before dedup
+
+
+def test_fetch_app1_down_when_both_endpoints_fail():
+    import asyncio as _asyncio
+    from app import signal_aggregator
+
+    async def fake_fetch(url, timeout_sec=None, **kw):
+        raise RuntimeError("upstream down")
+
+    original = signal_aggregator.fetch_json_with_timeout
+    signal_aggregator.fetch_json_with_timeout = fake_fetch
+    try:
+        res = _asyncio.run(signal_aggregator.fetch_app1(1800, int(__import__("time").time())))
+    finally:
+        signal_aggregator.fetch_json_with_timeout = original
+    assert res.health == "down"
+    assert res.error == "fetch_failed"
+
+
+# ---------------------------------------------------------------------------
+# Bug #13 (live-app follow-up): the backtest must request App 1's full
+# history (limit=5000, verified supported upstream) instead of 500 rows.
+# ---------------------------------------------------------------------------
+
+
+def test_backtest_app1_source_requests_full_history():
+    from app import backtest_runner
+    assert "limit=5000" in backtest_runner.SOURCES["app1"]["url"]
+    assert "limit=500" in backtest_runner.SOURCES["app3"]["url"]  # upstream cap
+
+
+# ---------------------------------------------------------------------------
+# Bug #14 (live-app follow-up): the App 2 history cache must survive
+# process restarts via the disk persistence layer.
+# ---------------------------------------------------------------------------
+
+
+def _make_cache_entry(pair="USDCOP_otc", candle_time=None, captured_at=None, signal="CALL"):
+    import time
+    if candle_time is None:
+        candle_time = (int(time.time()) // 60) * 60
+    if captured_at is None:
+        captured_at = time.time() * 1000
+    return app2_cache.CachedSignal(
+        pair=pair, signal=signal, confidence=0.8, strength="STRONG",
+        candle_time=candle_time, first_seen_sec=candle_time,
+        captured_at=captured_at, last_tick_age_sec=None, live=True,
+        buyer_pct=60.0, seller_pct=40.0,
+    )
+
+
+def test_app2_cache_disk_roundtrip(tmp_path):
+    import time
+    st = app2_cache._get_state()
+    st.disk_path = str(tmp_path / "app2_cache.json")
+    try:
+        app2_cache.record_app2_signals([_make_cache_entry()])
+        app2_cache.save_app2_cache_now()
+
+        # Simulate a process restart: drop memory, reload from disk.
+        app2_cache.reset_app2_cache_for_tests()
+        assert app2_cache.get_app2_cache_size() == 0
+        app2_cache._load_disk_cache(st)
+
+        entries = app2_cache.get_all_cached_app2_signals()
+        assert len(entries) == 1
+        assert entries[0].pair == "USDCOP_otc"
+        assert entries[0].signal == "CALL"
+    finally:
+        st.disk_path = None
+        app2_cache.reset_app2_cache_for_tests()
+
+
+def test_app2_cache_disk_load_prunes_expired_entries(tmp_path):
+    import time
+    st = app2_cache._get_state()
+    st.disk_path = str(tmp_path / "app2_cache.json")
+    try:
+        old = _make_cache_entry(captured_at=time.time() * 1000 - 2 * app2_cache.CACHE_TTL_SEC * 1000)
+        fresh = _make_cache_entry()
+        app2_cache.record_app2_signals([old, fresh])
+        app2_cache.save_app2_cache_now()
+
+        app2_cache.reset_app2_cache_for_tests()
+        app2_cache._load_disk_cache(st)
+
+        entries = app2_cache.get_all_cached_app2_signals()
+        assert len(entries) == 1  # the expired one is dropped on load
+    finally:
+        st.disk_path = None
+        app2_cache.reset_app2_cache_for_tests()
+
+
+# ---------------------------------------------------------------------------
+# Bug #15 (live-app follow-up): a WEDGED background refresh must be
+# cancelled and replaced — otherwise the win-rate cache silently goes stale
+# for hours (observed on the production instance: cache age 2.76h while the
+# dashboard kept polling /api/snapshot every few seconds).
+# ---------------------------------------------------------------------------
+
+
+def test_backtest_wedged_refresh_gets_replaced():
+    import asyncio as _asyncio
+    import time
+    from app import backtest_runner as br
+
+    async def run():
+        c = br._get_cache()
+        old_result = c.result
+        old_fetched = c.fetched_at
+
+        async def never_completes():
+            await _asyncio.sleep(1000)
+
+        wedged = _asyncio.create_task(never_completes())
+        c.refresh_in_progress = True
+        c.refresh_task = wedged
+        c.refresh_started_at = time.time() - 2 * br.REFRESH_STUCK_SEC
+
+        async def fake_run_backtest():
+            return {"ok": True}
+
+        original_run = br.run_backtest
+        br.run_backtest = fake_run_backtest
+        try:
+            new_task = br._ensure_refresh_task()
+            assert new_task is not wedged  # a fresh task replaced the wedged one
+            # Give the event loop a tick so the cancelled task actually
+            # processes its CancelledError (cancel() only schedules it).
+            await _asyncio.sleep(0)
+            assert wedged.done()
+            await new_task
+            assert c.result == {"ok": True}
+            assert c.last_refresh_error is None
+        finally:
+            br.run_backtest = original_run
+            await _asyncio.gather(wedged, return_exceptions=True)
+            # Restore cache state so this test doesn't leak into others.
+            c.result = old_result
+            c.fetched_at = old_fetched
+            c.refresh_in_progress = False
+            c.last_refresh_error = None
+
+    _asyncio.run(run())
