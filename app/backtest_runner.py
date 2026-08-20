@@ -99,6 +99,15 @@ class NormalizedSignal:
     # the caller" — treat as equal to candle_time (offset is 0, or the
     # caller predates this field, e.g. a test constructing one directly).
     raw_candle_time: int = 0
+    # ALWAYS computed from the actual candle close (grade_signal), regardless
+    # of what the source app itself reported. This is the ground-truth
+    # verdict used for CLUSTER-level (consensus) win/loss grading — see
+    # _grade_with_candles and _classify_cluster's _effective_outcome().
+    # `outcome` above still carries the source app's own self-reported
+    # verdict (kept for the per-app WIN/LOSS chips, so the user can see
+    # exactly where an app's own bookkeeping disagrees with the real
+    # candle) but no longer decides the graded win/loss totals on its own.
+    candle_outcome: Optional[int] = None
 
 
 @dataclass
@@ -466,8 +475,24 @@ def _classify_cluster(cluster_apps: Dict[AppId, NormalizedSignal], ts_anchor: in
         for a in signal_list
     }
 
+    def _effective_outcome(a: NormalizedSignal) -> Optional[int]:
+        """Ground truth for grading: prefer the candle-verified outcome
+        (independent of the source app's own bookkeeping — see
+        _grade_with_candles); fall back to the app's self-reported outcome
+        only when no candle data was available to independently check it.
+
+        Before this, two apps that both called the SAME direction on the
+        SAME candle could still disagree with each other (e.g. App 1 says
+        WIN, App 3 says LOSS, purely due to differing expiry/spread
+        bookkeeping on their end) — and the old all(outcome==1) check below
+        graded the WHOLE cluster a LOSS the moment any single agreeing app's
+        self-report didn't match the others, even when the real candle
+        close shows the consensus direction actually won.
+        """
+        return a.candle_outcome if a.candle_outcome is not None else a.outcome
+
     gradable_non_draw = [a for a in gradable if not is_neutral(a.raw_status)]
-    outcomes = [a.outcome for a in gradable_non_draw if a.outcome is not None]
+    outcomes = [_effective_outcome(a) for a in gradable_non_draw if _effective_outcome(a) is not None]
     draw_count = len(gradable) - len(gradable_non_draw)
 
     win = sum(1 for o in outcomes if o == 1)
@@ -503,14 +528,27 @@ def _classify_cluster(cluster_apps: Dict[AppId, NormalizedSignal], ts_anchor: in
 
 
 def _grade_with_candles(signals: List[NormalizedSignal]) -> None:
-    """Fill in missing outcomes by grading each signal against the actual
-    candle close from App 3.
+    """Grade every signal against the actual candle close from App 3, and
+    also backfill ``outcome`` for signals that have no self-reported one.
 
-    For signals whose source app already reports an outcome (App 1 / App 3),
-    we KEEP that outcome — it is the source-of-truth verdict.
+    Two separate fields come out of this:
 
-    For signals with no outcome (App 2, or any signal whose source marked it
-    ACTIVE/null), we look up the candle by (pair, candleTime) and grade:
+    - ``candle_outcome`` is ALWAYS (re)computed from the real candle close,
+      for EVERY signal, regardless of what the source app itself claims.
+      This is the ground-truth verdict used for cluster-level (consensus)
+      win/loss grading in ``_classify_cluster``. Two apps that both called
+      the same direction on the same candle are graded from the SAME
+      objective price move — one app's own bookkeeping quirks (a different
+      expiry/spread/rounding convention, say) can no longer disagree with
+      reality and silently drag the pair's win rate down.
+    - ``outcome`` KEEPS each source app's own self-reported verdict when it
+      has one (App 1 / App 3). This is unchanged from before and still
+      feeds the per-app WIN/LOSS chips in the UI (``app_outcomes``) — so a
+      mismatch between an app's own claim and the real candle stays
+      visible to the user instead of being silently hidden. It is simply no
+      longer the value that decides the graded win/loss totals.
+
+    Grading rule (via ``grade_signal`` / ``candle_fetcher``):
       - CALL wins if close > open
       - PUT  wins if close < open
       - DRAW if close === open (within epsilon)
@@ -526,13 +564,19 @@ def _grade_with_candles(signals: List[NormalizedSignal]) -> None:
     against the wrong candle (or UNKNOWN).
     """
     for s in signals:
+        raw_candle_time = s.raw_candle_time if s.raw_candle_time > 0 else (s.candle_time - get_candle_offset_sec(s.source))
+        _, outcome_str = grade_signal(s.pair, raw_candle_time, s.direction)
+
+        if outcome_str == "WIN":
+            s.candle_outcome = 1
+        elif outcome_str == "LOSS":
+            s.candle_outcome = 0
+        # DRAW / UNKNOWN → leave candle_outcome None.
+
         if s.outcome is not None:
             continue
         if s.raw_status and _DRAW_RE.search(s.raw_status):
             continue
-
-        raw_candle_time = s.raw_candle_time if s.raw_candle_time > 0 else (s.candle_time - get_candle_offset_sec(s.source))
-        _, outcome_str = grade_signal(s.pair, raw_candle_time, s.direction)
         if outcome_str == "WIN":
             s.outcome = 1
         elif outcome_str == "LOSS":
@@ -848,7 +892,11 @@ async def run_backtest() -> Dict[str, Any]:
         ))
 
     def pair_total(p: PairStat) -> int:
-        return p.levels["3-agree"].total + p.levels["2-agree"].total + p.levels["1-only"].total
+        # Includes "conflict" (2-vs-1 majority) clusters — these are real,
+        # gradable signal activity too (see H4), so a pair with a lot of
+        # conflict-level clusters shouldn't rank as if it had none.
+        return (p.levels["3-agree"].total + p.levels["2-agree"].total +
+                p.levels["conflict"].total + p.levels["1-only"].total)
 
     per_pair.sort(key=lambda p: (-pair_total(p), p.display_pair))
 
@@ -953,14 +1001,24 @@ async def run_backtest() -> Dict[str, Any]:
         return d
 
     def pair_to_dict(p: PairStat) -> dict:
+        # Includes "conflict" (2-vs-1 majority, graded since the H4 fix) —
+        # previously omitted here, which silently dropped every graded
+        # conflict cluster from the pair's headline winRate/gradedTotal
+        # even though those same clusters WERE counted in winRate60Min
+        # (which reads p.history directly) and in appPairStats. That
+        # mismatch made the same pair show different win rates in
+        # different parts of the UI, and could show "—" (no data) on a
+        # pair whose only graded activity was conflict-majority signals.
         graded_total = (
             p.levels["3-agree"].win + p.levels["3-agree"].loss +
             p.levels["2-agree"].win + p.levels["2-agree"].loss +
+            p.levels["conflict"].win + p.levels["conflict"].loss +
             p.levels["1-only"].win + p.levels["1-only"].loss
         )
         graded_wins = (
             p.levels["3-agree"].win +
             p.levels["2-agree"].win +
+            p.levels["conflict"].win +
             p.levels["1-only"].win
         )
         # ---- 60-minute win rate ----

@@ -383,3 +383,159 @@ def test_h11_backtest_fetches_use_gather():
         "run_backtest must route fetches through _try_fetch so failures "
         "are logged and don't crash the whole backtest."
     )
+
+
+# ---------------------------------------------------------------------------
+# Bug WR1 (user-reported, 2026-08-20): a cluster's win/loss was decided by
+# AND-ing each agreeing app's own self-reported outcome. App 1 / App 3 keep
+# their own self-reported outcome (see _grade_with_candles), and those can
+# disagree with each other even when both apps predicted the SAME direction
+# on the SAME candle (different expiry/spread/rounding bookkeeping on their
+# end). A single discordant self-report used to drag an otherwise-winning
+# consensus cluster down to a full LOSS, silently suppressing the reported
+# win rate. Fixed by grading clusters from a new `candle_outcome` field that
+# is always computed from the real candle close, independent of what any
+# source app itself claims (falling back to the self-report only when no
+# candle data exists to check against).
+# ---------------------------------------------------------------------------
+
+
+def test_wr1_candle_outcome_overrides_discordant_self_reports():
+    """Two apps agree CALL on the same candle. App 1 self-reports WIN, App 3
+    self-reports LOSS (their own bookkeeping disagrees) — but the actual
+    candle really did close up, so grade_signal-derived candle_outcome=1 for
+    both. The cluster must grade WIN, not LOSS."""
+    from app.backtest_runner import _classify_cluster, NormalizedSignal
+
+    apps = {
+        "app1": NormalizedSignal(
+            source="app1", pair="EURUSD_otc", ts=970, candle_time=1000,
+            direction="CALL", outcome=1, raw_status="WIN", candle_outcome=1,
+        ),
+        "app3": NormalizedSignal(
+            source="app3", pair="EURUSD_otc", ts=970, candle_time=1000,
+            direction="CALL", outcome=0, raw_status="LOSS", candle_outcome=1,
+        ),
+    }
+    out = _classify_cluster(apps, 1000)
+    assert out["level"] == "2-agree"
+    assert out["agreeing_win"] == 2
+    assert out["agreeing_loss"] == 0
+    assert out["outcome"] == 1, (
+        "Cluster must grade WIN from the real candle close, even though "
+        "App 3's own self-reported outcome disagreed with App 1's."
+    )
+    # Per-app chips still show each app's own self-report, so a mismatch
+    # like this stays visible to the user instead of being hidden.
+    assert out["app_outcomes"] == {"app1": 1, "app3": 0}
+
+
+def test_wr1_falls_back_to_self_report_without_candle_data():
+    """When candle_outcome is unavailable (no candle data — the pre-fix
+    default for any signal that never went through _grade_with_candles),
+    grading falls back to the self-reported outcome exactly as before.
+    Locks in backward compatibility with every existing test/caller that
+    constructs a NormalizedSignal without candle_outcome."""
+    from app.backtest_runner import _classify_cluster, NormalizedSignal
+
+    apps = {
+        "app1": NormalizedSignal(
+            source="app1", pair="EURUSD_otc", ts=970, candle_time=1000,
+            direction="CALL", outcome=1, raw_status="WIN",
+        ),
+        "app2": NormalizedSignal(
+            source="app2", pair="EURUSD_otc", ts=970, candle_time=1000,
+            direction="CALL", outcome=1, raw_status="WIN",
+        ),
+    }
+    out = _classify_cluster(apps, 1000)
+    assert out["outcome"] == 1
+    assert out["agreeing_win"] == 2
+    assert out["agreeing_loss"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Bug WR2 (user-reported, 2026-08-20): pair_to_dict()'s headline "winRate"/
+# "gradedTotal" only summed the 3-agree / 2-agree / 1-only levels, silently
+# excluding "conflict" (2-vs-1 majority) clusters — even though those ARE
+# graded since the H4 fix, and ARE already included in winRate60Min (which
+# reads p.history directly) and in appPairStats. A pair whose graded
+# activity was mostly/entirely conflict-majority clusters showed "—" (no
+# data) on its headline win rate despite having real, gradable history.
+# ---------------------------------------------------------------------------
+
+
+def test_wr2_pair_headline_winrate_includes_conflict_level(monkeypatch):
+    """End-to-end: a pair with ONLY conflict-majority clusters (app1+app2
+    vs app3, 4 wins / 1 loss) must show winRate=80.0 / gradedTotal=5 on the
+    pair's headline fields — matching what the "conflict" level breakdown,
+    winRate60Min, and appPairStats already independently show."""
+    import time as _time
+    import asyncio as _asyncio
+    from app import backtest_runner as br
+    from app.app2_cache import CachedSignal
+
+    now = int(_time.time())
+    base = ((now // 60) - 10) * 60
+    pair = "EURUSD_otc"
+    # 5 candles: app1+app2 agree CALL, app3 dissents PUT (conflict, majority
+    # app1+app2). 4 candles close up (CALL majority wins), 1 closes down
+    # (CALL majority loses).
+    up = [True, True, True, True, False]
+
+    app1_rows = [
+        {"pair": pair, "direction": "CALL", "entry_ts": base + i * 60,
+         "result": "WIN" if u else "LOSS"}
+        for i, u in enumerate(up)
+    ]
+    app3_rows = [
+        {"pair": pair, "direction": "PUT", "ctime": base + i * 60,
+         "result": "wrong" if u else "correct"}
+        for i, u in enumerate(up)
+    ]
+    app2_records = [
+        CachedSignal(
+            pair=pair, candle_time=base + i * 60, signal="CALL",
+            confidence=None, strength=None,
+            first_seen_sec=base + i * 60 - 30,
+            captured_at=float((base + i * 60 - 30) * 1000),
+            last_tick_age_sec=None, live=False, buyer_pct=0.6, seller_pct=0.4,
+        )
+        for i in range(5)
+    ]
+
+    async def fake_fetch(url, **kw):
+        if "minimum-pair" in url:
+            return {"signals": app1_rows}
+        if "otclivedata" in url and "share-signals" not in url:
+            return {"signals": app3_rows}
+        return {"signals": []}
+
+    async def fake_refresh_candles():
+        return None
+
+    def fake_grade_signal(pair_, candle_time, direction):
+        return (None, "UNKNOWN")
+
+    monkeypatch.setattr(br, "fetch_json_with_timeout", fake_fetch)
+    monkeypatch.setattr(br, "refresh_candles", fake_refresh_candles)
+    monkeypatch.setattr(br, "grade_signal", fake_grade_signal)
+    monkeypatch.setattr(br, "get_all_cached_app2_signals", lambda: app2_records)
+    monkeypatch.setattr(br, "start_app2_cache_poller", lambda: None)
+    monkeypatch.setattr(br, "start_candle_poller", lambda: None)
+    monkeypatch.setenv("APP1_CANDLE_OFFSET", "0")
+    monkeypatch.setenv("APP2_CANDLE_OFFSET", "0")
+    monkeypatch.setenv("APP3_CANDLE_OFFSET", "0")
+
+    result = _asyncio.run(br.run_backtest())
+    entry = next(p for p in result["perPair"] if p["pair"] == pair)
+
+    conflict = entry["levels"]["conflict"]
+    assert conflict["win"] == 4
+    assert conflict["loss"] == 1
+    assert conflict["winRate"] == 80.0
+
+    # This is the fix: the headline fields must match the conflict-level
+    # breakdown instead of coming back None/0.
+    assert entry["gradedTotal"] == 5
+    assert entry["winRate"] == 80.0
