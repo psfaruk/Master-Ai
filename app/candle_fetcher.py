@@ -33,6 +33,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .http_fetcher import fetch_json_with_timeout
 from .signal_normalize import (
+    CANDLE_SEC,
     DIRECTION_KEYS,
     PAIR_KEYS,
     canonical_pair,
@@ -50,6 +51,25 @@ APP3_LIVE_URL = "https://otclivedata.up.railway.app/api/share-signals"
 
 REFETCH_SEC = 45.0
 FAIL_BACKOFF_SEC = 5.0
+
+# ---- Cache bounds -------------------------------------------------------
+# The old comment here said closed candles are "stable forever" and so were
+# never pruned. True, but irrelevant: the cache is in-memory and the process
+# is long-lived, so the map grew by (pairs x 1440) entries per day until the
+# container OOM'd. Railway's smallest plan has already killed this service
+# twice for memory. Keep a day of history — far more than the 6h backtest
+# lookback needs — and cap per-pair depth as a second line of defence.
+MAX_CANDLE_AGE_SEC = 24 * 3600
+# Secondary guard. 24h of 1-minute candles is 1440 entries, so this never
+# truncates legitimate history — it only bounds a pair that somehow
+# accumulates more than a day's worth (duplicate/garbage candle times).
+MAX_CANDLES_PER_PAIR = 1500
+
+# `get_candles_for_pair` used to fire a background refresh on EVERY call
+# whose pair had fewer candles than requested. For a pair App 3 doesn't
+# track that meant one refresh attempt per HTTP request, forever. Rate-limit
+# those opportunistic refreshes.
+_MIN_OPPORTUNISTIC_REFRESH_GAP_SEC = 30.0
 
 
 @dataclass
@@ -79,17 +99,36 @@ def grade_signal_against_candle(direction: str, candle: Optional[Candle]) -> str
     - PUT wins when close < open (price went down)
     - DRAW when close == open (no movement — neither won nor lost)
 
-    Returns ``"UNKNOWN"`` when the candle data is missing (the candle hasn't
-    closed yet, or App 3 doesn't track this pair). A live-captured candle
-    (``is_final=False``) is only gradable once its minute has fully ended —
-    grading a still-forming candle against a mid-minute close produces a
-    verdict that can flip seconds later and silently corrupted the win rate.
+    Returns ``"UNKNOWN"`` when the candle data is missing or not trustworthy
+    yet (the candle hasn't closed, or App 3 doesn't track this pair).
+
+    Live-captured candles (``is_final=False``) need care. Their ``close`` is
+    the price at CAPTURE time, not the candle's final close. The previous
+    rule only refused to grade while ``candle_time >= candle_floor(now)`` —
+    i.e. it started grading the moment the minute rolled over, still using
+    the mid-candle price that was captured seconds after the candle opened.
+    A candle captured at :05 with close≈open then graded as a DRAW or a
+    coin-flip win/loss forever.
+
+    That was not self-correcting either: App 3's historical endpoint caps at
+    500 rows TOTAL across all pairs, so with N pairs tracked it only reaches
+    ~500/N minutes back. With 60 pairs that is ~8 minutes — a live-captured
+    candle that isn't superseded inside that window keeps its wrong close
+    permanently, silently corrupting the win rate.
+
+    The correct test is whether the capture happened at or after the candle
+    CLOSED. A live row fetched at 10:31:02 that still describes the 10:30
+    candle carries a genuine final close and is safe to grade; one fetched
+    at 10:30:05 is not, and stays UNKNOWN until the authoritative historical
+    row arrives.
     """
     if candle is None:
         return "UNKNOWN"
-    if not candle.is_final and candle.candle_time >= candle_floor(int(time.time())):
-        # The candle is still forming — its close keeps moving. Do NOT grade.
-        return "UNKNOWN"
+    if not candle.is_final:
+        captured_sec = (candle.fetched_at or 0) / 1000.0
+        if captured_sec < candle.candle_time + CANDLE_SEC:
+            # Captured mid-candle — `close` is not the close. Don't grade.
+            return "UNKNOWN"
     if candle.close is None or not math.isfinite(candle.close):
         return "UNKNOWN"
     if candle.open is None or not math.isfinite(candle.open):
@@ -118,6 +157,11 @@ class CandleCacheState:
     # Initial kick-off refresh — tracked so lifespan shutdown can cancel
     # it (previously fire-and-forget, leaked on shutdown). (REVIEW-1 H7.)
     initial_task: Optional[asyncio.Task] = None
+    # Opportunistic top-up refreshes fired by get_candles_for_pair. Held in
+    # a set so they aren't garbage-collected mid-flight and so failures are
+    # reported rather than swallowed.
+    opportunistic_tasks: set = field(default_factory=set)
+    last_opportunistic_refresh_at: float = 0.0
 
 
 _state: Optional[CandleCacheState] = None
@@ -288,6 +332,7 @@ async def refresh_candles() -> None:
                 existing.low = c.low
 
         st.total_candles = sum(len(pm) for pm in st.candles.values())
+        _prune_candles(st)
         st.last_fetch_at = time.time() * 1000
         st.last_fetch_ok = True
     except Exception as e:
@@ -295,6 +340,31 @@ async def refresh_candles() -> None:
         logger.error("[candle-cache] refresh error: %s", e)
     finally:
         st.fetch_in_progress = False
+
+
+def _prune_candles(st: CandleCacheState) -> None:
+    """Drop candles older than MAX_CANDLE_AGE_SEC, then cap each pair at
+    MAX_CANDLES_PER_PAIR (newest kept).
+
+    Without this the cache is an unbounded in-memory map: every minute adds
+    one entry per tracked pair and nothing was ever removed, so RSS climbed
+    until the container was OOM-killed.
+    """
+    cutoff = int(time.time()) - MAX_CANDLE_AGE_SEC
+    dropped = 0
+    for pair, pm in list(st.candles.items()):
+        for ct in [ct for ct in pm if ct < cutoff]:
+            pm.pop(ct, None)
+            dropped += 1
+        if len(pm) > MAX_CANDLES_PER_PAIR:
+            for ct in sorted(pm)[: len(pm) - MAX_CANDLES_PER_PAIR]:
+                pm.pop(ct, None)
+                dropped += 1
+        if not pm:
+            st.candles.pop(pair, None)
+    if dropped:
+        st.total_candles = sum(len(pm) for pm in st.candles.values())
+        logger.debug("[candle-cache] pruned %d stale candles", dropped)
 
 
 async def _poll_loop() -> None:
@@ -350,14 +420,50 @@ def get_candles_for_pair(pair: str, min_count: Optional[int] = None) -> List[Can
     out: List[Candle] = list(pm.values()) if pm else []
     out.sort(key=lambda c: c.candle_time, reverse=True)
     if min_count and len(out) < min_count:
-        # Trigger a refresh in the background — caller gets stale data now,
-        # fresh data on next poll. We do NOT track this task on the state
-        # object because it's a one-shot per-call refresh (not a long-lived
-        # loop) — but log it so /api/diag can see the trigger fired.
-        # (REVIEW-1 H7, third site.)
-        logger.debug("[candle-cache] below min_count=%d for %s, refreshing", min_count, pair)
-        asyncio.create_task(refresh_candles())
+        _maybe_refresh_in_background(pair, min_count)
     return out
+
+
+def _maybe_refresh_in_background(pair: str, min_count: int) -> None:
+    """Opportunistically top up the cache for a thin pair.
+
+    Two things this guards that the previous bare ``asyncio.create_task``
+    did not:
+
+    1. **No running loop.** This function is sync and is reachable from
+       sync callers (tests, CLI). ``create_task`` raises RuntimeError with
+       no running loop, which would 500 the request that triggered it.
+    2. **Refresh stampede.** For a pair App 3 simply doesn't track, the
+       count never reaches ``min_count``, so every single HTTP request fired
+       another refresh. ``refresh_candles`` coalesces concurrent calls, but
+       back-to-back sequential ones still hammered the upstream. A cooldown
+       makes this at most one attempt per 30 s.
+
+    The task is also kept referenced and given a done-callback, so a failure
+    is logged instead of surfacing as "Task exception was never retrieved".
+    """
+    st = _get_state()
+    now = time.time()
+    if now - st.last_opportunistic_refresh_at < _MIN_OPPORTUNISTIC_REFRESH_GAP_SEC:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # sync context — nothing to schedule onto
+    st.last_opportunistic_refresh_at = now
+    logger.debug("[candle-cache] below min_count=%d for %s, refreshing", min_count, pair)
+    task = loop.create_task(refresh_candles())
+    st.opportunistic_tasks.add(task)
+    task.add_done_callback(_on_opportunistic_done)
+
+
+def _on_opportunistic_done(task: "asyncio.Task") -> None:
+    _get_state().opportunistic_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning("[candle-cache] opportunistic refresh failed: %s", exc)
 
 
 def get_total_candles() -> int:
@@ -370,6 +476,8 @@ def reset_candle_cache_for_tests() -> None:
     st.total_candles = 0
     st.last_fetch_at = 0.0
     st.last_fetch_ok = False
+    st.last_opportunistic_refresh_at = 0.0
+    st.opportunistic_tasks.clear()
 
 
 def get_candle_cache_stats() -> dict:

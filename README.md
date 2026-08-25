@@ -250,6 +250,54 @@ overwritten, and live upstream rows always win over replayed ones.
 
 Env vars: `SIGNAL_LEDGER_FILE`, `SIGNAL_LEDGER_RETENTION_HOURS`.
 
+#### Deep-audit fixes (2026-08, third pass)
+
+A full read-through of the pipeline turned up six more issues, all now
+fixed and covered by `tests/test_audit_fixes.py`.
+
+**1. Live candles were graded against a mid-candle price (win-rate
+corruption).** `_fetch_live_candles` captures the *forming* candle, whose
+`close` is the price at capture time. The old guard only refused to grade
+while `candle_time >= candle_floor(now)`, so the instant the minute rolled
+over it graded that stale price as a real outcome — a candle captured at
+:05 has close≈open, producing a DRAW or a coin-flip verdict. Nor was it
+self-correcting: App 3's historical endpoint caps at 500 rows *total across
+all pairs*, so with ~60 pairs it only reaches ~8 minutes back and the
+authoritative close often never arrived. The rule is now "grade a
+live-captured candle only if it was captured at or after the candle
+closed", which still allows the legitimate case (polling at 10:31:02 and
+getting the finished 10:30 candle).
+
+**2. The candle cache grew without bound.** It was documented as
+deliberate ("closed candles are stable forever"), but the process is
+long-lived and the map gained `pairs × 1440` entries per day with nothing
+ever removed. `_prune_candles()` now enforces a 24h retention window plus a
+per-pair depth cap.
+
+**3. `get_candles_for_pair` fired an untracked task on every call.** For a
+pair App 3 doesn't track the count never reaches `min_count`, so every HTTP
+request scheduled another `refresh_candles()`. The bare `asyncio.create_task`
+also raised `RuntimeError` when called from a sync context and produced
+"Task exception was never retrieved" on failure. Refreshes are now
+rate-limited to one per 30s, skipped when there's no running loop, and
+tracked with a done-callback that logs failures.
+
+**4. No HTTP connection pooling.** Every fetch built its own
+`httpx.AsyncClient`, i.e. a full TCP+TLS handshake per call — several per
+second against three upstreams once the snapshot poller's 0.8s burst
+window, the App 2 poller and the candle poller are all running. There is
+now one pooled process-wide client, closed by the lifespan shutdown hook.
+Callers may still inject their own client (tests do) and keep ownership.
+
+**5. The signal ledger wasn't flushed on shutdown.** Its disk write is
+debounced to at most one per 20s, so the final ~20s of observed signals
+were lost on every redeploy — precisely the window a deploy interrupts.
+
+**6. Ledger depth wasn't observable.** `/api/diag` now returns a
+`signalLedger` block; `perSource[*].depthMin` is the number that shows
+whether App 3's 500-row cap is still truncating history (it should grow
+with uptime instead of sitting near 41 minutes).
+
 #### API additions
 
 - **NEW** `GET /api/consensus-history` returns merged, cross-pair history
@@ -335,6 +383,9 @@ The suite covers:
   faked, verifying cross-app alignment, NEUTRAL handling, App 2 fallback.
 - `test_new_dashboard.py` — new endpoints, per-pair win rate enrichment,
   signal timing fields, backtest cache, pair filters.
+- `test_audit_fixes.py` — the six deep-audit regressions above: live-candle
+  grading rules, cache pruning, refresh rate-limiting, shared-client reuse,
+  shutdown flush, and diag ledger visibility.
 - `test_signal_ledger.py` — ledger idempotency, first-seen/outcome merge
   rules, retention pruning, corrupt-file tolerance, restart survival, the
   App 3 page-out regression, and the `/api/consensus-history` filters +

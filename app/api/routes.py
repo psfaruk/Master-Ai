@@ -41,6 +41,7 @@ from ..app2_cache import (
     poll_app2_now,
     start_app2_cache_poller,
 )
+from ..signal_ledger import ledger_stats
 from ..backtest_runner import (
     get_backtest_cache_age_sec,
     get_cached_backtest,
@@ -1361,6 +1362,11 @@ async def get_diag(
         "apps": apps_summary,
         "app2Cache": get_app2_cache_stats(),
         "candleCache": get_candle_cache_stats(),
+        # Durable signal ledger — perSource[*].depthMin is the number that
+        # makes App 3's 500-row history cap visible. Before the ledger,
+        # app3's depth was pinned near 41 minutes no matter how long the
+        # service had been up; it should now grow with uptime.
+        "signalLedger": ledger_stats(),
         "pairOverlap": pair_overlap,
         "offsets": offsets,
         "candleCoverageLast30Candles": {**coverage, "buckets": len(bucket), "appPresence": app_presence},
