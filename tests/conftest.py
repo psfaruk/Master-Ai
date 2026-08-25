@@ -17,3 +17,39 @@ if ROOT not in sys.path:
 # Point the persistence at a fresh per-session temp file instead.
 _APP2_CACHE_TMP = tempfile.mkdtemp(prefix="master-ai-test-cache-")
 os.environ["APP2_CACHE_FILE"] = os.path.join(_APP2_CACHE_TMP, "app2_cache.json")
+
+# Same isolation for the unified signal ledger. It is a process-global
+# singleton that run_backtest() writes to on every call, so without a reset
+# between tests one test's synthetic signals get replayed into the next
+# test's backtest via the ledger backfill (observed: a 5-cluster fixture
+# grading 10 clusters). Point persistence at a temp file AND wipe the
+# in-memory state before every test.
+_LEDGER_TMP = tempfile.mkdtemp(prefix="master-ai-test-ledger-")
+os.environ["SIGNAL_LEDGER_FILE"] = os.path.join(_LEDGER_TMP, "signal_ledger.json")
+
+import pytest  # noqa: E402  (must come after the sys.path shim above)
+
+
+def _wipe_ledger():
+    """Reset in-memory ledger state AND remove its disk file.
+
+    Both halves matter: run_backtest() calls activate_ledger() (which
+    restores from disk) and flush() (which writes to it), so clearing only
+    the in-memory dict would let the previous test's signals come straight
+    back off disk on the next activate.
+    """
+    from app.signal_ledger import reset_ledger_for_tests
+
+    reset_ledger_for_tests()
+    try:
+        os.unlink(os.environ["SIGNAL_LEDGER_FILE"])
+    except OSError:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _reset_signal_ledger():
+    """Give every test a clean, empty signal ledger."""
+    _wipe_ledger()
+    yield
+    _wipe_ledger()

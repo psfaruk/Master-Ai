@@ -44,6 +44,13 @@ from typing import Any, Dict, List, Optional
 from .app2_cache import get_all_cached_app2_signals, start_app2_cache_poller
 from .candle_fetcher import grade_signal, refresh_candles, start_candle_poller
 from .http_fetcher import fetch_json_with_timeout
+from .signal_ledger import (
+    activate_ledger,
+    flush as flush_ledger,
+    get_signals as get_ledger_signals,
+    ledger_stats,
+    record_signal,
+)
 from .signal_normalize import (
     DIRECTION_KEYS,
     PAIR_KEYS,
@@ -814,6 +821,11 @@ async def run_backtest() -> Dict[str, Any]:
     """Run a live backtest. Returns the structured result dict — matches the
     shape of the original TypeScript ``BacktestResult`` so the dashboard UI
     doesn't need to change."""
+    # Turn on the durable signal ledger (idempotent). Restores any history
+    # saved by a previous process so a Railway redeploy doesn't reset the
+    # merged App1/App2/App3 history back to whatever the upstreams
+    # currently happen to return.
+    activate_ledger()
     # App 2 has no history endpoint — our own poller is the only source of
     # past candles, so make sure it is running.
     start_app2_cache_poller()
@@ -832,14 +844,29 @@ async def run_backtest() -> Dict[str, Any]:
     def push(s: Optional[NormalizedSignal]) -> None:
         if s is None:
             return
-        if s.candle_time < min_candle:
-            return
         # Validate against the pre-offset candle time (see NormalizedSignal.
         # raw_candle_time) — candle_time may have APPx_CANDLE_OFFSET baked
         # in for cross-app bucketing, which would otherwise push a negative
         # offset's signals past MAX_LAG_SEC and drop the whole app.
         raw_candle_time = s.raw_candle_time if s.raw_candle_time > 0 else s.candle_time
         if not is_signal_valid_for_candle(s.ts, raw_candle_time):
+            return
+        # Record into the durable ledger BEFORE the lookback cut. The ledger
+        # retains ~48h while the backtest only looks back 6h, so anything we
+        # drop here would otherwise be lost forever the moment the upstream
+        # pages it out. This is what makes App 3's 500-row (~41 min) history
+        # cap stop truncating the merged 3-agree history.
+        record_signal(
+            source=s.source,
+            pair=s.pair,
+            candle_time=s.candle_time,
+            direction=s.direction,
+            first_seen_sec=s.ts,
+            raw_candle_time=raw_candle_time,
+            outcome=s.outcome,
+            raw_status=s.raw_status,
+        )
+        if s.candle_time < min_candle:
             return
         all_signals.append(s)
 
@@ -881,8 +908,58 @@ async def run_backtest() -> Dict[str, Any]:
             if isinstance(s, dict):
                 push(normalize_app3(s, ["time", "candle_time", "ctime", "ts"]))
 
+    # ---- Backfill from the durable ledger ----
+    # Everything above came from a LIVE upstream fetch, so its depth is
+    # capped by each app's own history endpoint (App 3: 500 rows ≈ 41 min).
+    # The ledger holds every signal we have ever observed, so replay the
+    # ones the upstreams no longer return. Live rows always win — the
+    # ledger only fills genuine holes, it never overwrites fresh data.
+    live_count = len(all_signals)
+    seen_keys = {(s.source, s.pair, s.candle_time) for s in all_signals}
+    for e in get_ledger_signals(min_candle_time=min_candle):
+        key = (e.source, e.pair, e.candle_time)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        all_signals.append(NormalizedSignal(
+            source=e.source,  # type: ignore[arg-type]
+            pair=e.pair,
+            ts=e.first_seen_sec if e.first_seen_sec > 0 else e.candle_time,
+            candle_time=e.candle_time,
+            raw_candle_time=e.raw_candle_time if e.raw_candle_time > 0 else e.candle_time,
+            direction=e.direction,
+            outcome=e.outcome,
+            raw_status=e.raw_status,
+            candle_outcome=e.candle_outcome,
+        ))
+    backfilled = len(all_signals) - live_count
+    if backfilled:
+        logger.info(
+            "[backtest] ledger backfilled %d signals the upstreams no longer return "
+            "(%d live)", backfilled, live_count,
+        )
+
     # Grade signals that lack an outcome, using candle close data.
     _grade_with_candles(all_signals)
+
+    # Persist the grades back so a signal only has to be graded once — after
+    # this, a restart keeps its verdict instead of re-grading against candle
+    # data that may itself have aged out of App 3's window.
+    for s in all_signals:
+        if s.candle_outcome is None and s.outcome is None:
+            continue
+        record_signal(
+            source=s.source,
+            pair=s.pair,
+            candle_time=s.candle_time,
+            direction=s.direction,
+            first_seen_sec=s.ts,
+            raw_candle_time=s.raw_candle_time if s.raw_candle_time > 0 else s.candle_time,
+            outcome=s.outcome,
+            candle_outcome=s.candle_outcome,
+            raw_status=s.raw_status,
+        )
+    flush_ledger()
 
     # ---- Candle-aligned clustering ----
     by_pair_candle: Dict[str, Dict[AppId, NormalizedSignal]] = {}
@@ -1185,6 +1262,11 @@ async def run_backtest() -> Dict[str, Any]:
         "timestamp": int(time.time() * 1000),
         "totalSignals": len(all_signals),
         "totalClusters": len(all_clusters),
+        # How many of totalSignals came from the durable ledger rather than a
+        # live upstream fetch. A steadily rising number here is the proof
+        # that history depth is no longer capped by App 3's 500-row window.
+        "ledgerBackfilled": backfilled,
+        "ledger": ledger_stats(),
         "levels": {k: level_to_dict(v) for k, v in levels.items()},
         "sources": {k: source_to_dict(v) for k, v in sources.items()},
         # Global per-app-subset leaderboard: for each canonical app subset,

@@ -99,6 +99,24 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.debug("shutdown: app2 cache flush failed", exc_info=True)
 
+    # Same for the unified signal ledger. Its disk write is debounced to at
+    # most one every 20s, so without this flush the final ~20s of observed
+    # signals are lost on every redeploy — exactly the window a Railway
+    # deploy tends to interrupt.
+    try:
+        from app.signal_ledger import flush as flush_ledger
+        flush_ledger(force=True)
+    except Exception:
+        logger.debug("shutdown: signal ledger flush failed", exc_info=True)
+
+    # Close the pooled HTTP client so uvicorn doesn't warn about an
+    # unclosed AsyncClient / leaked sockets on exit.
+    try:
+        from app.http_fetcher import close_shared_client
+        await close_shared_client()
+    except Exception:
+        logger.debug("shutdown: http client close failed", exc_info=True)
+
 
 app = FastAPI(
     title="Master-Ai",

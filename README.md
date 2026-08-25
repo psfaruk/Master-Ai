@@ -182,7 +182,176 @@ Everything on the History tab is now cross-linked:
   coming in a follow-up — currently filtered via the row's "History"
   button only)
 
+#### Signal History IA (revamped 2026-08, second pass)
+
+The History tab is now an explicit **tree with a nav stack**, not a flat set
+of sub-tabs. Previously every view just toggled a CSS class and the single
+back button always jumped straight to the top, so drilling three levels deep
+and pressing Back lost all context. Now:
+
+```
+History (folder grid)
+ ├── Signal History        ← NEW headline folder
+ │     ├── 3 Agree         → candle list → tap a row → per-app detail
+ │     ├── 2 Agree         → candle list → tap a row → per-app detail
+ │     ├── Conflict        → …
+ │     └── Single App      → …
+ ├── Overall Win Rate
+ │     └── App 1 + App 2   → per-pair list → per-pair drawer
+ ├── Backtest
+ ├── Per-Pair Stats
+ ├── App Pair Leaders
+ └── Pair Drilldown
+```
+
+- **Back pops ONE level**, and its label names the destination
+  ("Back to Signal History").
+- A **breadcrumb** renders the full path and every crumb is tappable.
+- **Every history row expands in place** into a detail card showing what
+  each of App 1 / App 2 / App 3 called on that candle, each app's own
+  win/loss verdict, which apps formed the consensus, the graded outcome,
+  and how the row moved the running win rate. This applies to both the new
+  Signal History lists and the per-pair drawer table — the backend was
+  already shipping `app_directions` / `app_outcomes` / `agreeing_apps` on
+  every cluster and the UI was discarding all of it.
+- The per-pair drawer also regained its **Win Rate** headline card
+  (overall + per-level chips) and its **Win Rate by App Combination**
+  strip.
+
+#### Durable signal ledger (`app/signal_ledger.py`) — history depth fix
+
+History depth used to be capped by whatever each upstream returned at that
+moment:
+
+| App | History source | Effective depth |
+|-----|----------------|-----------------|
+| 1 | `/api/history?limit=5000` | ~4.75 h |
+| 2 | no history endpoint | our own poller only |
+| 3 | `/api/signals?limit=500` (hard cap) | **~41 minutes** |
+
+App 3 caps at 500 rows regardless of the requested limit. For every candle
+older than ~41 minutes App 3 therefore looked *absent*, and a candle where
+all three apps had actually agreed was silently downgraded to `2-agree`
+(or `1-only`). That distorted the level populations, the per-level win
+rates, and left the 3-agree history sparse.
+
+`signal_ledger.py` generalises App 2's disk cache to **all three apps**:
+every normalized signal we ever observe is written to a disk-persisted
+ledger keyed by `(source, pair, candle_time)`, and `run_backtest()` replays
+the rows the upstreams no longer return. History depth becomes a function
+of *our* uptime and retention window (48 h by default) instead of the
+upstream's page cap, and it survives Railway redeploys. Grades are written
+back too, so a signal is graded once and keeps its verdict.
+
+Merge rules are conservative: `first_seen_sec` keeps the earliest value (a
+re-fetch must not turn a prediction into a look-ahead), `outcome` upgrades
+from `None` to a verdict but never downgrades, `direction` is never
+overwritten, and live upstream rows always win over replayed ones.
+
+Env vars: `SIGNAL_LEDGER_FILE`, `SIGNAL_LEDGER_RETENTION_HOURS`.
+
+#### Deep-audit fixes (2026-08, third pass)
+
+A full read-through of the pipeline turned up six more issues, all now
+fixed and covered by `tests/test_audit_fixes.py`.
+
+**1. Live candles were graded against a mid-candle price (win-rate
+corruption).** `_fetch_live_candles` captures the *forming* candle, whose
+`close` is the price at capture time. The old guard only refused to grade
+while `candle_time >= candle_floor(now)`, so the instant the minute rolled
+over it graded that stale price as a real outcome — a candle captured at
+:05 has close≈open, producing a DRAW or a coin-flip verdict. Nor was it
+self-correcting: App 3's historical endpoint caps at 500 rows *total across
+all pairs*, so with ~60 pairs it only reaches ~8 minutes back and the
+authoritative close often never arrived. The rule is now "grade a
+live-captured candle only if it was captured at or after the candle
+closed", which still allows the legitimate case (polling at 10:31:02 and
+getting the finished 10:30 candle).
+
+**2. The candle cache grew without bound.** It was documented as
+deliberate ("closed candles are stable forever"), but the process is
+long-lived and the map gained `pairs × 1440` entries per day with nothing
+ever removed. `_prune_candles()` now enforces a 24h retention window plus a
+per-pair depth cap.
+
+**3. `get_candles_for_pair` fired an untracked task on every call.** For a
+pair App 3 doesn't track the count never reaches `min_count`, so every HTTP
+request scheduled another `refresh_candles()`. The bare `asyncio.create_task`
+also raised `RuntimeError` when called from a sync context and produced
+"Task exception was never retrieved" on failure. Refreshes are now
+rate-limited to one per 30s, skipped when there's no running loop, and
+tracked with a done-callback that logs failures.
+
+**4. No HTTP connection pooling.** Every fetch built its own
+`httpx.AsyncClient`, i.e. a full TCP+TLS handshake per call — several per
+second against three upstreams once the snapshot poller's 0.8s burst
+window, the App 2 poller and the candle poller are all running. There is
+now one pooled process-wide client, closed by the lifespan shutdown hook.
+Callers may still inject their own client (tests do) and keep ownership.
+
+**5. The signal ledger wasn't flushed on shutdown.** Its disk write is
+debounced to at most one per 20s, so the final ~20s of observed signals
+were lost on every redeploy — precisely the window a deploy interrupts.
+
+**6. Ledger depth wasn't observable.** `/api/diag` now returns a
+`signalLedger` block; `perSource[*].depthMin` is the number that shows
+whether App 3's 500-row cap is still truncating history (it should grow
+with uptime instead of sitting near 41 minutes).
+
+#### UI / design-system audit (2026-08, fourth pass)
+
+The new History panels were built against a different palette from the rest
+of the app. Fixed, and locked down by `tests/test_ui_consistency.py` (64
+checks) so it cannot drift again.
+
+- **`.wr-bar` was redeclared.** The new block restyled the shared win-rate
+  pill app-wide — border-radius 4px → 999px, and the `min-width` and
+  monospace font were lost on every existing pill. Only the new `--lg`
+  modifier remains; the base and the `--good/--mid/--low/--none` rules stay
+  where they were.
+- **`wrClass()` disagreed with the rest of the dashboard.** It used 65/50
+  thresholds and returned a `bad` modifier that had no CSS rule at all,
+  while every other panel uses 60/45 and `good/mid/low/none`. The same win
+  rate therefore rendered green in one panel and amber in another.
+- **Hardcoded colours broke the light theme.** 14 hex literals and 6
+  `rgba(255,255,255,…)` surfaces — invisible on a white background. All
+  replaced with the `--bg-card` / `--border` / `--emerald` / `--red` /
+  `--blue` / `--text-dim` tokens, using the same `rgba(r,g,b,0.15)` +
+  `var(--token)` pattern the folder-card icons already use.
+- **`.stat` and the `th_winrate` i18n key** were referenced but never
+  defined.
+- **Mobile.** The consensus list is 8 columns (~45px each on a 360px
+  phone). Narrow screens now hide the two columns whose content also
+  appears in the expanded detail — Apps and the running Win Rate — leaving
+  Time / Pair / Prediction / Result / W-L. Same treatment for the drawer's
+  7-column table.
+- **Pre-existing cruft removed.** `@media (min-width: 640px)` declared
+  `.folder-grid--with-headline` twice (the first immediately overridden)
+  and held an empty rule containing only a "how we might do this" comment.
+
+The test file also checks: no duplicate ids, every `$("id")` resolves,
+every folder card has a panel, detail-row `colspan` matches the header
+column count, balanced braces, no undeclared `var()`, no empty rules,
+en/bn key parity, every referenced `data-i18n` key exists, and that
+expandable rows carry `role`/`tabindex`/`aria-expanded` and respond to
+Enter and Space.
+
 #### API additions
+
+- **NEW** `GET /api/consensus-history` returns merged, cross-pair history
+  bucketed by agreement level — the endpoint behind the Signal History
+  folders. Params: `level` (`3-agree` / `2-agree` / `conflict` / `1-only` /
+  `all`), `direction`, `subset`, `category`, `pair`, `minutes` (1..1440),
+  `graded_only`, `limit`. Each row carries the full per-app breakdown plus
+  `marketResult` and a cumulative `runningWinRate`, so the expandable
+  detail card needs no second round trip. `byLevel` is computed *before*
+  the level filter so the folder cards stay populated whichever level is
+  open.
+- `/api/backtest` now also returns `ledgerBackfilled` (how many signals
+  came from the ledger rather than a live fetch) and a `ledger` stats
+  block — a steadily rising `ledgerBackfilled` is the proof that App 3's
+  page cap is no longer truncating history.
+
 
 - `/api/snapshot`, `/api/pairs`, `/api/pair/{pair}`, `/api/backtest` now
   return `appPairStats` for each pair (a dict keyed by app-subset).
@@ -252,6 +421,27 @@ The suite covers:
   faked, verifying cross-app alignment, NEUTRAL handling, App 2 fallback.
 - `test_new_dashboard.py` — new endpoints, per-pair win rate enrichment,
   signal timing fields, backtest cache, pair filters.
+- `test_ui_consistency.py` — design-system guard rails: duplicate ids,
+  orphan classes, colspan/header mismatch, hardcoded colours in the history
+  CSS, i18n parity, keyboard-operable rows, mobile column hiding.
+- `test_audit_fixes.py` — the six deep-audit regressions above: live-candle
+  grading rules, cache pruning, refresh rate-limiting, shared-client reuse,
+  shutdown flush, and diag ledger visibility.
+- `test_signal_ledger.py` — ledger idempotency, first-seen/outcome merge
+  rules, retention pruning, corrupt-file tolerance, restart survival, the
+  App 3 page-out regression, and the `/api/consensus-history` filters +
+  detail payload + running win rate.
+
+Plus an offline end-to-end gate that does not need the live upstreams:
+
+```bash
+python tests/verify_backtest.py
+```
+
+It runs the real backtest pipeline against a deterministic synthetic feed
+and asserts that the 3-agree population, grading and win rate survive both
+an App 3 page-out and a simulated redeploy, without inflating cluster or
+win counts on replay.
 
 ## Environment variables
 

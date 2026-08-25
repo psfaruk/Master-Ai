@@ -364,11 +364,16 @@
            global win rates, each of which drills into a per-pair list
            for that subset. -->
       <div class="folder-grid folder-grid--with-headline" id="history-folder-grid">
-        <button class="folder-card folder-card--headline" data-folder="overall" type="button">
+        <button class="folder-card folder-card--headline" data-folder="consensus" type="button">
+          <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-layer-group"></i></span>
+          <span class="folder-card__title" data-i18n="folder_consensus_title">Signal History</span>
+          <span class="folder-card__desc" data-i18n="folder_consensus_desc">Every saved signal, grouped by how many apps agreed — 3 Agree, 2 Agree, Conflict, Single. Tap a row for the full per-app breakdown.</span>
+          <span class="folder-card__hint" id="consensus-folder-hint"><i class="fas fa-arrow-right"></i> <span data-i18n="folder_open">Open</span></span>
+        </button>
+        <button class="folder-card" data-folder="overall" type="button">
           <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-trophy"></i></span>
           <span class="folder-card__title" data-i18n="folder_overall_title">Overall Win Rate</span>
-          <span class="folder-card__desc" data-i18n="folder_overall_desc">Win rate for App 1, App 2, App 3 and every combination (1+2, 1+3, 2+3, all 3) — tap to drill into per-pair breakdown.</span>
-          <span class="folder-card__hint"><i class="fas fa-arrow-right"></i> <span data-i18n="folder_open">Open</span></span>
+          <span class="folder-card__desc" data-i18n="folder_overall_desc">Win rate for App 1, App 2, App 3 and every combination (1+2, 1+3, 2+3, all 3)</span>
         </button>
         <button class="folder-card" data-folder="backtest" type="button">
           <span class="folder-card__icon folder-card__icon--blue"><i class="fas fa-chart-line"></i></span>
@@ -392,15 +397,79 @@
         </button>
       </div>
 
-      <!-- Detail view — hidden until a folder card above is tapped -->
+      <!-- Detail view — hidden until a folder card above is tapped.
+           The back button pops ONE level off the nav stack (folder →
+           sub-folder → list → detail), and the breadcrumb shows where you
+           are, so deep drill-downs no longer dump you back at the top. -->
       <div class="folder-detail" id="history-folder-detail" hidden>
-        <button class="folder-back" id="history-folder-back" type="button"><i class="fas fa-arrow-left"></i> <span data-i18n="back_to_history">Back to History</span></button>
+        <button class="folder-back" id="history-folder-back" type="button"><i class="fas fa-arrow-left"></i> <span id="history-back-label" data-i18n="back_to_history">Back to History</span></button>
+        <nav class="breadcrumb" id="history-breadcrumb" aria-label="History navigation"></nav>
+
+        <!-- Signal History → level picker. Four sub-folder cards, one per
+             agreement level, each showing live counts + win rate so the
+             user can see where the edge is before opening anything. -->
+        <div class="history-panel history-panel--active" id="history-consensus">
+          <div class="panel">
+            <div class="panel__header">
+              <h2 data-i18n="panel_consensus_title">Signal History</h2>
+              <p class="panel__sub" data-i18n="panel_consensus_sub">Pick an agreement level. Counts cover the last 6 hours of saved signals.</p>
+            </div>
+            <div class="panel__body">
+              <div class="subfolder-grid" id="consensus-level-grid">
+                <p class="placeholder" data-i18n="placeholder_loading">Loading…</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Signal History → one level's candle-by-candle list. Rows are
+             expandable: tapping one reveals the full per-app breakdown. -->
+        <div class="history-panel" id="history-consensuslist">
+          <div class="panel">
+            <div class="panel__header">
+              <h2 id="consensuslist-title">Signal History</h2>
+              <div class="filter-bar">
+                <select id="consensus-direction" aria-label="Direction filter">
+                  <option value="" data-i18n="opt_dir_both">Both directions</option>
+                  <option value="CALL">CALL only</option>
+                  <option value="PUT">PUT only</option>
+                </select>
+                <select id="consensus-minutes" aria-label="Time window">
+                  <option value="60">Last 60 min</option>
+                  <option value="180">Last 3 h</option>
+                  <option value="360" selected>Last 6 h</option>
+                </select>
+                <label class="check"><input type="checkbox" id="consensus-graded-only"> <span data-i18n="opt_graded_only">Graded only</span></label>
+              </div>
+            </div>
+            <div class="panel__body" id="consensuslist-summary"></div>
+            <div class="panel__body panel__body--scroll">
+              <div class="table-scroll">
+                <table class="pair-table pair-table--history" id="consensuslist-table">
+                  <thead><tr>
+                    <th data-i18n="th_time">Time</th>
+                    <th data-i18n="th_pair">Pair</th>
+                    <th data-i18n="th_apps">Apps</th>
+                    <th data-i18n="th_prediction">Prediction</th>
+                    <th data-i18n="th_result">Result</th>
+                    <th data-i18n="th_wl">W/L</th>
+                    <th data-i18n="th_winrate">Win Rate</th>
+                    <th aria-label="expand"></th>
+                  </tr></thead>
+                  <tbody id="consensuslist-body">
+                    <tr><td colspan="8" class="placeholder" data-i18n="placeholder_loading">Loading…</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <!-- Overall Win Rate sub-tab — 7 app-subset cards (App1, App2,
              App3, 1+2, 1+3, 2+3, all-3), each showing the global
              aggregate win rate + signal count + W/L for that subset.
              Tapping a card opens the per-subset pair list. -->
-        <div class="history-panel history-panel--active" id="history-overall">
+        <div class="history-panel" id="history-overall">
           <div class="panel">
             <div class="panel__header">
               <h2 data-i18n="panel_overall_title">Overall Win Rate</h2>

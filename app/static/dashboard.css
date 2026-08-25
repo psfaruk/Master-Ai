@@ -1877,17 +1877,12 @@ a { color: var(--blue); }
   grid-template-columns: 1fr;
 }
 @media (min-width: 640px) {
-  /* On wider screens, keep headline at full width but let the other
-     4 folders flow as a 2x2 (or 4x1) grid below it. */
-  .folder-grid--with-headline {
-    grid-template-columns: 1fr;
-  }
-  .folder-grid--with-headline .folder-card:not(.folder-card--headline) {
-    /* We use a 2-col layout for the non-headline cards via a sub-grid
-       trick: each non-headline card places itself on column auto, and
-       we set the parent to grid-template-columns: repeat(2, 1fr) but
-       only for rows below the headline. Easiest: nest via grid-row. */
-  }
+  /* On wider screens the headline card spans the full width and the
+     remaining folders flow beneath it as a 2-column grid.
+     (This block used to declare .folder-grid--with-headline twice — the
+     first `grid-template-columns: 1fr` was overridden two rules later —
+     and carried an empty rule holding only a "how we might do this"
+     comment. Collapsed into the one declaration that actually applies.) */
   .folder-grid--with-headline {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
@@ -2151,3 +2146,230 @@ a { color: var(--blue); }
   background: rgba(59, 130, 246, 0.05);
 }
 
+/* ============================================================
+   HISTORY TAB — breadcrumb, sub-folders, expandable rows
+   Follows the existing design system: --bg-card / --border /
+   --radius / --text-dim tokens, and the same rgba(...,0.15) +
+   var(--color) pattern the folder-card icons already use, so
+   both themes and both palettes stay consistent.
+   ============================================================ */
+
+/* ---- Breadcrumb ---- */
+.breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: -6px 0 16px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.breadcrumb__link {
+  padding: 3px 6px;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-xs);
+  color: var(--blue);
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.breadcrumb__link:hover { background: var(--bg-card-hover); }
+.breadcrumb__link:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.breadcrumb__sep { color: var(--text-muted); padding: 0 2px; }
+.breadcrumb__current { font-weight: 600; padding: 3px 2px; }
+
+/* ---- Sub-folder cards (the agreement-level picker) ---- */
+.subfolder-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+.subfolder-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  transition: background 0.15s, border-color 0.15s;
+}
+.subfolder-card:hover { background: var(--bg-card-hover); border-color: var(--text-muted); }
+.subfolder-card:active { transform: scale(0.98); }
+.subfolder-card:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.subfolder-card__icon {
+  width: 34px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  flex-shrink: 0;
+}
+.subfolder-card__icon--emerald { background: rgba(16, 185, 129, 0.15); color: var(--emerald); }
+.subfolder-card__icon--blue    { background: rgba(59, 130, 246, 0.15); color: var(--blue); }
+.subfolder-card__icon--amber   { background: rgba(245, 158, 11, 0.15); color: var(--amber); }
+.subfolder-card__icon--violet  { background: rgba(139, 92, 246, 0.15); color: var(--violet); }
+.subfolder-card__title { font-weight: 600; font-size: 14px; }
+.subfolder-card__desc { font-size: 11px; color: var(--text-dim); line-height: 1.45; }
+.subfolder-card__stats {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 10px; margin-top: 2px; font-size: 11px; color: var(--text-dim);
+}
+.subfolder-card__stats .stat { display: inline-flex; align-items: center; gap: 3px; }
+.subfolder-card__stats strong { color: var(--text); font-family: var(--font-mono); }
+.subfolder-card__note { font-size: 10px; color: var(--text-muted); font-style: italic; }
+
+/* ---- Summary strip above a history list ---- */
+.summary-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  align-items: center;
+}
+.summary-strip__item { display: flex; flex-direction: column; gap: 2px; }
+.summary-strip__item--muted { opacity: 0.65; }
+.summary-strip__item strong { font-size: 14px; font-family: var(--font-mono); }
+.summary-strip__label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+/* Large win-rate variant of the shared .wr-bar (base + --good/--mid/--low/
+   --none live with the original .wr-bar rules near the top of this file —
+   do NOT redeclare them here or the whole app's pills change shape). */
+.wr-bar--lg { min-width: 76px; font-size: 20px; padding: 6px 14px; }
+
+/* ---- Expandable history rows ---- */
+.hist-row { cursor: pointer; transition: background 0.15s; }
+.hist-row:hover { background: var(--bg-card-hover); }
+.hist-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.hist-row--open { background: var(--bg-card-hover); }
+.hist-row__chev { text-align: right; width: 26px; color: var(--text-muted); }
+.hist-detail-row > td { padding: 0 !important; background: var(--bg-elev); }
+
+.hist-detail {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-left: 2px solid var(--blue);
+}
+.hist-detail__head {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 8px; font-size: 12px; color: var(--text-dim);
+}
+.hist-detail__pair { font-weight: 600; font-size: 13px; color: var(--text); }
+.hist-detail__verdict {
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.hist-detail__verdict--win     { background: rgba(16, 185, 129, 0.12); color: var(--emerald); }
+.hist-detail__verdict--loss    { background: rgba(239, 68, 68, 0.12);  color: var(--red); }
+.hist-detail__verdict--pending { background: var(--bg-card); color: var(--text-dim); }
+.hist-detail__meta {
+  display: flex; flex-wrap: wrap; gap: 16px;
+  font-size: 11px; color: var(--text-dim);
+}
+.hist-detail__meta strong { color: var(--text); font-family: var(--font-mono); }
+.hist-detail__actions { display: flex; gap: 8px; }
+
+/* ---- Per-app breakdown inside an expanded row ---- */
+.app-card-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+}
+.app-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.app-card--agree { border-color: var(--emerald); background: rgba(16, 185, 129, 0.07); }
+.app-card--agree .fa-check { color: var(--emerald); }
+.app-card--silent { opacity: 0.5; }
+.app-card__name {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.app-card__dir { font-size: 11px; color: var(--text-muted); }
+
+/* ---- Level / subset chips (drawer win-rate cards) ---- */
+.level-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.level-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+}
+.level-chip__name { color: var(--text-dim); }
+.level-chip__wl { font-family: var(--font-mono); }
+
+.drawer__headline { margin: 6px 0 10px; }
+.panel__note { font-size: 11px; color: var(--text-muted); margin-top: 8px; }
+.panel__sub { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+.placeholder--error { color: var(--red); }
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.check input { accent-color: var(--blue); cursor: pointer; }
+
+@media (max-width: 560px) {
+  .subfolder-grid { grid-template-columns: 1fr; }
+  .breadcrumb { font-size: 11px; }
+  .hist-detail { padding: 11px; }
+  .app-card-grid { grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); }
+  .summary-strip { gap: 8px 14px; }
+
+  /* The consensus list is 8 columns wide, which is ~45px per column on a
+     360px phone — unreadable, and .table-scroll would just push the
+     important columns off-screen. Drop the two columns whose content is
+     ALSO shown in the expanded detail card (Apps, and the running Win
+     Rate), leaving Time / Pair / Prediction / Result / W-L / chevron. */
+  #consensuslist-table th:nth-child(3),
+  #consensuslist-table td:nth-child(3),
+  #consensuslist-table th:nth-child(7),
+  #consensuslist-table td:nth-child(7) { display: none; }
+  /* The detail row must still span every REMAINING column. */
+  #consensuslist-table .hist-detail-row > td { display: table-cell; }
+
+  /* Same idea for the drawer's 7-column table (Time / Apps / Prediction /
+     Result / W-L / Win Rate / chevron): drop Apps + Win Rate. */
+  #drawer-history-table th:nth-child(2),
+  #drawer-history-table td:nth-child(2),
+  #drawer-history-table th:nth-child(6),
+  #drawer-history-table td:nth-child(6) { display: none; }
+  #drawer-history-table .hist-detail-row > td { display: table-cell; }
+}
+
+/* The expanded detail row spans the full table width regardless of how many
+   columns are currently visible — a hard-coded colspan would leave a gap
+   once the media query above hides two of them. */
+.hist-detail-row > td { width: 100%; }

@@ -51,6 +51,17 @@ const TRANSLATIONS = {
     folder_apppair_title: "App Pair Leaders", folder_apppair_desc: "Which pair of apps performs best, and where",
     folder_drilldown_title: "Pair Drilldown", folder_drilldown_desc: "Candle history + signals for one pair",
     back_to_history: "Back to History",
+    back_to: "Back to",
+    folder_consensus_title: "Signal History",
+    folder_consensus_desc: "Every saved signal, grouped by how many apps agreed — 3 Agree, 2 Agree, Conflict, Single. Tap a row for the full per-app breakdown.",
+    folder_open: "Open",
+    panel_consensus_title: "Signal History",
+    panel_consensus_sub: "Pick an agreement level. Counts cover the last 6 hours of saved signals.",
+    placeholder_loading: "Loading…",
+    opt_dir_both: "Both directions",
+    opt_graded_only: "Graded only",
+    th_time: "Time", th_apps: "Apps", th_prediction: "Prediction", th_result: "Result",
+    th_winrate: "Win Rate",
     panel_backtest_title: "Consensus Accuracy Backtest",
     placeholder_run_backtest_history: 'Click "Run fresh backtest" to fetch a verdict, or wait for the auto-cached result to appear.',
     panel_perpair_title: "Per-Pair Win Rate", th_cat: "Cat", th_overall_wl: "Overall W/L", th_win_pct: "Win %",
@@ -117,6 +128,17 @@ const TRANSLATIONS = {
     folder_apppair_title: "অ্যাপ পেয়ার লিডার", folder_apppair_desc: "কোন অ্যাপ জোড়া সবচেয়ে ভালো পারফর্ম করে, এবং কোথায়",
     folder_drilldown_title: "পেয়ার ড্রিলডাউন", folder_drilldown_desc: "একটি পেয়ারের ক্যান্ডেল হিস্ট্রি + সিগন্যাল",
     back_to_history: "হিস্ট্রিতে ফিরে যান",
+    back_to: "ফিরে যান",
+    folder_consensus_title: "সিগন্যাল হিস্ট্রি",
+    folder_consensus_desc: "সেভ হওয়া সব সিগন্যাল — কয়টি অ্যাপ একমত হয়েছে সেই অনুযায়ী সাজানো: ৩টি একমত, ২টি একমত, দ্বন্দ্ব, একক। বিস্তারিত দেখতে যেকোনো রো-তে ট্যাপ করুন।",
+    folder_open: "খুলুন",
+    panel_consensus_title: "সিগন্যাল হিস্ট্রি",
+    panel_consensus_sub: "একটি একমত-স্তর বেছে নিন। সংখ্যাগুলো গত ৬ ঘণ্টার সেভ করা সিগন্যাল থেকে।",
+    placeholder_loading: "লোড হচ্ছে…",
+    opt_dir_both: "উভয় দিক",
+    opt_graded_only: "শুধু গ্রেড হওয়া",
+    th_time: "সময়", th_apps: "অ্যাপ", th_prediction: "প্রেডিকশন", th_result: "ফলাফল",
+    th_winrate: "জয়ের হার",
     panel_backtest_title: "কনসেনসাস নির্ভুলতা ব্যাকটেস্ট",
     placeholder_run_backtest_history: '"Run fresh backtest"-এ ক্লিক করে ফলাফল আনুন, অথবা অটো-ক্যাশড ফলাফলের জন্য অপেক্ষা করুন।',
     panel_perpair_title: "প্রতি-পেয়ার জয়ের হার", th_cat: "ক্যাট", th_overall_wl: "সর্বমোট জয়/হার", th_win_pct: "জয় %",
@@ -206,7 +228,19 @@ function loadFavorites() {
 // ====== State ======
 const state = {
   activeTab: "home",
-  activeHistorySubtab: "backtest",
+  activeHistorySubtab: "consensus",
+  // Breadcrumb / back-button stack for the History tab tree. Each entry is
+  // { name, opts, label }. Back pops one level instead of jumping to the
+  // top, and the breadcrumb renders the whole path.
+  historyStack: [],
+  // Currently-open agreement level on History → Signal History
+  // ("3-agree" | "2-agree" | "conflict" | "1-only").
+  activeConsensusLevel: "3-agree",
+  // Last /api/consensus-history payload, keyed so filter changes can
+  // re-render without a refetch when only the client-side view changed.
+  consensusHistory: null,
+  // Candle keys (`pair|ts`) whose inline detail row is expanded.
+  expandedHistoryRows: new Set(),
   // Currently-selected app subset on the History → Overall Win Rate →
   // per-subset pair list view. Set when the user taps a card in the
   // Overall Win Rate grid; read by renderSubsetPairList().
@@ -299,12 +333,15 @@ function switchTab(name) {
   if (name === "home") refreshBacktestStatus();
   if (name === "history") {
     resetFolderView("history-folder-grid", "history-folder-detail");
+    state.historyStack = [];
+    state.expandedHistoryRows.clear();
+    renderHistoryBreadcrumb();
     populateHistoryPairSelector();
     renderPerPairTable();
     refreshBacktestStatus();
-    // Pre-render the Overall Win Rate view too, so when the user taps
-    // the headline "Overall Win Rate" folder card the data is already
-    // there — no flash of "Loading…" for the most important screen.
+    // Pre-warm the two headline screens so tapping their folder cards
+    // shows data immediately instead of a "Loading…" flash.
+    renderConsensusLevels();
     renderOverallWinRate();
   }
   if (name === "settings") resetFolderView("settings-folder-grid", "settings-folder-detail");
@@ -323,20 +360,114 @@ function resetFolderView(gridId, detailId) {
 
 $$("#history-folder-grid .folder-card").forEach((card) => {
   card.addEventListener("click", () => {
-    $("history-folder-grid").hidden = true;
-    $("history-folder-detail").hidden = false;
+    historyNavReset();
     switchHistorySubtab(card.dataset.folder);
     window.scrollTo(0, 0);
   });
 });
-$("history-folder-back")?.addEventListener("click", () => {
-  resetFolderView("history-folder-grid", "history-folder-detail");
+
+// ---- History nav stack ----------------------------------------------------
+// The History tab is a tree, not a flat list of sub-tabs:
+//
+//   History (folder grid)
+//     └── Signal History          → level picker (3-agree / 2-agree / ...)
+//           └── 3 Agree           → candle list
+//                 └── row tap     → inline per-app detail
+//     └── Overall Win Rate        → 7 subset cards
+//           └── App 1 + App 2     → per-pair list
+//
+// Previously every view just flipped `history-panel--active` and the single
+// back button always jumped straight to the top — so drilling three levels
+// deep and pressing Back lost all context ("sequence thik nai"). We now
+// keep an explicit stack: Back pops ONE level, and a breadcrumb shows the
+// full path.
+const HISTORY_LABELS = {
+  consensus: "Signal History",
+  consensuslist: "Signals",
+  overall: "Overall Win Rate",
+  subsetpairs: "Pairs",
+  backtest: "Backtest",
+  perpair: "Per-Pair Stats",
+  apppair: "App Pair Leaders",
+  drilldown: "Pair Drilldown",
+};
+
+function historyNavReset() {
+  state.historyStack = [];
+  $("history-folder-grid").hidden = true;
+  $("history-folder-detail").hidden = false;
+}
+
+function historyNavLabel(entry) {
+  if (entry.label) return entry.label;
+  return HISTORY_LABELS[entry.name] || entry.name;
+}
+
+function renderHistoryBreadcrumb() {
+  const el = $("history-breadcrumb");
+  if (!el) return;
+  const stack = state.historyStack || [];
+  const crumbs = [{ name: "__root__", label: t("nav_history") }].concat(stack);
+  el.innerHTML = crumbs
+    .map((c, i) => {
+      const last = i === crumbs.length - 1;
+      const label = c.name === "__root__" ? c.label : historyNavLabel(c);
+      const sep = i === 0 ? "" : '<span class="breadcrumb__sep">/</span>';
+      if (last) return `${sep}<span class="breadcrumb__current">${escHtml(label)}</span>`;
+      return `${sep}<button type="button" class="breadcrumb__link" data-crumb="${i}">${escHtml(label)}</button>`;
+    })
+    .join("");
+  $$("[data-crumb]", el).forEach((btn) => {
+    btn.addEventListener("click", () => historyNavTo(Number(btn.dataset.crumb)));
+  });
+
+  // Back button label mirrors the parent crumb so the user knows where
+  // Back will land BEFORE pressing it.
+  const backLabel = $("history-back-label");
+  if (backLabel) {
+    const parent = crumbs[crumbs.length - 2];
+    backLabel.textContent = parent && parent.name !== "__root__"
+      ? `${t("back_to")} ${historyNavLabel(parent)}`
+      : t("back_to_history");
+  }
+}
+
+// Jump to crumb index `i` (0 = the folder grid).
+function historyNavTo(i) {
+  if (i <= 0) {
+    resetFolderView("history-folder-grid", "history-folder-detail");
+    state.historyStack = [];
+    renderHistoryBreadcrumb();
+    window.scrollTo(0, 0);
+    return;
+  }
+  const stack = (state.historyStack || []).slice(0, i);
+  const target = stack[stack.length - 1];
+  state.historyStack = stack.slice(0, -1);
+  switchHistorySubtab(target.name, target.opts || {});
   window.scrollTo(0, 0);
-});
+}
+
+function historyNavBack() {
+  const stack = state.historyStack || [];
+  historyNavTo(stack.length - 1);
+}
+
+$("history-folder-back")?.addEventListener("click", historyNavBack);
 
 function switchHistorySubtab(name, opts = {}) {
   state.activeHistorySubtab = name;
+  // Push onto the nav stack unless we are re-entering the view we're
+  // already on (which happens on re-render / filter change).
+  const stack = state.historyStack || (state.historyStack = []);
+  const top = stack[stack.length - 1];
+  if (!top || top.name !== name || JSON.stringify(top.opts || {}) !== JSON.stringify(opts)) {
+    stack.push({ name, opts, label: opts.label });
+  }
   $$(".history-panel").forEach((p) => p.classList.toggle("history-panel--active", p.id === `history-${name}`));
+  renderHistoryBreadcrumb();
+  if (name === "consensus") renderConsensusLevels();
+  if (name === "consensuslist") renderConsensusList(opts.level || state.activeConsensusLevel);
   if (name === "overall") renderOverallWinRate();
   if (name === "subsetpairs") renderSubsetPairList(opts.subset || state.activeSubset);
   if (name === "perpair") renderPerPairTable();
@@ -1452,7 +1583,7 @@ function renderBacktest(bt) {
     card.addEventListener("click", () => {
       const subset = card.dataset.subsetLink;
       state.activeSubset = subset;
-      switchHistorySubtab("subsetpairs", { subset });
+      switchHistorySubtab("subsetpairs", { subset, label: subsetLabel(subset) });
     });
   });
 }
@@ -1678,6 +1809,263 @@ function _aggregateAppPairGlobal(perPair) {
   return out;
 }
 
+// ====== Signal History (History → Signal History) ==========================
+// Two screens:
+//   1. renderConsensusLevels() — four sub-folder cards, one per agreement
+//      level (3 Agree / 2 Agree / Conflict / Single App), each showing live
+//      counts + win rate from /api/consensus-history.
+//   2. renderConsensusList()   — that level's candle-by-candle list, where
+//      EVERY row expands into a full per-app breakdown.
+//
+// Before this, agreement-level history had no UI at all: the only history
+// table was the per-pair drawer's flat 7-column list, whose rows were inert
+// <tr>s with no click handler — hence "history te click korle bistarito
+// dekha jai na". The backend was already shipping app_directions /
+// app_outcomes / agreeing_apps on every cluster; nothing rendered them.
+
+const CONSENSUS_LEVEL_META = [
+  { level: "3-agree", title: "3 Agree", icon: "fa-star", tone: "emerald",
+    desc: "All three apps called the same direction — the strongest setup." },
+  { level: "2-agree", title: "2 Agree", icon: "fa-star-half-stroke", tone: "blue",
+    desc: "Two apps agreed and the third was silent." },
+  { level: "conflict", title: "Conflict", icon: "fa-code-branch", tone: "amber",
+    desc: "Apps disagreed — the majority direction is graded." },
+  { level: "1-only", title: "Single App", icon: "fa-user", tone: "violet",
+    desc: "Only one app fired on this candle." },
+];
+
+const APP_LABELS = { app1: "App 1", app2: "App 2", app3: "App 3" };
+
+// Win-rate → .wr-bar modifier. MUST match the thresholds and modifier
+// names the rest of the dashboard already uses (good / mid / low / none at
+// 60 / 45), otherwise the same win rate is coloured green in one panel and
+// amber in another. An earlier draft of this file used its own 65/50 split
+// and a "bad" modifier that had no CSS rule at all.
+function wrClass(wr) {
+  if (wr == null) return "none";
+  if (wr >= 60) return "good";
+  if (wr >= 45) return "mid";
+  return "low";
+}
+
+function fmtWr(wr) {
+  if (wr == null) return "—";
+  return `${Number(wr).toFixed(1)}%`;
+}
+
+async function fetchConsensusHistory(params = {}) {
+  const q = new URLSearchParams({
+    level: params.level || "all",
+    minutes: String(params.minutes ?? consensusMinutes()),
+    direction: params.direction ?? consensusDirection(),
+    graded_only: consensusGradedOnly() ? "1" : "0",
+    limit: String(params.limit || 300),
+  });
+  if (state.settings.category && state.settings.category !== "all") {
+    q.set("category", state.settings.category);
+  }
+  const res = await fetch(`/api/consensus-history?${q}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+function consensusMinutes() { return Number($("consensus-minutes")?.value || 360); }
+function consensusDirection() { return $("consensus-direction")?.value || ""; }
+function consensusGradedOnly() { return !!$("consensus-graded-only")?.checked; }
+
+// ---- Screen 1: the level picker ----
+async function renderConsensusLevels() {
+  const grid = $("consensus-level-grid");
+  if (!grid) return;
+  grid.innerHTML = `<p class="placeholder">${escHtml(t("placeholder_loading"))}</p>`;
+  let data;
+  try {
+    data = await fetchConsensusHistory({ level: "all", limit: 1 });
+  } catch (e) {
+    grid.innerHTML = `<p class="placeholder placeholder--error">Could not load signal history: ${escHtml(String(e.message || e))}</p>`;
+    return;
+  }
+  const byLevel = data.byLevel || {};
+  grid.innerHTML = CONSENSUS_LEVEL_META.map((m) => {
+    const s = byLevel[m.level] || {};
+    const wr = s.winRate;
+    return `
+      <button type="button" class="subfolder-card" data-level="${escAttr(m.level)}">
+        <span class="subfolder-card__icon subfolder-card__icon--${m.tone}"><i class="fas ${m.icon}"></i></span>
+        <span class="subfolder-card__title">${escHtml(m.title)}</span>
+        <span class="subfolder-card__desc">${escHtml(m.desc)}</span>
+        <span class="subfolder-card__stats">
+          <span class="stat"><strong>${s.total || 0}</strong> signals</span>
+          <span class="stat"><strong>${s.wins || 0}</strong>W / <strong>${s.losses || 0}</strong>L</span>
+          <span class="wr-bar wr-bar--${wrClass(wr)}">${fmtWr(wr)}</span>
+        </span>
+        ${(s.pending || 0) > 0 ? `<span class="subfolder-card__note">${s.pending} still awaiting a close</span>` : ""}
+      </button>`;
+  }).join("");
+
+  $$("[data-level]", grid).forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const level = btn.dataset.level;
+      state.activeConsensusLevel = level;
+      const meta = CONSENSUS_LEVEL_META.find((m) => m.level === level);
+      switchHistorySubtab("consensuslist", { level, label: meta ? meta.title : level });
+      window.scrollTo(0, 0);
+    });
+  });
+}
+
+// ---- Screen 2: one level's candle list ----
+async function renderConsensusList(level) {
+  level = level || state.activeConsensusLevel || "3-agree";
+  state.activeConsensusLevel = level;
+  const meta = CONSENSUS_LEVEL_META.find((m) => m.level === level);
+  const titleEl = $("consensuslist-title");
+  if (titleEl) titleEl.textContent = meta ? `${meta.title} — Signal History` : "Signal History";
+
+  const body = $("consensuslist-body");
+  const summaryEl = $("consensuslist-summary");
+  if (!body) return;
+  body.innerHTML = `<tr><td colspan="8" class="placeholder">${escHtml(t("placeholder_loading"))}</td></tr>`;
+
+  let data;
+  try {
+    data = await fetchConsensusHistory({ level });
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="8" class="placeholder placeholder--error">Could not load: ${escHtml(String(e.message || e))}</td></tr>`;
+    return;
+  }
+  state.consensusHistory = data;
+
+  const s = data.summary || {};
+  if (summaryEl) {
+    summaryEl.innerHTML = `
+      <div class="summary-strip">
+        <span class="summary-strip__item"><span class="summary-strip__label">Signals</span><strong>${s.total || 0}</strong></span>
+        <span class="summary-strip__item"><span class="summary-strip__label">Graded</span><strong>${s.gradedTotal || 0}</strong></span>
+        <span class="summary-strip__item"><span class="summary-strip__label">Win / Loss</span><strong>${s.wins || 0} / ${s.losses || 0}</strong></span>
+        <span class="summary-strip__item"><span class="summary-strip__label">Win rate</span><span class="wr-bar wr-bar--${wrClass(s.winRate)}">${fmtWr(s.winRate)}</span></span>
+        <span class="summary-strip__item"><span class="summary-strip__label">CALL / PUT</span><strong>${s.call || 0} / ${s.put || 0}</strong></span>
+        ${(s.pending || 0) > 0 ? `<span class="summary-strip__item summary-strip__item--muted"><span class="summary-strip__label">Pending</span><strong>${s.pending}</strong></span>` : ""}
+      </div>
+      ${data.total > data.returned
+        ? `<p class="panel__note">Showing the newest ${data.returned} of ${data.total} signals in this window.</p>`
+        : ""}`;
+  }
+
+  const items = data.items || [];
+  if (items.length === 0) {
+    body.innerHTML = `<tr><td colspan="8" class="placeholder">No ${escHtml(meta ? meta.title : level)} signals saved in this window.</td></tr>`;
+    return;
+  }
+  body.innerHTML = items.map(renderConsensusRow).join("");
+  wireConsensusRowToggles(body, items);
+}
+
+function rowKey(c) { return `${c.pair}|${c.ts}`; }
+
+function renderConsensusRow(c) {
+  const key = rowKey(c);
+  const expanded = state.expandedHistoryRows.has(key);
+  const dir = c.direction;
+  const result = c.marketResult;
+  const outcomeCls = c.outcome === 1 ? "win" : c.outcome === 0 ? "loss" : "unknown";
+  const apps = (c.agreeing_apps || []).map((a) => APP_LABELS[a] || a).join(" + ") || "—";
+  return `
+    <tr class="hist-row${expanded ? " hist-row--open" : ""}" data-row="${escAttr(key)}" tabindex="0" role="button" aria-expanded="${expanded}">
+      <td class="mono">${escHtml(c.candleUtc || "—")}</td>
+      <td>${escHtml(c.displayPair || c.pair || "—")} <span class="pill pill--${escAttr(c.category || "real")}">${escHtml((c.category || "").toUpperCase())}</span></td>
+      <td class="mono">${escHtml(apps)}</td>
+      <td>${dir ? `<span class="dir dir--${escAttr(dir)}">${escHtml(dir)}</span>` : "—"}</td>
+      <td>${result ? `<span class="dir dir--${escAttr(result)}">${escHtml(result)}</span>` : "—"}</td>
+      <td><span class="outcome outcome--${outcomeCls}">${escHtml(c.outcomeLabel || "—")}</span></td>
+      <td class="mono">${fmtWr(c.runningWinRate)}</td>
+      <td class="hist-row__chev"><i class="fas fa-chevron-${expanded ? "up" : "down"}"></i></td>
+    </tr>
+    ${expanded ? `<tr class="hist-detail-row"><td colspan="8">${renderConsensusDetail(c)}</td></tr>` : ""}`;
+}
+
+// The detail card the user was missing: for one candle, exactly what each
+// app said, whether each app's own bookkeeping agreed with the real candle
+// close, and how this row moved the running win rate.
+function renderConsensusDetail(c) {
+  const dirs = c.app_directions || {};
+  const labels = c.appOutcomeLabels || {};
+  const agreeing = new Set(c.agreeing_apps || []);
+  const appCards = ["app1", "app2", "app3"].map((app) => {
+    const d = dirs[app];
+    if (!d) {
+      return `<div class="app-card app-card--silent">
+        <span class="app-card__name">${APP_LABELS[app]}</span>
+        <span class="app-card__dir">— no signal</span>
+      </div>`;
+    }
+    const lbl = labels[app] || "—";
+    const cls = lbl === "WIN" ? "win" : lbl === "LOSS" ? "loss" : "unknown";
+    return `<div class="app-card${agreeing.has(app) ? " app-card--agree" : ""}">
+      <span class="app-card__name">${APP_LABELS[app]}${agreeing.has(app) ? ' <i class="fas fa-check" title="agreed with consensus"></i>' : ""}</span>
+      <span class="dir dir--${escAttr(d)}">${escHtml(d)}</span>
+      <span class="outcome outcome--${cls}">${escHtml(lbl)}</span>
+    </div>`;
+  }).join("");
+
+  const consensusOutcome = c.outcome === 1 ? "This consensus WON — the candle closed in the predicted direction."
+    : c.outcome === 0 ? "This consensus LOST — the candle closed against the prediction."
+    : (c.outcomeLabel === "DRAW") ? "DRAW — the candle opened and closed at the same price."
+    : "Not graded yet — waiting for the candle close (or no candle data for this minute).";
+
+  return `
+    <div class="hist-detail">
+      <div class="hist-detail__head">
+        <span class="hist-detail__pair">${escHtml(c.displayPair || c.pair)}</span>
+        <span class="mono">${escHtml(c.candleUtc || "—")} UTC</span>
+        <span class="pill pill--${escAttr(c.level)}">${escHtml(c.level)}</span>
+        ${c.app_subset_key ? `<span class="pill">${escHtml(c.app_subset_key)}</span>` : ""}
+      </div>
+      <div class="app-card-grid">${appCards}</div>
+      <p class="hist-detail__verdict hist-detail__verdict--${c.outcome === 1 ? "win" : c.outcome === 0 ? "loss" : "pending"}">${escHtml(consensusOutcome)}</p>
+      <div class="hist-detail__meta">
+        <span>Running: <strong>${c.runningWins || 0}W / ${c.runningLosses || 0}L</strong> (${fmtWr(c.runningWinRate)})</span>
+        <span>Age: <strong>${c.ageSec == null ? "—" : Math.round(c.ageSec / 60) + " min"}</strong></span>
+      </div>
+      <div class="hist-detail__actions">
+        <button class="btn btn--ghost btn--mini" data-open-pair="${escAttr(c.pair)}"><i class="fas fa-magnifying-glass-chart"></i> Open ${escHtml(c.displayPair || c.pair)}</button>
+      </div>
+    </div>`;
+}
+
+function wireConsensusRowToggles(body, items) {
+  const byKey = new Map(items.map((c) => [rowKey(c), c]));
+  const toggle = (key) => {
+    if (state.expandedHistoryRows.has(key)) state.expandedHistoryRows.delete(key);
+    else state.expandedHistoryRows.add(key);
+    body.innerHTML = items.map(renderConsensusRow).join("");
+    wireConsensusRowToggles(body, items);
+  };
+  $$(".hist-row", body).forEach((tr) => {
+    tr.addEventListener("click", () => toggle(tr.dataset.row));
+    tr.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(tr.dataset.row); }
+    });
+  });
+  $$("[data-open-pair]", body).forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openPairDrawer(btn.dataset.openPair);
+    });
+  });
+  void byKey;
+}
+
+// Filter controls re-fetch (the window / graded-only filters are applied
+// server-side so the running win rate stays correct for the filtered set).
+["consensus-direction", "consensus-minutes", "consensus-graded-only"].forEach((id) => {
+  $(id)?.addEventListener("change", () => {
+    state.expandedHistoryRows.clear();
+    if (state.activeHistorySubtab === "consensuslist") renderConsensusList(state.activeConsensusLevel);
+    else renderConsensusLevels();
+  });
+});
+
 // ====== Overall Win Rate (History → Overall Win Rate headline folder) ======
 // The landing screen for the most important question the user has:
 // "Of App 1, App 2, App 3, and every combination (1+2, 1+3, 2+3, all-3),
@@ -1708,6 +2096,14 @@ const OVERALL_SUBSET_DEFS = [
   { key: "app2+app3", label: "App 2 + App 3", short: "App 2+3", color: "amber", icon: "fa-link" },
   { key: "app1+app2+app3", label: "All 3 agree", short: "All 3", color: "emerald", icon: "fa-star" },
 ];
+
+// Human label for an app-subset key — used by the History breadcrumb so a
+// deep path reads "History / Overall Win Rate / App 1 + App 2" rather than
+// "History / overall / app1+app2".
+function subsetLabel(key) {
+  const def = OVERALL_SUBSET_DEFS.find((d) => d.key === key);
+  return def ? def.short : key;
+}
 
 async function renderOverallWinRate() {
   const meta = $("overall-meta");
@@ -1824,7 +2220,7 @@ async function renderOverallWinRate() {
     card.addEventListener("click", () => {
       const subset = card.dataset.subset;
       state.activeSubset = subset;
-      switchHistorySubtab("subsetpairs", { subset });
+      switchHistorySubtab("subsetpairs", { subset, label: subsetLabel(subset) });
       window.scrollTo(0, 0);
     });
   });
@@ -1853,7 +2249,7 @@ async function renderSubsetPairList(subset) {
   const def = OVERALL_SUBSET_DEFS.find((d) => d.key === subset) || { label: subset };
   if (title) title.innerHTML = `<i class="fas fa-arrow-left" style="cursor:pointer;margin-right:8px" id="subsetpairs-back"></i> ${escHtml(def.label)}`;
   // Wire the inline back-arrow → return to Overall Win Rate view.
-  $("subsetpairs-back")?.addEventListener("click", () => switchHistorySubtab("overall"));
+  $("subsetpairs-back")?.addEventListener("click", historyNavBack);
 
   if (meta) meta.textContent = "loading…";
   body.innerHTML = '<tr><td colspan="7" class="placeholder">Loading…</td></tr>';
@@ -2014,20 +2410,23 @@ function renderPairDetailHtml(data) {
     : `<button class="btn btn--ghost" id="drawer-fav">☆ Add to favorites</button>`;
 
   return `
+    ${renderDrawerWinRateCard(data)}
+    ${renderDrawerSubsetStrip(data)}
     <div class="drawer__section drawer__section--history">
       <h3>Signal History — Last ${historyMinutes} min <span class="drawer__section-count">${clusterHistory.length} candles</span></h3>
+      <p class="drawer__hint"><i class="fas fa-hand-pointer"></i> Tap any row for the per-app breakdown.</p>
       <div class="table-scroll">
-        <table class="pair-table pair-table--history">
+        <table class="pair-table pair-table--history" id="drawer-history-table">
           <thead><tr>
-            <th>Market</th>
-            <th>Pair</th>
             <th>Time</th>
+            <th>Apps</th>
             <th>Prediction</th>
             <th>Result</th>
             <th>Win/Loss</th>
             <th>Win Rate</th>
+            <th aria-label="expand"></th>
           </tr></thead>
-          <tbody>${renderSimpleHistoryRows(clusterHistory, data) || `<tr><td colspan="7" class="placeholder">No signals in the last ${historyMinutes} minutes.</td></tr>`}</tbody>
+          <tbody id="drawer-history-body">${renderSimpleHistoryRows(clusterHistory, data) || `<tr><td colspan="7" class="placeholder">No signals in the last ${historyMinutes} minutes.</td></tr>`}</tbody>
         </table>
       </div>
     </div>
@@ -2035,6 +2434,53 @@ function renderPairDetailHtml(data) {
       ${favBtn}
     </div>
   `;
+}
+
+// Headline win-rate card for the drawer. The backend already ships
+// winRate / gradedTotal / levelStats on /api/pair/{pair}; the drawer was
+// throwing all of it away and rendering only the flat table.
+function renderDrawerWinRateCard(data) {
+  const levels = data.levelStats || {};
+  const chips = ["3-agree", "2-agree", "conflict", "1-only"].map((lv) => {
+    const s = levels[lv] || {};
+    const graded = (s.win || 0) + (s.loss || 0);
+    const wr = graded ? Math.round(((s.win || 0) / graded) * 1000) / 10 : null;
+    return `<span class="level-chip">
+      <span class="level-chip__name">${escHtml(lv)}</span>
+      <span class="level-chip__wl">${s.win || 0}W/${s.loss || 0}L</span>
+      <span class="wr-bar wr-bar--${wrClass(wr)}">${fmtWr(wr)}</span>
+    </span>`;
+  }).join("");
+  return `
+    <div class="drawer__section">
+      <h3>Win Rate <span class="drawer__section-count">${data.gradedTotal || 0} graded</span></h3>
+      <div class="drawer__headline">
+        <span class="wr-bar wr-bar--${wrClass(data.winRate)} wr-bar--lg">${fmtWr(data.winRate)}</span>
+      </div>
+      <div class="level-chip-row">${chips}</div>
+    </div>`;
+}
+
+// "Which app combination works on THIS pair" — one chip per app subset.
+function renderDrawerSubsetStrip(data) {
+  const stats = data.appPairStats || {};
+  const cells = OVERALL_SUBSET_DEFS.map((def) => {
+    const s = stats[def.key] || {};
+    const graded = (s.win || 0) + (s.loss || 0);
+    if (!graded && !(s.total || 0)) return "";
+    const wr = graded ? Math.round(((s.win || 0) / graded) * 1000) / 10 : null;
+    return `<span class="level-chip">
+      <span class="level-chip__name">${escHtml(def.short)}</span>
+      <span class="level-chip__wl">${s.win || 0}W/${s.loss || 0}L</span>
+      <span class="wr-bar wr-bar--${wrClass(wr)}">${fmtWr(wr)}</span>
+    </span>`;
+  }).filter(Boolean).join("");
+  if (!cells) return "";
+  return `
+    <div class="drawer__section">
+      <h3>Win Rate by App Combination</h3>
+      <div class="level-chip-row">${cells}</div>
+    </div>`;
 }
 
 // CALL/PUT are opposites — used to derive the actual market result from a
@@ -2066,26 +2512,58 @@ function renderSimpleHistoryRows(clusterHistory, data) {
   withRunningWr.sort((a, b) => (b.ts || 0) - (a.ts || 0));
   if (withRunningWr.length === 0) return "";
 
-  const marketBadge = `<span class="pill pill--${data.category}">${escHtml((data.category || "—").toUpperCase())}</span>`;
-  const pairLabel = escHtml(data.displayPair || data.pair || "—");
+  // Stash the rows so the click handler can re-render on expand/collapse
+  // without refetching the drawer payload.
+  state.drawerHistoryRows = withRunningWr;
+  state.drawerHistoryPair = data;
 
   return withRunningWr.map((c) => {
+    const key = `${data.pair}|${c.ts}`;
+    const expanded = state.expandedHistoryRows.has(key);
     const prediction = c.direction || null;
     const result = c.outcome === 1 ? prediction : c.outcome === 0 ? oppositeDir(prediction) : null;
     const outcomeLabel = c.outcomeLabel || "—";
     const outcomeCls = c.outcome === 1 ? "win" : c.outcome === 0 ? "loss" : "unknown";
     const wr = c.__runningWr == null ? "—" : `${c.__runningWr.toFixed(1)}%`;
-    return `<tr>
-      <td>${marketBadge}</td>
-      <td>${pairLabel}</td>
-      <td class="mono">${c.candleUtc || "—"}</td>
-      <td>${prediction ? `<span class="dir dir--${prediction}">${prediction}</span>` : "—"}</td>
-      <td>${result ? `<span class="dir dir--${result}">${result}</span>` : "—"}</td>
-      <td><span class="outcome outcome--${outcomeCls}">${outcomeLabel}</span></td>
+    const apps = (c.agreeing_apps || []).map((a) => APP_LABELS[a] || a).join(" + ") || "—";
+    const detail = {
+      ...c,
+      pair: data.pair,
+      displayPair: data.displayPair,
+      category: data.category,
+      marketResult: result,
+      runningWinRate: c.__runningWr,
+    };
+    return `<tr class="hist-row${expanded ? " hist-row--open" : ""}" data-drawer-row="${escAttr(key)}" tabindex="0" role="button" aria-expanded="${expanded}">
+      <td class="mono">${escHtml(c.candleUtc || "—")}</td>
+      <td class="mono">${escHtml(apps)}</td>
+      <td>${prediction ? `<span class="dir dir--${escAttr(prediction)}">${escHtml(prediction)}</span>` : "—"}</td>
+      <td>${result ? `<span class="dir dir--${escAttr(result)}">${escHtml(result)}</span>` : "—"}</td>
+      <td><span class="outcome outcome--${outcomeCls}">${escHtml(outcomeLabel)}</span></td>
       <td class="mono">${wr}</td>
-    </tr>`;
+      <td class="hist-row__chev"><i class="fas fa-chevron-${expanded ? "up" : "down"}"></i></td>
+    </tr>
+    ${expanded ? `<tr class="hist-detail-row"><td colspan="7">${renderConsensusDetail(detail)}</td></tr>` : ""}`;
   }).join("");
 }
+
+// Expand/collapse for the drawer's history rows. Delegated so it survives
+// the drawer being re-rendered.
+document.addEventListener("click", (e) => {
+  const tr = e.target.closest?.("[data-drawer-row]");
+  if (!tr) return;
+  if (e.target.closest("[data-open-pair]")) return;
+  const key = tr.dataset.drawerRow;
+  if (state.expandedHistoryRows.has(key)) state.expandedHistoryRows.delete(key);
+  else state.expandedHistoryRows.add(key);
+  const body = $("drawer-history-body");
+  if (body && state.drawerHistoryPair) {
+    body.innerHTML = renderSimpleHistoryRows(
+      state.drawerHistoryPair.clusterHistory || [],
+      state.drawerHistoryPair,
+    );
+  }
+});
 
 // Delegate fav button in drawer
 document.addEventListener("click", (e) => {
