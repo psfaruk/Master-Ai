@@ -182,7 +182,90 @@ Everything on the History tab is now cross-linked:
   coming in a follow-up — currently filtered via the row's "History"
   button only)
 
+#### Signal History IA (revamped 2026-08, second pass)
+
+The History tab is now an explicit **tree with a nav stack**, not a flat set
+of sub-tabs. Previously every view just toggled a CSS class and the single
+back button always jumped straight to the top, so drilling three levels deep
+and pressing Back lost all context. Now:
+
+```
+History (folder grid)
+ ├── Signal History        ← NEW headline folder
+ │     ├── 3 Agree         → candle list → tap a row → per-app detail
+ │     ├── 2 Agree         → candle list → tap a row → per-app detail
+ │     ├── Conflict        → …
+ │     └── Single App      → …
+ ├── Overall Win Rate
+ │     └── App 1 + App 2   → per-pair list → per-pair drawer
+ ├── Backtest
+ ├── Per-Pair Stats
+ ├── App Pair Leaders
+ └── Pair Drilldown
+```
+
+- **Back pops ONE level**, and its label names the destination
+  ("Back to Signal History").
+- A **breadcrumb** renders the full path and every crumb is tappable.
+- **Every history row expands in place** into a detail card showing what
+  each of App 1 / App 2 / App 3 called on that candle, each app's own
+  win/loss verdict, which apps formed the consensus, the graded outcome,
+  and how the row moved the running win rate. This applies to both the new
+  Signal History lists and the per-pair drawer table — the backend was
+  already shipping `app_directions` / `app_outcomes` / `agreeing_apps` on
+  every cluster and the UI was discarding all of it.
+- The per-pair drawer also regained its **Win Rate** headline card
+  (overall + per-level chips) and its **Win Rate by App Combination**
+  strip.
+
+#### Durable signal ledger (`app/signal_ledger.py`) — history depth fix
+
+History depth used to be capped by whatever each upstream returned at that
+moment:
+
+| App | History source | Effective depth |
+|-----|----------------|-----------------|
+| 1 | `/api/history?limit=5000` | ~4.75 h |
+| 2 | no history endpoint | our own poller only |
+| 3 | `/api/signals?limit=500` (hard cap) | **~41 minutes** |
+
+App 3 caps at 500 rows regardless of the requested limit. For every candle
+older than ~41 minutes App 3 therefore looked *absent*, and a candle where
+all three apps had actually agreed was silently downgraded to `2-agree`
+(or `1-only`). That distorted the level populations, the per-level win
+rates, and left the 3-agree history sparse.
+
+`signal_ledger.py` generalises App 2's disk cache to **all three apps**:
+every normalized signal we ever observe is written to a disk-persisted
+ledger keyed by `(source, pair, candle_time)`, and `run_backtest()` replays
+the rows the upstreams no longer return. History depth becomes a function
+of *our* uptime and retention window (48 h by default) instead of the
+upstream's page cap, and it survives Railway redeploys. Grades are written
+back too, so a signal is graded once and keeps its verdict.
+
+Merge rules are conservative: `first_seen_sec` keeps the earliest value (a
+re-fetch must not turn a prediction into a look-ahead), `outcome` upgrades
+from `None` to a verdict but never downgrades, `direction` is never
+overwritten, and live upstream rows always win over replayed ones.
+
+Env vars: `SIGNAL_LEDGER_FILE`, `SIGNAL_LEDGER_RETENTION_HOURS`.
+
 #### API additions
+
+- **NEW** `GET /api/consensus-history` returns merged, cross-pair history
+  bucketed by agreement level — the endpoint behind the Signal History
+  folders. Params: `level` (`3-agree` / `2-agree` / `conflict` / `1-only` /
+  `all`), `direction`, `subset`, `category`, `pair`, `minutes` (1..1440),
+  `graded_only`, `limit`. Each row carries the full per-app breakdown plus
+  `marketResult` and a cumulative `runningWinRate`, so the expandable
+  detail card needs no second round trip. `byLevel` is computed *before*
+  the level filter so the folder cards stay populated whichever level is
+  open.
+- `/api/backtest` now also returns `ledgerBackfilled` (how many signals
+  came from the ledger rather than a live fetch) and a `ledger` stats
+  block — a steadily rising `ledgerBackfilled` is the proof that App 3's
+  page cap is no longer truncating history.
+
 
 - `/api/snapshot`, `/api/pairs`, `/api/pair/{pair}`, `/api/backtest` now
   return `appPairStats` for each pair (a dict keyed by app-subset).
@@ -252,6 +335,21 @@ The suite covers:
   faked, verifying cross-app alignment, NEUTRAL handling, App 2 fallback.
 - `test_new_dashboard.py` — new endpoints, per-pair win rate enrichment,
   signal timing fields, backtest cache, pair filters.
+- `test_signal_ledger.py` — ledger idempotency, first-seen/outcome merge
+  rules, retention pruning, corrupt-file tolerance, restart survival, the
+  App 3 page-out regression, and the `/api/consensus-history` filters +
+  detail payload + running win rate.
+
+Plus an offline end-to-end gate that does not need the live upstreams:
+
+```bash
+python tests/verify_backtest.py
+```
+
+It runs the real backtest pipeline against a deterministic synthetic feed
+and asserts that the 3-agree population, grading and win rate survive both
+an App 3 page-out and a simulated redeploy, without inflating cluster or
+win counts on replay.
 
 ## Environment variables
 

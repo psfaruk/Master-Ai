@@ -2151,3 +2151,132 @@ a { color: var(--blue); }
   background: rgba(59, 130, 246, 0.05);
 }
 
+
+/* ============================================================
+   History tab — breadcrumb, sub-folder cards, expandable rows
+   ============================================================ */
+
+/* Breadcrumb: shows the full path through the History tree so a deep
+   drill-down (Signal History → 3 Agree → a candle) never loses context. */
+.breadcrumb {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin: 8px 0 14px; font-size: 12px; line-height: 1.4;
+}
+.breadcrumb__link {
+  background: none; border: 0; padding: 2px 4px; cursor: pointer;
+  color: var(--accent, #38bdf8); font: inherit; border-radius: 4px;
+}
+.breadcrumb__link:hover, .breadcrumb__link:focus-visible {
+  background: rgba(56, 189, 248, .12); text-decoration: underline;
+}
+.breadcrumb__sep { opacity: .45; padding: 0 2px; }
+.breadcrumb__current { font-weight: 600; opacity: .95; }
+
+/* Sub-folder cards — the level picker inside Signal History. */
+.subfolder-grid {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+.subfolder-card {
+  display: flex; flex-direction: column; gap: 6px; text-align: left;
+  padding: 14px; border-radius: 12px; cursor: pointer;
+  background: var(--surface-2, rgba(255,255,255,.04));
+  border: 1px solid var(--border, rgba(255,255,255,.09));
+  color: inherit; font: inherit;
+  transition: border-color .15s ease, transform .15s ease;
+}
+.subfolder-card:hover, .subfolder-card:focus-visible {
+  border-color: var(--accent, #38bdf8); transform: translateY(-1px);
+}
+.subfolder-card__icon {
+  width: 34px; height: 34px; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 15px;
+}
+.subfolder-card__icon--emerald { background: rgba(16,185,129,.16); color: #34d399; }
+.subfolder-card__icon--blue    { background: rgba(56,189,248,.16); color: #38bdf8; }
+.subfolder-card__icon--amber   { background: rgba(245,158,11,.16); color: #fbbf24; }
+.subfolder-card__icon--violet  { background: rgba(139,92,246,.16); color: #a78bfa; }
+.subfolder-card__title { font-size: 15px; font-weight: 650; }
+.subfolder-card__desc  { font-size: 12px; opacity: .68; line-height: 1.45; }
+.subfolder-card__stats {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  margin-top: 4px; font-size: 12px;
+}
+.subfolder-card__stats .stat { opacity: .8; }
+.subfolder-card__note { font-size: 11px; opacity: .55; font-style: italic; }
+
+/* Summary strip above a history list. */
+.summary-strip {
+  display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center;
+  padding: 4px 0;
+}
+.summary-strip__item { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.summary-strip__item--muted { opacity: .6; }
+.summary-strip__label { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; opacity: .55; }
+
+/* Win-rate pill. */
+.wr-bar {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 650; font-variant-numeric: tabular-nums;
+}
+.wr-bar--lg { font-size: 22px; padding: 6px 16px; }
+.wr-bar--good { background: rgba(16,185,129,.18); color: #34d399; }
+.wr-bar--mid  { background: rgba(245,158,11,.18); color: #fbbf24; }
+.wr-bar--bad  { background: rgba(239,68,68,.18);  color: #f87171; }
+.wr-bar--none { background: rgba(148,163,184,.14); color: #94a3b8; }
+
+/* Expandable history rows. */
+.hist-row { cursor: pointer; transition: background .12s ease; }
+.hist-row:hover, .hist-row:focus-visible { background: rgba(255,255,255,.045); outline: none; }
+.hist-row--open { background: rgba(56,189,248,.07); }
+.hist-row__chev { text-align: right; opacity: .5; width: 28px; }
+.hist-detail-row > td { padding: 0 !important; background: rgba(0,0,0,.16); }
+
+.hist-detail { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.hist-detail__head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.hist-detail__pair { font-weight: 650; }
+.hist-detail__verdict { font-size: 12.5px; margin: 0; padding: 8px 10px; border-radius: 8px; line-height: 1.5; }
+.hist-detail__verdict--win     { background: rgba(16,185,129,.12); color: #6ee7b7; }
+.hist-detail__verdict--loss    { background: rgba(239,68,68,.12);  color: #fca5a5; }
+.hist-detail__verdict--pending { background: rgba(148,163,184,.12); color: #cbd5e1; }
+.hist-detail__meta { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; opacity: .78; }
+.hist-detail__actions { display: flex; gap: 8px; }
+
+/* Per-app breakdown cards inside an expanded row. */
+.app-card-grid {
+  display: grid; gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+.app-card {
+  display: flex; flex-direction: column; gap: 5px; align-items: flex-start;
+  padding: 10px; border-radius: 9px;
+  background: rgba(255,255,255,.045);
+  border: 1px solid rgba(255,255,255,.07);
+}
+.app-card--agree { border-color: rgba(16,185,129,.45); background: rgba(16,185,129,.07); }
+.app-card--silent { opacity: .45; }
+.app-card__name { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; opacity: .7; }
+.app-card__dir { font-size: 12px; opacity: .6; }
+
+/* Level / subset chips (drawer win-rate cards). */
+.level-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.level-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 9px; border-radius: 8px; font-size: 11.5px;
+  background: rgba(255,255,255,.045); border: 1px solid rgba(255,255,255,.07);
+}
+.level-chip__name { opacity: .72; }
+.level-chip__wl { font-variant-numeric: tabular-nums; opacity: .9; }
+.drawer__headline { margin: 6px 0 10px; }
+.drawer__hint { font-size: 11.5px; opacity: .55; margin: 2px 0 8px; }
+.panel__note { font-size: 11.5px; opacity: .6; margin: 6px 0 0; }
+.panel__sub { font-size: 12px; opacity: .62; margin: 4px 0 0; }
+.placeholder--error { color: #f87171; }
+.check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+
+@media (max-width: 560px) {
+  .subfolder-grid { grid-template-columns: 1fr; }
+  .breadcrumb { font-size: 11px; }
+  .hist-detail { padding: 10px; }
+}

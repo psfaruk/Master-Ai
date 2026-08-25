@@ -703,6 +703,207 @@ async def get_pair_history(
 
 
 # ---------------------------------------------------------------------------
+# /api/consensus-history  — merged cross-pair history by agreement level
+# ---------------------------------------------------------------------------
+
+# The consensus levels the History tab exposes as folders, in the order a
+# trader cares about them (strongest agreement first).
+CONSENSUS_LEVELS = ("3-agree", "2-agree", "conflict", "1-only")
+
+_OPPOSITE_DIR = {"CALL": "PUT", "PUT": "CALL"}
+
+
+def _new_hist_summary() -> Dict[str, Any]:
+    return {
+        "total": 0, "wins": 0, "losses": 0, "draws": 0, "pending": 0,
+        "call": 0, "put": 0, "gradedTotal": 0, "winRate": None,
+    }
+
+
+def _add_to_hist_summary(bucket: Dict[str, Any], c: Dict[str, Any]) -> None:
+    bucket["total"] += 1
+    outcome = c.get("outcome")
+    if outcome == 1:
+        bucket["wins"] += 1
+    elif outcome == 0:
+        bucket["losses"] += 1
+    elif (c.get("outcomeLabel") or "") == "DRAW":
+        bucket["draws"] += 1
+    else:
+        bucket["pending"] += 1
+    direction = c.get("direction")
+    if direction == "CALL":
+        bucket["call"] += 1
+    elif direction == "PUT":
+        bucket["put"] += 1
+
+
+def _finalize_hist_summary(bucket: Dict[str, Any]) -> Dict[str, Any]:
+    graded = bucket["wins"] + bucket["losses"]
+    bucket["gradedTotal"] = graded
+    bucket["winRate"] = round((bucket["wins"] / graded) * 100, 1) if graded else None
+    return bucket
+
+
+@router.get("/consensus-history")
+async def get_consensus_history(
+    request: Request,
+    level: str = Query(default="all"),
+    direction: str = Query(default=""),
+    subset: str = Query(default=""),
+    category: str = Query(default=""),
+    pair: str = Query(default=""),
+    minutes: int = Query(default=360, ge=1, le=1440),
+    graded_only: int = Query(default=0, ge=0, le=1),
+    limit: int = Query(default=200, ge=1, le=1000),
+):
+    """Merged, cross-pair signal history bucketed by AGREEMENT LEVEL.
+
+    This is what the History tab's "3 Agree" / "2 Agree" / "Conflict" /
+    "Single App" folders read. The existing ``/api/pair/{pair}/history``
+    answers "what happened on EUR/USD"; this one answers the question the
+    user actually asks first — **"show me every candle where all 3 apps
+    agreed, newest first, and tell me how that population performed."**
+
+    Every row carries the full per-app breakdown (which app said what, its
+    own verdict, the consensus verdict, the derived market result), so the
+    UI can expand a row into a detail card without a second round trip.
+
+    Query params
+    ------------
+    ``level``       one of ``3-agree`` / ``2-agree`` / ``conflict`` /
+                    ``1-only`` / ``all`` (default ``all``)
+    ``direction``   ``CALL`` / ``PUT`` (default: both)
+    ``subset``      app-subset key, e.g. ``app1+app2`` (default: all)
+    ``category``    ``otc`` / ``real`` (default: both)
+    ``pair``        canonical pair key (default: all)
+    ``minutes``     lookback window, 1..1440 (default 360 = the backtest's
+                    full 6h window)
+    ``graded_only`` ``1`` drops rows with no win/loss verdict yet
+    ``limit``       max rows returned (default 200) — ``total`` still
+                    reports the unclipped count
+
+    ``runningWinRate`` on each row is the cumulative win rate walking the
+    filtered population oldest → newest, so reading top-to-bottom shows how
+    the rate arrived at its current value. ``byLevel`` is always computed
+    over the window BEFORE the level filter, so the folder cards can show
+    all four counts no matter which one is open.
+    """
+    start_poller()
+    await get_or_refresh_backtest()
+    cached = get_cached_backtest() or {}
+    now_sec = int(datetime.now(timezone.utc).timestamp())
+    cutoff = now_sec - minutes * 60
+
+    level = (level or "all").strip()
+    direction = (direction or "").strip().upper()
+    category = (category or "").strip().lower()
+
+    # Flatten every pair's cluster history into one list, stamping the pair
+    # identity onto each row (the per-pair history dicts don't carry the
+    # display name / category).
+    rows: List[Dict[str, Any]] = []
+    by_level: Dict[str, Dict[str, Any]] = {k: _new_hist_summary() for k in CONSENSUS_LEVELS}
+    by_subset: Dict[str, Dict[str, Any]] = {}
+
+    for p in cached.get("perPair", []):
+        p_pair = p.get("pair", "")
+        if pair and p_pair != pair:
+            continue
+        p_category = p.get("category") or ("otc" if p_pair.endswith("_otc") else "real")
+        if category and p_category != category:
+            continue
+        p_display = p.get("displayPair") or p_pair
+        for c in p.get("history", []):
+            ts = c.get("ts", 0)
+            if ts < cutoff:
+                continue
+            # Copy before stamping — these dicts are shared references into
+            # the BacktestCache singleton (REVIEW-1 C5, third site).
+            row = {
+                **c,
+                "pair": p_pair,
+                "displayPair": p_display,
+                "category": p_category,
+                "candleUtc": _fmt_hm(ts) if ts else None,
+                "ageSec": (now_sec - ts) if ts else None,
+            }
+            # Derived market result: if the consensus WON the market moved
+            # its way; if it LOST the market moved the other way. Saves the
+            # client from re-deriving it in three different places.
+            d = row.get("direction")
+            if row.get("outcome") == 1:
+                row["marketResult"] = d
+            elif row.get("outcome") == 0:
+                row["marketResult"] = _OPPOSITE_DIR.get(d)
+            else:
+                row["marketResult"] = None
+
+            # byLevel/bySubset are computed pre-filter so the folder cards
+            # stay populated regardless of which level is currently open.
+            row_level = row.get("level")
+            if row_level in by_level:
+                _add_to_hist_summary(by_level[row_level], row)
+            sk = row.get("app_subset_key") or "none"
+            _add_to_hist_summary(by_subset.setdefault(sk, _new_hist_summary()), row)
+
+            if level != "all" and row_level != level:
+                continue
+            if direction and row.get("direction") != direction:
+                continue
+            if subset and row.get("app_subset_key") != subset:
+                continue
+            if graded_only and row.get("outcome") not in (0, 1):
+                continue
+            rows.append(row)
+
+    for bucket in by_level.values():
+        _finalize_hist_summary(bucket)
+    for bucket in by_subset.values():
+        _finalize_hist_summary(bucket)
+
+    # Running win rate: walk oldest → newest so each row shows the
+    # cumulative rate up to and including itself, then flip back to
+    # newest-first for display.
+    rows.sort(key=lambda c: c.get("ts", 0))
+    wins = losses = 0
+    summary = _new_hist_summary()
+    for row in rows:
+        _add_to_hist_summary(summary, row)
+        if row.get("outcome") == 1:
+            wins += 1
+        elif row.get("outcome") == 0:
+            losses += 1
+        graded = wins + losses
+        row["runningWinRate"] = round((wins / graded) * 100, 1) if graded else None
+        row["runningWins"] = wins
+        row["runningLosses"] = losses
+    _finalize_hist_summary(summary)
+    rows.reverse()
+
+    return _json({
+        "level": level,
+        "direction": direction or None,
+        "subset": subset or None,
+        "category": category or None,
+        "pair": pair or None,
+        "minutes": minutes,
+        "gradedOnly": bool(graded_only),
+        # Unclipped count of rows matching the filter; `items` is capped at
+        # `limit` so a 6h window on a busy account can't ship 20k rows to a
+        # phone.
+        "total": len(rows),
+        "returned": min(len(rows), limit),
+        "limit": limit,
+        "summary": summary,
+        "byLevel": by_level,
+        "bySubset": by_subset,
+        "items": rows[:limit],
+        "now": now_sec,
+    })
+
+
+# ---------------------------------------------------------------------------
 # /api/candles  — per-pair OHLC candle history
 # ---------------------------------------------------------------------------
 
