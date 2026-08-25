@@ -61,6 +61,7 @@ const TRANSLATIONS = {
     opt_dir_both: "Both directions",
     opt_graded_only: "Graded only",
     th_time: "Time", th_apps: "Apps", th_prediction: "Prediction", th_result: "Result",
+    th_winrate: "Win Rate",
     panel_backtest_title: "Consensus Accuracy Backtest",
     placeholder_run_backtest_history: 'Click "Run fresh backtest" to fetch a verdict, or wait for the auto-cached result to appear.',
     panel_perpair_title: "Per-Pair Win Rate", th_cat: "Cat", th_overall_wl: "Overall W/L", th_win_pct: "Win %",
@@ -137,6 +138,7 @@ const TRANSLATIONS = {
     opt_dir_both: "উভয় দিক",
     opt_graded_only: "শুধু গ্রেড হওয়া",
     th_time: "সময়", th_apps: "অ্যাপ", th_prediction: "প্রেডিকশন", th_result: "ফলাফল",
+    th_winrate: "জয়ের হার",
     panel_backtest_title: "কনসেনসাস নির্ভুলতা ব্যাকটেস্ট",
     placeholder_run_backtest_history: '"Run fresh backtest"-এ ক্লিক করে ফলাফল আনুন, অথবা অটো-ক্যাশড ফলাফলের জন্য অপেক্ষা করুন।',
     panel_perpair_title: "প্রতি-পেয়ার জয়ের হার", th_cat: "ক্যাট", th_overall_wl: "সর্বমোট জয়/হার", th_win_pct: "জয় %",
@@ -1834,15 +1836,21 @@ const CONSENSUS_LEVEL_META = [
 
 const APP_LABELS = { app1: "App 1", app2: "App 2", app3: "App 3" };
 
+// Win-rate → .wr-bar modifier. MUST match the thresholds and modifier
+// names the rest of the dashboard already uses (good / mid / low / none at
+// 60 / 45), otherwise the same win rate is coloured green in one panel and
+// amber in another. An earlier draft of this file used its own 65/50 split
+// and a "bad" modifier that had no CSS rule at all.
 function wrClass(wr) {
   if (wr == null) return "none";
-  if (wr >= 65) return "good";
-  if (wr >= 50) return "mid";
-  return "bad";
+  if (wr >= 60) return "good";
+  if (wr >= 45) return "mid";
+  return "low";
 }
 
 function fmtWr(wr) {
-  return wr == null ? "—" : `${wr.toFixed ? wr.toFixed(1) : wr}%`;
+  if (wr == null) return "—";
+  return `${Number(wr).toFixed(1)}%`;
 }
 
 async function fetchConsensusHistory(params = {}) {
@@ -2408,7 +2416,7 @@ function renderPairDetailHtml(data) {
       <h3>Signal History — Last ${historyMinutes} min <span class="drawer__section-count">${clusterHistory.length} candles</span></h3>
       <p class="drawer__hint"><i class="fas fa-hand-pointer"></i> Tap any row for the per-app breakdown.</p>
       <div class="table-scroll">
-        <table class="pair-table pair-table--history">
+        <table class="pair-table pair-table--history" id="drawer-history-table">
           <thead><tr>
             <th>Time</th>
             <th>Apps</th>

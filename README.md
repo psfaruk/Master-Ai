@@ -298,6 +298,44 @@ were lost on every redeploy — precisely the window a deploy interrupts.
 whether App 3's 500-row cap is still truncating history (it should grow
 with uptime instead of sitting near 41 minutes).
 
+#### UI / design-system audit (2026-08, fourth pass)
+
+The new History panels were built against a different palette from the rest
+of the app. Fixed, and locked down by `tests/test_ui_consistency.py` (64
+checks) so it cannot drift again.
+
+- **`.wr-bar` was redeclared.** The new block restyled the shared win-rate
+  pill app-wide — border-radius 4px → 999px, and the `min-width` and
+  monospace font were lost on every existing pill. Only the new `--lg`
+  modifier remains; the base and the `--good/--mid/--low/--none` rules stay
+  where they were.
+- **`wrClass()` disagreed with the rest of the dashboard.** It used 65/50
+  thresholds and returned a `bad` modifier that had no CSS rule at all,
+  while every other panel uses 60/45 and `good/mid/low/none`. The same win
+  rate therefore rendered green in one panel and amber in another.
+- **Hardcoded colours broke the light theme.** 14 hex literals and 6
+  `rgba(255,255,255,…)` surfaces — invisible on a white background. All
+  replaced with the `--bg-card` / `--border` / `--emerald` / `--red` /
+  `--blue` / `--text-dim` tokens, using the same `rgba(r,g,b,0.15)` +
+  `var(--token)` pattern the folder-card icons already use.
+- **`.stat` and the `th_winrate` i18n key** were referenced but never
+  defined.
+- **Mobile.** The consensus list is 8 columns (~45px each on a 360px
+  phone). Narrow screens now hide the two columns whose content also
+  appears in the expanded detail — Apps and the running Win Rate — leaving
+  Time / Pair / Prediction / Result / W-L. Same treatment for the drawer's
+  7-column table.
+- **Pre-existing cruft removed.** `@media (min-width: 640px)` declared
+  `.folder-grid--with-headline` twice (the first immediately overridden)
+  and held an empty rule containing only a "how we might do this" comment.
+
+The test file also checks: no duplicate ids, every `$("id")` resolves,
+every folder card has a panel, detail-row `colspan` matches the header
+column count, balanced braces, no undeclared `var()`, no empty rules,
+en/bn key parity, every referenced `data-i18n` key exists, and that
+expandable rows carry `role`/`tabindex`/`aria-expanded` and respond to
+Enter and Space.
+
 #### API additions
 
 - **NEW** `GET /api/consensus-history` returns merged, cross-pair history
@@ -383,6 +421,9 @@ The suite covers:
   faked, verifying cross-app alignment, NEUTRAL handling, App 2 fallback.
 - `test_new_dashboard.py` — new endpoints, per-pair win rate enrichment,
   signal timing fields, backtest cache, pair filters.
+- `test_ui_consistency.py` — design-system guard rails: duplicate ids,
+  orphan classes, colspan/header mismatch, hardcoded colours in the history
+  CSS, i18n parity, keyboard-operable rows, mobile column hiding.
 - `test_audit_fixes.py` — the six deep-audit regressions above: live-candle
   grading rules, cache pruning, refresh rate-limiting, shared-client reuse,
   shutdown flush, and diag ledger visibility.
