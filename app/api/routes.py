@@ -22,11 +22,22 @@ History / Backtest:
 
 Diagnostics:
   - GET /api/diag                — alignment diagnostics
+
+Signal sources (runtime URL management — Settings -> Signal Sources):
+  - GET  /api/sources            — current upstream URLs + resolved endpoints
+  - POST /api/sources            — validate + save new URLs, probe them,
+                                   purge optional caches, kick a reconnect
+  - POST /api/sources/test       — probe one app's endpoints (candidate or
+                                   saved URL) WITHOUT saving anything
+  - POST /api/sources/reset      — revert apps to env/default URLs
 """
 
 from __future__ import annotations
 
+import asyncio
+import hmac
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -59,6 +70,12 @@ from ..candle_fetcher import (
 from ..signal_aggregator import aggregate_signals, aggregate_with_raw
 from ..signal_normalize import CANDLE_SEC, candle_floor, get_candle_offset_sec
 from ..snapshot_poller import get_snapshot, refresh_snapshot, start_poller
+from ..source_config import (
+    APP_IDS,
+    get_config as get_source_config,
+    probe_app as probe_source_app,
+)
+from .. import source_config as source_config_mod
 
 router = APIRouter(prefix="/api")
 
@@ -1369,6 +1386,10 @@ async def get_diag(
         "signalLedger": ledger_stats(),
         "pairOverlap": pair_overlap,
         "offsets": offsets,
+        # Runtime source URLs — makes "which URL is each app actually being
+        # fetched from right now, and where did it come from" visible next
+        # to the per-app health data above.
+        "sources": source_config_mod.config_status(),
         "candleCoverageLast30Candles": {**coverage, "buckets": len(bucket), "appPresence": app_presence},
         "notes": [
             "offsets.modalOffsetCandles should be 0 for every app pair. A stable non-zero value means the apps label candles differently — set APP{N}_CANDLE_OFFSET to correct it.",
@@ -1377,6 +1398,299 @@ async def get_diag(
             "apps[].rawRows/normalizedSignals can stay flat even when an app is perfectly healthy — some upstreams (e.g. App 3's historical endpoint) return a fixed-size window of their newest rows, so the count plateaus while the content keeps rotating fresh underneath. Trust apps[].newestCandleLagCandles (and the freshness badge on this page) to judge whether an app is actually stale, not the raw count.",
         ],
     })
+
+
+# ---------------------------------------------------------------------------
+# /api/sources — runtime upstream URL management
+#
+# The three upstream signal apps live on Railway and get redeployed every
+# few days; every redeploy changes their subdomain. These endpoints let the
+# dashboard's Settings -> Signal Sources panel re-point the aggregator at
+# the new URLs in seconds — validate, probe, save (persisted to disk), purge
+# optional caches, and kick an immediate reconnect — without a code change
+# or a redeploy of this app. See app/source_config.py for the registry.
+# ---------------------------------------------------------------------------
+
+
+def _check_source_admin(request: Request) -> Optional[JSONResponse]:
+    """Optional write-protection for the source-URL endpoints.
+
+    By default the endpoints are open (like every other route in this
+    dashboard). Setting ``SOURCE_ADMIN_TOKEN`` on Railway requires the
+    matching ``X-Admin-Token`` header on every mutating call, so random
+    internet visitors can't repoint your upstreams.
+    """
+    expected = os.environ.get("SOURCE_ADMIN_TOKEN", "").strip()
+    if not expected:
+        return None
+    supplied = request.headers.get("x-admin-token", "")
+    if supplied and hmac.compare_digest(supplied, expected):
+        return None
+    return _json(
+        {
+            "error": "unauthorized",
+            "message": "This deployment requires the X-Admin-Token header to change signal source URLs.",
+        },
+        status=401,
+    )
+
+
+def _sources_cors_headers() -> Dict[str, str]:
+    return {
+        **NO_STORE_HEADERS,
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, X-Admin-Token",
+    }
+
+
+# Fire-and-forget reconnect tasks (kept referenced + discarded on completion
+# so shutdown never prints "Task was destroyed but it is pending!").
+_reconnect_tasks: set = set()
+
+
+def _on_reconnect_done(task: "asyncio.Task") -> None:
+    _reconnect_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning("[sources] reconnect refresh failed: %s", exc)
+
+
+async def _kick_reconnect() -> None:
+    """Best-effort immediate refresh so saved URLs start producing data NOW.
+
+    Runs after a successful save: one snapshot poll (all 3 apps + health),
+    one forced App 2 history poll, one candle-cache refresh. Any failure is
+    logged and ignored — the regular pollers will catch up on their own.
+    """
+    try:
+        await refresh_snapshot()
+    except Exception as e:  # pragma: no cover — defensive
+        logger.warning("[sources] reconnect snapshot poll failed: %s", e)
+    try:
+        await poll_app2_now()
+    except Exception as e:  # pragma: no cover — defensive
+        logger.warning("[sources] reconnect app2 poll failed: %s", e)
+    try:
+        await refresh_candles()
+    except Exception as e:  # pragma: no cover — defensive
+        logger.warning("[sources] reconnect candle refresh failed: %s", e)
+
+
+def _schedule_reconnect() -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:  # pragma: no cover — no loop in sync test context
+        return
+    task = loop.create_task(_kick_reconnect())
+    _reconnect_tasks.add(task)
+    task.add_done_callback(_on_reconnect_done)
+
+
+@router.get("/sources")
+async def get_sources():
+    """Current upstream configuration: effective base URL per app, where it
+    came from (custom / env / default), and every resolved endpoint URL the
+    aggregator fetches."""
+    return _json(get_source_config().to_dict())
+
+
+@router.options("/sources")
+@router.options("/sources/test")
+@router.options("/sources/reset")
+async def sources_preflight():
+    """CORS preflight so the panel also works if the dashboard is ever
+    hosted on a different origin than the API."""
+    return JSONResponse(status_code=204, headers=_sources_cors_headers())
+
+
+@router.post("/sources")
+async def post_sources(request: Request):
+    """Save new upstream URL(s) and reconnect immediately.
+
+    Body::
+
+        {
+          "apps": {
+            "app1": {"baseUrl": "https://new-name-production.up.railway.app"},
+            "app2": {"baseUrl": "..."},
+            "app3": {"baseUrl": "..."}
+          },
+          "probe": true,               // probe the new URLs before answering (default true)
+          "purgeCaches": ["app2"]      // clear history cached from the PREVIOUS upstream
+        }
+
+    Any pasted URL shape is accepted (bare host, full endpoint URL, with or
+    without scheme) — see ``source_config.extract_base_url``. Validation is
+    atomic: one bad URL rejects the whole request and changes nothing.
+
+    On success the new URLs are persisted (survive process restarts), every
+    fetch point picks them up on its next call, and a background reconnect
+    refreshes the snapshot / App 2 history / candle cache right away.
+    """
+    deny = _check_source_admin(request)
+    if deny:
+        return deny
+
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "bad_request", "message": "Body must be JSON."}, status=400)
+    if not isinstance(body, dict):
+        return _json({"error": "bad_request", "message": "Body must be a JSON object."}, status=400)
+
+    apps = body.get("apps")
+    if not isinstance(apps, dict) or not apps:
+        return _json(
+            {
+                "error": "bad_request",
+                "message": 'Provide {"apps": {"app1": {"baseUrl": "..."}, ...}} — at least one app.',
+            },
+            status=400,
+        )
+
+    cfg = get_source_config()
+    previous = {a: cfg.get_base_url(a) for a in APP_IDS}
+
+    # Validate + apply + persist. Raises ValueError (-> 400) on ANY bad URL
+    # without mutating anything.
+    try:
+        cfg.set_apps(apps)
+    except ValueError as e:
+        return _json({"error": "invalid_url", "message": str(e)}, status=400)
+    except KeyError as e:
+        return _json({"error": "bad_request", "message": str(e)}, status=400)
+
+    # Optional cache purge for apps whose URL actually changed.
+    purge_requested = body.get("purgeCaches")
+    purged: List[str] = []
+    if isinstance(purge_requested, list):
+        for app_id in purge_requested:
+            if app_id not in APP_IDS:
+                continue
+            if cfg.get_base_url(app_id) == previous[app_id]:
+                continue  # URL didn't change — nothing to purge
+            if app_id == "app2":
+                from ..app2_cache import reset_app2_history
+
+                reset_app2_history()
+                purged.append(app_id)
+            elif app_id == "app3":
+                from ..candle_fetcher import reset_candle_cache
+
+                reset_candle_cache()
+                purged.append(app_id)
+
+    # Probe the SAVED (new) URLs so the UI can show instant feedback.
+    probes: Dict[str, Any] = {}
+    if body.get("probe", True):
+        import asyncio as _asyncio
+
+        results = await _asyncio.gather(
+            *[probe_source_app(a, timeout_sec=6.0) for a in APP_IDS]
+        )
+        probes = {r["app"]: r for r in results}
+
+    # Kick the pollers so live data starts flowing through the new URLs now.
+    _schedule_reconnect()
+
+    logger.info(
+        "[sources] URL update applied for %s — caches purged: %s",
+        ", ".join(sorted(apps.keys())) or "none",
+        purged or "none",
+    )
+    payload: Dict[str, Any] = {
+        "ok": True,
+        "applied": {a: cfg.get_base_url(a) for a in apps.keys()},
+        "changed": {a: {"from": previous[a], "to": cfg.get_base_url(a)} for a in apps.keys()},
+        "purged": purged,
+        "reconnectKicked": True,
+        "config": cfg.to_dict(),
+    }
+    if probes:
+        payload["probes"] = probes
+    return _json(payload)
+
+
+@router.post("/sources/test")
+async def post_sources_test(request: Request):
+    """Probe one app's endpoints WITHOUT saving anything.
+
+    Body::
+
+        {"app": "app1", "baseUrl": "https://candidate.up.railway.app"}
+
+    ``baseUrl`` is optional — omit it to test the currently saved config.
+    Every endpoint of the app (signals / live / history / health) is probed
+    in parallel; the response reports per-endpoint OK/FAIL, latency, row
+    count and a short error. Use this to verify a redeployed app BEFORE
+    committing the new URL.
+    """
+    deny = _check_source_admin(request)
+    if deny:
+        return deny
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    app_id = str(body.get("app", "")).strip()
+    if app_id not in APP_IDS:
+        return _json(
+            {"error": "bad_request", "message": f"'app' must be one of {', '.join(APP_IDS)}."},
+            status=400,
+        )
+
+    base_url = body.get("baseUrl")
+    if base_url is not None:
+        try:
+            from ..source_config import extract_base_url, normalize_base_url
+
+            candidate = str(base_url).strip()
+            if not candidate:
+                return _json({"error": "invalid_url", "message": f"{app_id}: URL is empty"}, status=400)
+            # validate the FULL candidate even when it's an endpoint URL
+            normalize_base_url(candidate)
+            base_url = extract_base_url(candidate)
+        except ValueError as e:
+            return _json({"error": "invalid_url", "message": f"{app_id}: {e}"}, status=400)
+
+    try:
+        result = await probe_source_app(app_id, base_url=base_url, timeout_sec=6.0)
+    except Exception as e:
+        return _json({"error": "probe_failed", "message": str(e)}, status=500)
+    return _json(result)
+
+
+@router.post("/sources/reset")
+async def post_sources_reset(request: Request):
+    """Revert saved URL overrides back to the env var / built-in defaults.
+
+    Body (both optional)::
+
+        {"apps": ["app1", "app2"]}   // default: all three
+
+    """
+    deny = _check_source_admin(request)
+    if deny:
+        return deny
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    app_ids: Optional[List[str]] = None
+    if isinstance(body, dict) and isinstance(body.get("apps"), list) and body["apps"]:
+        app_ids = [str(a) for a in body["apps"]]
+
+    cfg = get_source_config()
+    cfg.reset(app_ids)
+    _schedule_reconnect()
+    return _json({"ok": True, "config": cfg.to_dict()})
 
 
 # ---------------------------------------------------------------------------

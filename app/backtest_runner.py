@@ -86,6 +86,13 @@ MIN_SAMPLE_60MIN = 3
 _DRAW_RE = re.compile(r"draw|void", re.IGNORECASE)
 
 SOURCES = {
+    # These full URLs are the BUILT-IN DEFAULTS, kept for reference (and for
+    # tests asserting the limit choices). The backtest resolves its fetch
+    # URLs at RUN TIME through app/source_config.py (see run_backtest) so a
+    # redeployed Railway app can be repointed from Settings -> Signal
+    # Sources without a code change. Do NOT fetch SOURCES[...]["url"]
+    # directly.
+    #
     # App 1's /api/history accepts limit=5000 (verified live — it returned
     # 5000 rows ≈ 4.75h of history). The previous limit=500 only reached
     # ~28 minutes back, which silently starved the per-pair win-rate
@@ -875,10 +882,15 @@ async def run_backtest() -> Dict[str, Any]:
     # — which made a single slow upstream add 2-4s to every backtest run
     # (and the snapshot poller blocks on backtest refresh, so the whole
     # dashboard stalled). (REVIEW-1 H11.)
+    #
+    # URLs resolve through source_config at call time — the backtest
+    # automatically follows URL changes saved from the dashboard.
+    from .source_config import resolve_source_url
+
     app1_d, app3_hist_d, app3_live_d = await asyncio.gather(
-        _try_fetch(SOURCES["app1"]["url"], "app1"),
-        _try_fetch(SOURCES["app3"]["url"], "app3 history"),
-        _try_fetch(SOURCES["app3_live"]["url"], "app3 live"),
+        _try_fetch(resolve_source_url("app1", "history_full"), "app1"),
+        _try_fetch(resolve_source_url("app3", "history"), "app3 history"),
+        _try_fetch(resolve_source_url("app3", "signals"), "app3 live"),
     )
 
     if app1_d is not None:

@@ -27,6 +27,14 @@ os.environ["APP2_CACHE_FILE"] = os.path.join(_APP2_CACHE_TMP, "app2_cache.json")
 _LEDGER_TMP = tempfile.mkdtemp(prefix="master-ai-test-ledger-")
 os.environ["SIGNAL_LEDGER_FILE"] = os.path.join(_LEDGER_TMP, "signal_ledger.json")
 
+# Same isolation for the runtime source-URL registry (Settings -> Signal
+# Sources). A dev machine's saved data/source_config.json (pointing the
+# upstreams at whatever the user's Railway apps are called TODAY) would
+# otherwise leak into every test that builds routes keyed by the built-in
+# default URLs. Point persistence at a per-session temp file instead.
+_SOURCE_CFG_TMP = tempfile.mkdtemp(prefix="master-ai-test-sources-")
+os.environ["SOURCE_CONFIG_FILE"] = os.path.join(_SOURCE_CFG_TMP, "source_config.json")
+
 import pytest  # noqa: E402  (must come after the sys.path shim above)
 
 
@@ -53,3 +61,18 @@ def _reset_signal_ledger():
     _wipe_ledger()
     yield
     _wipe_ledger()
+
+
+@pytest.fixture(autouse=True)
+def _reset_source_config():
+    """Give every test the pristine default source URLs.
+
+    Tests that POST new URLs through /api/sources must not leak their
+    overrides into other tests (the config is a process-wide singleton
+    backed by a disk file, exactly like the ledger).
+    """
+    from app.source_config import get_config
+
+    get_config().reset_for_tests()
+    yield
+    get_config().reset_for_tests()

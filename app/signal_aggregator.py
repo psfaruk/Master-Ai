@@ -36,6 +36,7 @@ from .app2_cache import (
     start_app2_cache_poller,
 )
 from .http_fetcher import fetch_json_with_timeout
+from .source_config import get_base_url, resolve_source_url
 from .signal_normalize import (
     CANDLE_SEC,
     DIRECTION_KEYS,
@@ -154,6 +155,12 @@ class AggregatedResponse:
 # Source app definitions
 # ---------------------------------------------------------------------------
 
+# METADATA ONLY — the actual fetch URLs are resolved at call time through
+# app/source_config.py (``resolve_source_url``), so the dashboard's
+# Settings -> Signal Sources panel can repoint a redeployed Railway app
+# without a code change. The ``base_url``/``*_path`` values below are the
+# BUILT-IN DEFAULTS kept for reference/fallback; never fetch from them
+# directly.
 SOURCES: List[Dict[str, Any]] = [
     {
         "id": "app1",
@@ -227,9 +234,8 @@ class NormalizeResult:
 
 
 async def _fetch_app1_health() -> Dict[str, Any]:
-    src = SOURCES[0]
     try:
-        d = await fetch_json_with_timeout(f"{src['base_url']}{src['health_path']}", 6.0)
+        d = await fetch_json_with_timeout(resolve_source_url("app1", "health"), 6.0)
         if not d:
             return {"error": "empty_health"}
         connected = d.get("quotex_connected") is True
@@ -278,9 +284,8 @@ async def _fetch_app1_health() -> Dict[str, Any]:
 
 
 async def _fetch_app2_health() -> Dict[str, Any]:
-    src = SOURCES[1]
     try:
-        d = await fetch_json_with_timeout(f"{src['base_url']}{src['health_path']}", 6.0)
+        d = await fetch_json_with_timeout(resolve_source_url("app2", "health"), 6.0)
         if not d:
             return {"error": "empty_health"}
         connected = d.get("connected") is True
@@ -299,9 +304,8 @@ async def _fetch_app2_health() -> Dict[str, Any]:
 
 
 async def _fetch_app3_health() -> Dict[str, Any]:
-    src = SOURCES[2]
     try:
-        d = await fetch_json_with_timeout(f"{src['base_url']}{src['health_path']}", 6.0)
+        d = await fetch_json_with_timeout(resolve_source_url("app3", "health"), 6.0)
         if not d:
             return {"error": "empty_health"}
         connected = d.get("connected") is True
@@ -441,8 +445,8 @@ async def fetch_app1(freshness_window_sec: int, now: int) -> NormalizeResult:
             return None
 
     hist_data, live_data = await asyncio.gather(
-        _try(f"{src['base_url']}{src['signals_path']}"),
-        _try(f"{src['base_url']}{src['live_path']}"),
+        _try(resolve_source_url("app1", "signals")),
+        _try(resolve_source_url("app1", "live")),
     )
     if hist_data is None and live_data is None:
         return NormalizeResult(signals=[], health="down", skipped=skipped, error="fetch_failed")
@@ -585,7 +589,7 @@ async def fetch_app2(freshness_window_sec: int, now: int) -> NormalizeResult:
     data: Any = None
 
     try:
-        data = await fetch_json_with_timeout(f"{src['base_url']}{src['signals_path']}", FETCH_TIMEOUT_SEC)
+        data = await fetch_json_with_timeout(resolve_source_url("app2", "signals"), FETCH_TIMEOUT_SEC)
         if data is None:
             fetch_failed = True
     except Exception:
@@ -675,9 +679,8 @@ async def fetch_app3(freshness_window_sec: int, now: int) -> NormalizeResult:
     live_ok = False
 
     # --- 1. RESOLVED historical signals (carry WIN/LOSS outcomes) ---
-    hist_path = src.get("historical_path", "/api/signals?limit=500")
     try:
-        hist_data = await fetch_json_with_timeout(f"{src['base_url']}{hist_path}", FETCH_TIMEOUT_SEC)
+        hist_data = await fetch_json_with_timeout(resolve_source_url("app3", "history"), FETCH_TIMEOUT_SEC)
         if hist_data:
             hist_ok = True
             arr = pick_array(hist_data, ["signals", "rows", "data"])
@@ -735,7 +738,7 @@ async def fetch_app3(freshness_window_sec: int, now: int) -> NormalizeResult:
 
     # --- 2. CURRENT live signals from /api/share-signals ---
     try:
-        live_data = await fetch_json_with_timeout(f"{src['base_url']}{src['signals_path']}", FETCH_TIMEOUT_SEC)
+        live_data = await fetch_json_with_timeout(resolve_source_url("app3", "signals"), FETCH_TIMEOUT_SEC)
         if live_data:
             live_ok = True
             live_arr = pick_array(live_data, ["signals", "rows", "data"])
@@ -1000,7 +1003,7 @@ async def aggregate_signals(freshness_window_sec: int = 600) -> AggregatedRespon
         apps.append(AppStatus(
             id=src["id"],
             name=src["name"],
-            url=src["base_url"],
+            url=get_base_url(src["id"]),
             online=online,
             last_checked=timestamp_ms,
             signal_count=len(r.signals),

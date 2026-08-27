@@ -336,7 +336,56 @@ en/bn key parity, every referenced `data-i18n` key exists, and that
 expandable rows carry `role`/`tabindex`/`aria-expanded` and respond to
 Enter and Space.
 
+#### Runtime source URLs — Settings → Signal Sources (NEW)
+
+The three upstream signal apps live on Railway and get redeployed every few
+days; every redeploy changes their subdomains. Previously the URLs were
+hardcoded in FOUR modules, so each redeploy silently killed the dashboard's
+data until someone edited code and redeployed this app too.
+
+All upstream URLs now resolve through a single registry —
+`app/source_config.py` — **at fetch time**. The dashboard's
+**Settings → Signal Sources** panel can repoint any app in seconds:
+
+1. Paste the app's new Railway URL — ANY shape works:
+   - bare host: `my-app-production.up.railway.app`
+   - with scheme: `https://my-app-production.up.railway.app`
+   - a full ENDPOINT URL: `https://my-app.up.railway.app/api/share-signals`
+     (the base is cut at the earliest known endpoint path, so any single
+     endpoint configures the whole app)
+2. (optional) tap **Test** — every endpoint of that app is probed in
+   parallel; the result shows OK/FAIL, latency and row count per endpoint.
+3. Tap **Save & Reconnect** — URLs are validated (atomically — one bad URL
+   rejects the whole save), normalized, persisted to disk, and the
+   pollers kick an immediate reconnect. Signals flow again within a poll
+   cycle (~1s during the candle-open burst), **no restart, no redeploy**.
+
+Precedence: saved override (disk) > `APPx_BASE_URL` env var > built-in
+default. A "Reset to defaults" button and `POST /api/sources/reset` revert
+to the env/default URLs. When an app's URL changes, an optional checkbox
+purges the history cached from the PREVIOUS upstream (App 2's signal cache
+/ App 3's candle cache).
+
+Optional write-protection: set `SOURCE_ADMIN_TOKEN` on Railway and every
+mutating call must carry a matching `X-Admin-Token` header.
+
 #### API additions
+
+- **NEW** `GET /api/sources` — current upstream config: effective base URL
+  per app, where it came from (custom / env / default), and every resolved
+  endpoint URL the aggregator fetches.
+- **NEW** `POST /api/sources` — validate + save new URLs, probe them
+  (per-endpoint OK/latency/rows), purge optional caches, kick a reconnect.
+  Body: `{"apps": {"app1": {"baseUrl": "..."}}, "probe": true,
+  "purgeCaches": ["app2"]}`.
+- **NEW** `POST /api/sources/test` — probe one app's endpoints (a candidate
+  URL or the saved config) WITHOUT saving anything. The "Test" button.
+- **NEW** `POST /api/sources/reset` — revert saved overrides to
+  env/default. Body: `{"apps": ["app1"]}` (default: all).
+- `GET /api/diag` now returns a `sources` block (effective URL + origin per
+  app) next to the per-app health data.
+
+#### API additions (earlier)
 
 - **NEW** `GET /api/consensus-history` returns merged, cross-pair history
   bucketed by agreement level — the endpoint behind the Signal History
@@ -431,6 +480,19 @@ The suite covers:
   rules, retention pruning, corrupt-file tolerance, restart survival, the
   App 3 page-out regression, and the `/api/consensus-history` filters +
   detail payload + running win rate.
+- `test_source_config.py` — the URL registry: normalization of every
+  paste shape, base extraction from full endpoint URLs, precedence
+  (override > env > default), atomic validation, persistence round-trip,
+  corrupt-file tolerance, and probe result shaping.
+- `test_sources_api.py` — the `/api/sources` endpoints: atomic 400s,
+  save + live-apply (a follow-up `aggregate_signals()` fetches from the
+  NEW urls and produces a 3-agree consensus), candidate probing without
+  saving, cache purge semantics, `SOURCE_ADMIN_TOKEN` protection, reset.
+- `test_source_reconnect_e2e.py` — the full redeploy simulation: three
+  REAL local HTTP servers (one per app, like three Railway deployments),
+  a live 3-agree snapshot + graded backtest, then every app "redeploys" on
+  new ports and the panel's save call reconnects everything without a
+  restart. Run it standalone with `python tests/test_source_reconnect_e2e.py`.
 
 Plus an offline end-to-end gate that does not need the live upstreams:
 
@@ -453,6 +515,23 @@ All optional. The app uses in-memory caches only — no database.
 APP1_CANDLE_OFFSET=0
 APP2_CANDLE_OFFSET=0
 APP3_CANDLE_OFFSET=0
+
+# Upstream base-URL overrides (layer 2 of 3 — the Settings panel's saved
+# overrides win over these, the built-in defaults are the fallback).
+# Set these on Railway if you already know the new app URLs at deploy time.
+APP1_BASE_URL=https://minimum-pair-production.up.railway.app
+APP2_BASE_URL=https://binary-signals-app-production.up.railway.app
+APP3_BASE_URL=https://otclivedata.up.railway.app
+
+# Where the Settings panel's saved URLs are persisted (defaults to
+# <repo>/data/source_config.json, which survives restarts and redeploys of
+# THIS service when /data is on a volume).
+SOURCE_CONFIG_FILE=
+
+# If set, POST /api/sources* requires the matching X-Admin-Token header —
+# recommended on public deployments so strangers can't repoint your
+# upstreams.
+SOURCE_ADMIN_TOKEN=
 
 # Port the FastAPI app listens on (Railway injects this automatically).
 PORT=8000

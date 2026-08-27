@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from .http_fetcher import fetch_json_with_timeout
+from .source_config import resolve_source_url
 from .signal_normalize import (
     CANDLE_SEC,
     DIRECTION_KEYS,
@@ -46,6 +47,9 @@ from .signal_normalize import (
 
 logger = logging.getLogger("master-ai.candle_fetcher")
 
+# The App 3 candle endpoints are resolved at fetch time through
+# source_config.py (Settings -> Signal Sources can repoint a redeployed
+# Railway app). These constants remain as the documented built-in defaults.
 APP3_HIST_URL = "https://otclivedata.up.railway.app/api/signals?limit=500"
 APP3_LIVE_URL = "https://otclivedata.up.railway.app/api/share-signals"
 
@@ -180,7 +184,7 @@ def _upsert_candle(st: CandleCacheState, c: Candle) -> None:
 
 
 async def _fetch_historical_candles() -> List[Candle]:
-    data = await fetch_json_with_timeout(APP3_HIST_URL, 10.0)
+    data = await fetch_json_with_timeout(resolve_source_url("app3", "history"), 10.0)
     if not data:
         return []
     rows = pick_array(data, ["signals", "rows", "data"])
@@ -234,7 +238,7 @@ async def _fetch_historical_candles() -> List[Candle]:
 
 
 async def _fetch_live_candles() -> List[Candle]:
-    data = await fetch_json_with_timeout(APP3_LIVE_URL, 8.0)
+    data = await fetch_json_with_timeout(resolve_source_url("app3", "signals"), 8.0)
     if not data:
         return []
     rows = pick_array(data, ["signals", "rows", "data"])
@@ -478,6 +482,15 @@ def reset_candle_cache_for_tests() -> None:
     st.last_fetch_ok = False
     st.last_opportunistic_refresh_at = 0.0
     st.opportunistic_tasks.clear()
+
+
+def reset_candle_cache() -> None:
+    """Public alias of ``reset_candle_cache_for_tests`` for production use.
+
+    Called by POST /api/sources when the App 3 URL changes and the user
+    opts to purge candles collected from the PREVIOUS upstream.
+    """
+    reset_candle_cache_for_tests()
 
 
 def get_candle_cache_stats() -> dict:

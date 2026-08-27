@@ -618,6 +618,11 @@
           <span class="folder-card__title" data-i18n="folder_filters_title">Trading Filters</span>
           <span class="folder-card__desc" data-i18n="folder_filters_desc">Min win rate, freshness, conflicts, favorites</span>
         </button>
+        <button class="folder-card" data-folder="sources" type="button">
+          <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-satellite-dish"></i></span>
+          <span class="folder-card__title" data-i18n="folder_sources_title">Signal Sources</span>
+          <span class="folder-card__desc" data-i18n="folder_sources_desc">Connect redeployed Railway app URLs — live, no code change</span>
+        </button>
         <button class="folder-card" data-folder="offsets" type="button">
           <span class="folder-card__icon folder-card__icon--amber"><i class="fas fa-clock"></i></span>
           <span class="folder-card__title" data-i18n="folder_offsets_title">App Candle Offsets</span>
@@ -730,6 +735,27 @@
                 <label data-i18n="lbl_favorites">Favorites</label>
                 <div id="favorites-list" class="favorites-list"><span class="placeholder" data-i18n="placeholder_no_favorites">No favorites yet — tap ★ next to a pair.</span></div>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-panel" id="settings-sources">
+          <div class="panel">
+            <div class="panel__header"><h2 data-i18n="folder_sources_title">Signal Sources</h2></div>
+            <div class="panel__body">
+              <p class="hint" data-i18n="hint_sources_intro">Paste each app's new Railway URL after a redeploy, then Save &amp; Reconnect — signals reconnect in seconds, no code change. Any URL shape works: bare host, with https://, or a full endpoint URL.</p>
+              <div id="sources-list"><p class="placeholder" data-i18n="loading_ellipsis">Loading…</p></div>
+              <div class="src-actions">
+                <label class="src-purge" id="src-purge-row" hidden>
+                  <input type="checkbox" id="src-purge">
+                  <span data-i18n="lbl_sources_purge">Also clear cached history from the previous URLs</span>
+                </label>
+              </div>
+              <div class="src-actions">
+                <button class="btn btn--primary" id="btn-sources-save" data-i18n="btn_sources_save">Save &amp; Reconnect</button>
+                <button class="btn btn--ghost" id="btn-sources-reset" data-i18n="btn_sources_reset">Reset to defaults</button>
+              </div>
+              <div id="sources-result" aria-live="polite"></div>
             </div>
           </div>
         </div>

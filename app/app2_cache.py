@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from .http_fetcher import fetch_json_with_timeout
+from .source_config import resolve_source_url
 from .signal_normalize import (
     DIRECTION_KEYS,
     PAIR_KEYS,
@@ -49,6 +50,9 @@ from .signal_normalize import (
 
 logger = logging.getLogger("master-ai.app2_cache")
 
+# The App 2 endpoint URL is resolved at poll time through source_config.py,
+# so a redeployed Railway app can be repointed from the dashboard without a
+# code change. This constant remains as the documented built-in default.
 APP2_URL = "https://binary-signals-app-production.up.railway.app/api/share-signals"
 POLL_INTERVAL_SEC = 8.0
 # Keep at least LOOKBACK_SEC + 1h of history so the 6-hour backtest actually
@@ -345,7 +349,7 @@ async def _poll_app2() -> None:
         return
     st.poll_in_progress = True
     try:
-        data = await fetch_json_with_timeout(APP2_URL, 8.0)
+        data = await fetch_json_with_timeout(resolve_source_url("app2", "signals"), 8.0)
         rows = pick_array(data, ["rows", "signals", "data", "items"])
         if not rows:
             st.last_poll_ok = data is not None
@@ -475,6 +479,18 @@ def reset_app2_cache_for_tests() -> None:
     st = _get_state()
     st.cache.clear()
     st.dirty = False
+
+
+def reset_app2_history() -> None:
+    """Public alias of ``reset_app2_cache_for_tests`` for production use.
+
+    Called by POST /api/sources when the App 2 URL changes and the user
+    opts to purge history collected from the PREVIOUS upstream — after a
+    redeploy the old rows are still valid App 2 history, but if the new
+    URL points at a DIFFERENT app the stale rows would poison the
+    consensus.
+    """
+    reset_app2_cache_for_tests()
 
 
 def get_app2_cache_stats() -> dict:

@@ -100,6 +100,19 @@ const TRANSLATIONS = {
     placeholder_loading_overall: "Loading overall win rate…",
     th_signals: "Signals", th_wl: "W/L", th_action: "History",
     placeholder_loading_subsetpairs: "Loading…",
+    folder_sources_title: "Signal Sources", folder_sources_desc: "Connect redeployed Railway app URLs — live, no code change",
+    hint_sources_intro: "Paste each app's new Railway URL after a redeploy, then Save & Reconnect — signals reconnect in seconds, no code change. Any URL shape works: bare host, with https://, or a full endpoint URL.",
+    lbl_sources_purge: "Also clear cached history from the previous URLs",
+    btn_sources_save: "Save & Reconnect", btn_sources_reset: "Reset to defaults", btn_sources_test: "Test",
+    src_chip_default: "default", src_chip_env: "env", src_chip_custom: "custom",
+    src_testing: "Testing…", src_saving: "Saving…",
+    src_test_ok: "OK", src_test_fail: "FAIL",
+    src_saved_ok: "Saved — live data now flows from the new URLs.",
+    src_saved_unreachable: "Saved, but some apps did not answer — check the results and test again.",
+    src_no_change: "No URL changed — nothing to save.",
+    src_confirm_reset: "Reset ALL source URLs back to the defaults?",
+    src_load_fail: "Could not load source config",
+    src_reached: "reachable", src_unreachable: "not reachable",
   },
   bn: {
     nav_home: "হোম", nav_signals: "সিগন্যাল", nav_history: "হিস্ট্রি", nav_settings: "সেটিংস",
@@ -177,6 +190,19 @@ const TRANSLATIONS = {
     placeholder_loading_overall: "সর্বমোট জয়ের হার লোড হচ্ছে…",
     th_signals: "সিগন্যাল", th_wl: "জয়/হার", th_action: "হিস্ট্রি",
     placeholder_loading_subsetpairs: "লোড হচ্ছে…",
+    folder_sources_title: "সিগন্যাল সোর্স", folder_sources_desc: "রিডিপ্লয় হওয়া Railway অ্যাপের URL যুক্ত করুন — লাইভ, কোড ছাড়াই",
+    hint_sources_intro: "রিডিপ্লয়ের পর প্রতিটি অ্যাপের নতুন Railway URL পেস্ট করে Save & Reconnect চাপুন — কয়েক সেকেন্ডেই সিগন্যাল সংযোগ হয়ে যাবে, কোনো কোড লাগবে না। যেকোনো ফরম্যাট চলবে: শুধু হোস্ট, https:// সহ, বা সম্পূর্ণ এন্ডপয়েন্ট URL।",
+    lbl_sources_purge: "আগের URL থেকে জমা হওয়া ক্যাশড হিস্ট্রিও মুছে ফেলুন",
+    btn_sources_save: "সেভ ও রিকানেক্ট", btn_sources_reset: "ডিফল্টে ফিরিয়ে আনুন", btn_sources_test: "টেস্ট",
+    src_chip_default: "ডিফল্ট", src_chip_env: "এনভ", src_chip_custom: "কাস্টম",
+    src_testing: "টেস্ট হচ্ছে…", src_saving: "সেভ হচ্ছে…",
+    src_test_ok: "ঠিক আছে", src_test_fail: "ব্যর্থ",
+    src_saved_ok: "সেভ হয়েছে — নতুন URL থেকে লাইভ ডেটা আসা শুরু করেছে।",
+    src_saved_unreachable: "সেভ হয়েছে, কিন্তু কিছু অ্যাপ সাড়া দেয়নি — ফলাফল দেখে আবার টেস্ট করুন।",
+    src_no_change: "কোনো URL পরিবর্তন হয়নি — সেভ করার কিছু নেই।",
+    src_confirm_reset: "সব সোর্স URL কি ডিফল্টে ফিরিয়ে আনা হবে?",
+    src_load_fail: "সোর্স কনফিগ লোড করা যায়নি",
+    src_reached: "সংযোগ হয়েছে", src_unreachable: "সংযোগ হয়নি",
   },
 };
 
@@ -703,6 +729,7 @@ function render() {
   renderConsensusHighlights(state.snapshot.pairs);
   renderPairTable();
   renderBacktestStatus();
+  updateSourceDots();
   // Signal feed is polled separately for finer cadence.
 }
 
@@ -2685,6 +2712,188 @@ function renderDiag(d) {
   `;
 }
 
+// ====== Signal Sources (Settings → Signal Sources) ======
+// Lets the user repoint the aggregator at redeployed Railway apps from the
+// UI — no code change, no redeploy. The backend (app/source_config.py)
+// validates + normalizes + persists the URLs and every fetch point resolves
+// them at call time, so saving takes effect on the next poll (~1s during
+// the candle-open burst).
+let sourceConfig = null;
+
+async function loadSourcesUI() {
+  const list = $("sources-list");
+  if (!list) return;
+  try {
+    const res = await fetch("/api/sources", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    sourceConfig = await res.json();
+    renderSources();
+  } catch (e) {
+    list.innerHTML = `<p class="placeholder placeholder--error">${escHtml(t("src_load_fail"))}: ${escHtml(e.message)}</p>`;
+  }
+}
+
+function _srcDotClass(appId) {
+  const a = (state.snapshot?.apps || []).find((x) => x.id === appId);
+  if (!a) return "";
+  if (a.health === "ok") return " src-dot--ok";
+  if (a.health === "down" || a.health === "disconnected") return " src-dot--bad";
+  return " src-dot--warn";
+}
+
+function updateSourceDots() {
+  $$("#sources-list .src-app").forEach((row) => {
+    const dot = row.querySelector(".src-dot");
+    if (dot) dot.className = "src-dot" + _srcDotClass(row.dataset.app);
+  });
+}
+
+function _endpointKind(url) {
+  return String(url || "").replace(/^https?:\/\/[^/]+/, "").split("?")[0] || "endpoint";
+}
+
+function renderSources() {
+  const list = $("sources-list");
+  if (!list || !sourceConfig) return;
+  list.innerHTML = (sourceConfig.apps || []).map((app) => `
+    <div class="src-app" data-app="${escAttr(app.id)}">
+      <div class="src-app__head">
+        <span class="src-dot${_srcDotClass(app.id)}"></span>
+        <span class="src-app__name">${escHtml(app.shortName)} — ${escHtml(app.name)}</span>
+        <span class="src-chip src-chip--${escAttr(app.source)}">${escHtml(t("src_chip_" + app.source))}</span>
+        <button class="btn btn--ghost btn--sm src-test" type="button">${escHtml(t("btn_sources_test"))}</button>
+      </div>
+      <input class="src-url-input" type="url" inputmode="url" autocomplete="off" spellcheck="false"
+             placeholder="https://<new-name>.up.railway.app"
+             value="${escAttr(app.baseUrl || "")}" aria-label="${escAttr(app.shortName)} URL">
+      <div class="src-endpoints">${escHtml(Object.values(app.endpoints || {}).map((e) => _endpointKind(e.url)).join("  ·  "))}</div>
+      <div class="src-test-result"></div>
+    </div>
+  `).join("");
+  $$("#sources-list .src-app").forEach((row) => {
+    row.querySelector(".src-test")?.addEventListener("click", () => testSourceApp(row));
+    row.querySelector(".src-url-input")?.addEventListener("input", () => {
+      const id = row.dataset.app;
+      const val = row.querySelector(".src-url-input")?.value?.trim() || "";
+      const cur = (sourceConfig?.apps || []).find((a) => a.id === id)?.baseUrl || "";
+      const purgeRow = $("src-purge-row");
+      if (purgeRow && val && val !== cur) purgeRow.hidden = false;
+    });
+  });
+}
+
+async function testSourceApp(row) {
+  const appId = row.dataset.app;
+  const input = row.querySelector(".src-url-input");
+  const out = row.querySelector(".src-test-result");
+  const btn = row.querySelector(".src-test");
+  if (!out || !btn) return;
+  btn.disabled = true;
+  out.innerHTML = `<p class="placeholder">${escHtml(t("src_testing"))}</p>`;
+  try {
+    const res = await fetch("/api/sources/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ app: appId, baseUrl: input ? input.value.trim() : "" }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.message || `HTTP ${res.status}`);
+    out.innerHTML = Object.values(d.endpoints || {}).map((e) => e.ok
+      ? `<span class="src-endpoint-chip src-endpoint-chip--ok"><strong>${escHtml(_endpointKind(e.url))}</strong> ${escHtml(t("src_test_ok"))} · ${e.rows} rows · ${e.latencyMs}ms</span>`
+      : `<span class="src-endpoint-chip src-endpoint-chip--fail"><strong>${escHtml(_endpointKind(e.url))}</strong> ${escHtml(t("src_test_fail"))} · ${escHtml(e.error || "error")}</span>`
+    ).join("")
+    + `<span class="src-reach ${d.reachable ? "src-reach--ok" : "src-reach--bad"}">${escHtml(d.reachable ? t("src_reached") : t("src_unreachable"))}</span>`;
+  } catch (e) {
+    out.innerHTML = `<p class="placeholder placeholder--error">${escHtml(e.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function _srcSaveAppLine(p) {
+  const eps = Object.values(p.endpoints || {})
+    .map((e) => `${_endpointKind(e.url)}: ${e.ok ? t("src_test_ok") : t("src_test_fail")}`)
+    .join(" · ");
+  return `<p class="src-save-app ${p.reachable ? "src-save-app--ok" : "src-save-app--bad"}"><strong>${escHtml(p.app)}</strong> ${escHtml(eps)}</p>`;
+}
+
+$("btn-sources-save")?.addEventListener("click", async () => {
+  const btn = $("btn-sources-save");
+  const resultBox = $("sources-result");
+  if (!btn || !sourceConfig) return;
+  const apps = {};
+  const changed = [];
+  $$("#sources-list .src-app").forEach((row) => {
+    const id = row.dataset.app;
+    const val = row.querySelector(".src-url-input")?.value.trim() || "";
+    const cur = (sourceConfig.apps || []).find((a) => a.id === id)?.baseUrl || "";
+    if (val && val !== cur) {
+      apps[id] = { baseUrl: val };
+      changed.push(id);
+    }
+  });
+  if (!changed.length) {
+    if (resultBox) resultBox.innerHTML = `<p class="placeholder">${escHtml(t("src_no_change"))}</p>`;
+    return;
+  }
+  btn.disabled = true;
+  if (resultBox) resultBox.innerHTML = `<p class="placeholder">${escHtml(t("src_saving"))}</p>`;
+  const purge = $("src-purge")?.checked ? changed : [];
+  try {
+    const res = await fetch("/api/sources", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apps, purgeCaches: purge, probe: true }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.message || `HTTP ${res.status}`);
+    sourceConfig = d.config;
+    renderSources();
+    const probes = Object.values(d.probes || {});
+    const allOk = probes.length > 0 && probes.every((p) => p.reachable);
+    if (resultBox) {
+      resultBox.innerHTML = `<p class="src-save-msg ${allOk ? "src-save-msg--ok" : "src-save-msg--warn"}">${escHtml(allOk ? t("src_saved_ok") : t("src_saved_unreachable"))}</p>`
+        + probes.map(_srcSaveAppLine).join("");
+    }
+    const purgeRow = $("src-purge-row");
+    if (purgeRow) purgeRow.hidden = true;
+    const purgeChk = $("src-purge");
+    if (purgeChk) purgeChk.checked = false;
+    // Reconnect the dashboard immediately — don't wait for the next poll.
+    pollSnapshot();
+    pollSignalFeed();
+    refreshBacktestStatus();
+  } catch (e) {
+    if (resultBox) resultBox.innerHTML = `<p class="placeholder placeholder--error">${escHtml(e.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("btn-sources-reset")?.addEventListener("click", async () => {
+  if (!confirm(t("src_confirm_reset"))) return;
+  const resultBox = $("sources-result");
+  try {
+    const res = await fetch("/api/sources/reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.message || `HTTP ${res.status}`);
+    sourceConfig = d.config;
+    renderSources();
+    if (resultBox) resultBox.innerHTML = "";
+    pollSnapshot();
+  } catch (e) {
+    if (resultBox) resultBox.innerHTML = `<p class="placeholder placeholder--error">${escHtml(e.message)}</p>`;
+  }
+});
+
+// Refresh the panel every time it opens (fresh URLs + fresh status dots).
+document.querySelector('#settings-folder-grid .folder-card[data-folder="sources"]')
+  ?.addEventListener("click", () => loadSourcesUI());
+
 // ====== Settings handlers ======
 const settingsInputs = [
   ["set-theme", "theme"],
@@ -2821,3 +3030,6 @@ applySettings();
 applyTranslations();
 startPolling();
 refreshBacktestStatus();
+// Pre-load the Signal Sources config so the Settings panel is instant and
+// the per-app status dots are wired before the first open.
+loadSourcesUI();
