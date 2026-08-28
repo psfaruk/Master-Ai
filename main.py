@@ -15,6 +15,7 @@ Or via the Railway start command::
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -132,6 +133,28 @@ app.include_router(api_router)
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+# ---- Static asset cache-busting version ------------------------------
+# Browsers are free to cache /static/dashboard.js|css heuristically (no
+# Cache-Control header on StaticFiles), so after a redeploy users could
+# keep running the OLD JS/CSS for a long time — the redesigned UI would
+# never reach them. We fingerprint the two assets at startup (mtime+size)
+# and stamp every reference as ?v=<hash>, so any deploy that changes the
+# files forces every browser to fetch the fresh copies.
+def _asset_version() -> str:
+    h = hashlib.sha1()
+    for fname in ("dashboard.css", "dashboard.js"):
+        try:
+            st = os.stat(os.path.join(STATIC_DIR, fname))
+            h.update(fname.encode())
+            h.update(str(st.st_mtime_ns).encode())
+            h.update(str(st.st_size).encode())
+        except OSError:
+            h.update(fname.encode())
+    return h.hexdigest()[:10]
+
+
+ASSET_VERSION = _asset_version()
+
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
@@ -140,7 +163,7 @@ async def dashboard(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
-        context={"version": "1.0.0"},
+        context={"version": "1.0.0", "asset_version": ASSET_VERSION},
     )
 
 

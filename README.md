@@ -85,14 +85,58 @@ thumb-reachable):
 │            Data & About (clear cache, reset, version, GitHub)│
 │                                                              │
 ├──────────────────────────────────────────────────────────────┤
-│ BOTTOM NAV: 🏠 Home  📡 Signals  📊 History  ⚙ Settings       │
+│ NAV: phones → bottom nav (🏠 📡 📊 ⚙)                         │
+│      desktop ≥1100px → fixed left sidebar (same 4 items)     │
 └──────────────────────────────────────────────────────────────┘
 ```
 
+### Desktop layout (added 2026-08)
+
+At viewports ≥1100px the bottom navigation is replaced by a **fixed left
+sidebar** (brand + the same 4 tabs + live status dot), and the content area
+shifts right and widens — tables, folder grids and the filter row stop
+feeling like a stretched phone app. Below 1100px nothing changes: phones
+keep the thumb-reachable bottom nav. Exactly one rail is visible at any
+breakpoint, and both are wired through the same `[data-tab]` handler.
+
+### Hero cards are shortcuts (added 2026-08)
+
+The four Home hero cards (3-Bot Agree / 2-Bot Agree / Conflicts / Single
+Only) are now tappable: each one jumps to the Signals tab with the matching
+**Signal Level** filter pre-applied, and their counters animate (count-up)
+when the numbers change. Motion respects `prefers-reduced-motion`.
+
+### Folder navigation actually navigates (fixed 2026-08)
+
+The History and Settings tabs are folder grids: tap a card, see exactly one
+function's detail view, Back returns to the grid. A cascade bug let the
+grid's `display: grid` author rule defeat the `hidden` attribute, so the
+grid stayed on screen **next to** the detail view — everything looked
+duplicated and messy, and the health alert banner could not be dismissed.
+A global `[hidden] { display: none !important }` rule (plus three repaired
+selectors that a bad edit had turned into no-ops like
+`.folder-detailidden]`) makes `hidden` deterministic everywhere again.
+
+### Static assets are cache-busted (added 2026-08)
+
+`/static/dashboard.js|css` are now referenced as `?v=<content hash>`
+computed at startup. Without it, browsers could keep running the previous
+UI for a long time after a redeploy — silently missing every fix.
+
+### Dropdown labels follow the language (fixed 2026-08)
+
+Switching Settings → Language re-translates every dropdown menu, and the
+selected value shown in each dropdown trigger is re-read from its menu, so
+no trigger keeps the previous language. Reset filters also restores labels
+in the active language instead of hardcoded English.
+
 ### Dropdowns
 
-- **Top bar**: Category (All / OTC / Real) — global filter
-- **Signals tab**: Level (All / 3-agree / 2-agree / Conflict / Single),
+- **Top bar**: Category (All / OTC / Real) — global filter, kept in sync
+  with the Signals tab's Market Type dropdown (they are two views of the
+  same filter; changing either updates both labels)
+- **Signals tab**: Signal Level (All / 3-agree / 2-agree / Conflict /
+  Single) — relabelled from the confusing "Candle (UTC)" in 2026-08 —
   Direction (Both / CALL / PUT)
 - **History tab**: sub-tab switch, pair drilldown picker
 - **Settings tab**: Theme, Language, Clock display, Time format,

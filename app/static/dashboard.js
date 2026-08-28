@@ -38,6 +38,7 @@ const TRANSLATIONS = {
     loading_consensus: "Loading consensus…", loading_feed: "Loading feed…",
     placeholder_run_backtest_home: "Run a backtest to see per-level accuracy.",
     filter_market_type: "Market Type", filter_candle_utc: "Candle (UTC)", filter_pair_name: "Pair Name",
+    filter_level: "Signal Level",
     filter_final_prediction: "Final Prediction",
     filter_app1_prediction: "App 1 Prediction", filter_app2_prediction: "App 2 Prediction", filter_app3_prediction: "App 3 Prediction",
     filter_agree: "Agree 2/3", filter_winrate60: "Win Rate (60m)", filter_freshness: "Freshness",
@@ -128,6 +129,7 @@ const TRANSLATIONS = {
     loading_consensus: "কনসেনসাস লোড হচ্ছে…", loading_feed: "ফিড লোড হচ্ছে…",
     placeholder_run_backtest_home: "প্রতি-স্তরের নির্ভুলতা দেখতে একটি ব্যাকটেস্ট চালান।",
     filter_market_type: "মার্কেট টাইপ", filter_candle_utc: "ক্যান্ডেল (UTC)", filter_pair_name: "পেয়ারের নাম",
+    filter_level: "সিগন্যাল লেভেল",
     filter_final_prediction: "চূড়ান্ত পূর্বাভাস",
     filter_app1_prediction: "অ্যাপ ১ পূর্বাভাস", filter_app2_prediction: "অ্যাপ ২ পূর্বাভাস", filter_app3_prediction: "অ্যাপ ৩ পূর্বাভাস",
     filter_agree: "একমত ২/৩", filter_winrate60: "জয়ের হার (৬০ মি)", filter_freshness: "সতেজতা",
@@ -338,7 +340,9 @@ function applySettings() {
 }
 
 // ====== Bottom nav + tab switching ======
-$$(".bottomnav__item").forEach((btn) => {
+// Both navigation rails (mobile bottom nav + desktop sidebar) carry a
+// data-tab attribute and are wired through the same handler.
+$$(".bottomnav__item, .sidenav__item").forEach((btn) => {
   btn.addEventListener("click", () => switchTab(btn.dataset.tab));
 });
 // Top bar brand — click to go Home. Uses querySelector (class selector)
@@ -353,7 +357,11 @@ if (brandEl) {
 
 function switchTab(name) {
   state.activeTab = name;
-  $$(".bottomnav__item").forEach((b) => b.classList.toggle("bottomnav__item--active", b.dataset.tab === name));
+  $$(".bottomnav__item, .sidenav__item").forEach((b) => {
+    const on = b.dataset.tab === name;
+    b.classList.toggle("bottomnav__item--active", on && b.classList.contains("bottomnav__item"));
+    b.classList.toggle("sidenav__item--active", on && b.classList.contains("sidenav__item"));
+  });
   $$(".tab-panel").forEach((p) => p.classList.toggle("tab-panel--active", p.id === `tab-${name}`));
   if (name === "signals") renderPairTable();
   if (name === "home") refreshBacktestStatus();
@@ -515,11 +523,28 @@ $("settings-folder-back")?.addEventListener("click", () => {
 });
 
 // ====== Dropdowns ======
+// Every wired dropdown registers itself here so labels can be re-synced
+// from their menu's selected item — needed after a language switch, when
+// applyTranslations() rewrites the <li> texts but the trigger labels would
+// otherwise keep showing the old language until the next click.
+const _dropdownRegistry = [];
+
+function resyncDropdownLabels() {
+  _dropdownRegistry.forEach(({ menuId, labelId }) => {
+    const menu = $(menuId);
+    if (!menu) return;
+    const sel = menu.querySelector("li.is-selected") || menu.querySelector("li");
+    const label = $(labelId);
+    if (sel && label) label.textContent = sel.textContent.trim();
+  });
+}
+
 function wireDropdown(triggerId, menuId, labelId, onSelect) {
   const trigger = $(triggerId);
   const menu = $(menuId);
   const label = $(labelId);
   if (!trigger || !menu) return;
+  _dropdownRegistry.push({ menuId, labelId });
   trigger.addEventListener("click", (e) => {
     e.stopPropagation();
     $$(".dropdown__menu").forEach((m) => { if (m !== menu) m.classList.remove("dropdown__menu--open"); });
@@ -556,8 +581,43 @@ const filters = {
 // Sort state for the signals table (column → 'asc' | 'desc')
 const signalsSort = { column: "agree", dir: "desc" };
 
-wireDropdown("cat-trigger", "cat-menu", "cat-label", (v) => { filters.category = v; renderPairTable(); renderPerPairTable(); });
-wireDropdown("cat-trigger2", "cat-menu2", "cat-label2", (v) => { filters.category = v; renderPairTable(); renderPerPairTable(); renderActiveFilterTags(); });
+// ---- Category filter (single source of truth for BOTH dropdowns) ----
+// The top bar and the Signals filter grid each have a category dropdown;
+// they previously updated their labels independently, so the two controls
+// could show different selections for the same filter, and changing the
+// top-bar one skipped the active-filter tags. All changes now flow through
+// setCategoryFilter() which keeps labels, selection state, the table, the
+// per-pair stats, the tags and any open Signal History view in sync.
+function syncCategoryLabels() {
+  [["cat-menu", "cat-label"], ["cat-menu2", "cat-label2"]].forEach(([menuId, labelId]) => {
+    const menu = $(menuId);
+    if (!menu) return;
+    const match = Array.from(menu.querySelectorAll("li"))
+      .find((li) => (li.dataset.value || "") === filters.category)
+      || menu.querySelector('li[data-value=""]');
+    if (!match) return;
+    menu.querySelectorAll("li").forEach((l) => l.classList.toggle("is-selected", l === match));
+    const label = $(labelId);
+    if (label) label.textContent = match.textContent.trim();
+  });
+}
+
+function setCategoryFilter(v) {
+  filters.category = v;
+  syncCategoryLabels();
+  renderPairTable();
+  renderPerPairTable();
+  renderActiveFilterTags();
+  // Signal History applies the category filter server-side — refresh
+  // whichever history view is open so the filter takes effect there too.
+  if (state.activeTab === "history") {
+    if (state.activeHistorySubtab === "consensus") renderConsensusLevels();
+    else if (state.activeHistorySubtab === "consensuslist") renderConsensusList(state.activeConsensusLevel);
+  }
+}
+
+wireDropdown("cat-trigger", "cat-menu", "cat-label", setCategoryFilter);
+wireDropdown("cat-trigger2", "cat-menu2", "cat-label2", setCategoryFilter);
 wireDropdown("level-trigger", "level-menu", "level-label", (v) => { filters.level = v; renderPairTable(); renderActiveFilterTags(); });
 wireDropdown("dir-trigger", "dir-menu", "dir-label", (v) => { filters.direction = v; renderPairTable(); renderActiveFilterTags(); });
 wireDropdown("agree-trigger", "agree-menu", "agree-label", (v) => { filters.agreeCount = parseInt(v, 10) || 0; renderPairTable(); renderActiveFilterTags(); });
@@ -602,14 +662,21 @@ $("btn-clear-filters")?.addEventListener("click", () => {
     app1Dir: "", app2Dir: "", app3Dir: "", wr60Min: 0, freshSec: 0,
     search: "", favoritesOnly: false,
   });
-  // Reset visible labels of all dropdowns
-  const resets = [
-    ["cat-label2", "All"], ["level-label", "All"],
-    ["dir-label", "All"], ["agree-label", "Any"],
-    ["app1-label", "All"], ["app2-label", "All"], ["app3-label", "All"],
-    ["wr60-label", "Any"], ["fresh-label", "Any"],
-  ];
-  resets.forEach(([id, txt]) => { const el = $(id); if (el) el.textContent = txt; });
+  // Reset visible labels of all dropdowns (category via the shared sync so
+  // BOTH category dropdowns — top bar + filter grid — agree again). The
+  // other menus get their selection cleared and labels re-read from the
+  // menu's default item, so the reset text matches the active language
+  // (hardcoded "All"/"Any" used to leak English into the Bengali UI).
+  const clearMenuSelection = (menuId) => {
+    const menu = $(menuId);
+    if (!menu) return;
+    const first = menu.querySelector('li[data-value=""]') || menu.querySelector("li");
+    menu.querySelectorAll("li").forEach((l) => l.classList.toggle("is-selected", l === first));
+  };
+  syncCategoryLabels();
+  ["level-menu", "dir-menu", "agree-menu", "app1-menu", "app2-menu", "app3-menu", "wr60-menu", "fresh-menu"]
+    .forEach(clearMenuSelection);
+  resyncDropdownLabels();
   // Reset search inputs + checkbox
   const sp = $("filter-pair-sp"); if (sp) sp.value = "";
   const searchInput = $("search-input"); if (searchInput) searchInput.value = "";
@@ -795,16 +862,60 @@ function _isAppUnhealthy(a) {
 }
 
 // ====== Hero stats ======
+// Animate numeric changes (count-up) instead of hard-swapping the text —
+// during the candle-open burst the counts can jump by several at once and
+// the movement makes the change noticeable without being distracting.
+// Respects prefers-reduced-motion.
+function animateHeroValue(el, to) {
+  const from = parseInt(el.dataset.value || "0", 10) || 0;
+  el.dataset.value = String(to);
+  const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduce || from === to) { el.textContent = String(to); return; }
+  const dur = 450;
+  const t0 = performance.now();
+  const step = (t) => {
+    const k = Math.min(1, (t - t0) / dur);
+    const eased = 1 - Math.pow(1 - k, 3);
+    el.textContent = String(Math.round(from + (to - from) * eased));
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+// Each hero card jumps to the Signals tab pre-filtered to that agreement
+// level — one tap from "how many 3-agree signals are there?" to the list.
+const HERO_LEVELS = ["3-agree", "2-agree", "conflict", "1-only"];
+
 function renderHeroStats(summary) {
-  $("stat-3agree").textContent = summary.threeBotAgree.length;
-  $("stat-2agree").textContent = summary.twoBotAgree.length;
-  $("stat-conflict").textContent = summary.conflicts.length;
-  $("stat-single").textContent = summary.singleOnly.length;
+  animateHeroValue($("stat-3agree"), summary.threeBotAgree.length);
+  animateHeroValue($("stat-2agree"), summary.twoBotAgree.length);
+  animateHeroValue($("stat-conflict"), summary.conflicts.length);
+  animateHeroValue($("stat-single"), summary.singleOnly.length);
   // Don't override the i18n-translatable "across all pairs" sub-text with
   // a timestamp. The timestamp is already surfaced in the Top Signals panel
   // meta + in the topbar clock. Previously this overwrote the data-i18n
   // copy with `fmtTime(now, false)`, making the "across all pairs" text
   // dead and the hero cards' subtitle visually noisy. (REVIEW-2 M3.)
+}
+
+function wireHeroCards() {
+  $$(".hero").forEach((hero, i) => {
+    hero.setAttribute("role", "button");
+    hero.setAttribute("tabindex", "0");
+    const jump = () => {
+      filters.level = HERO_LEVELS[i] || "";
+      const lbl = $("level-label");
+      const menu = $("level-menu");
+      if (lbl) lbl.textContent = filters.level || "All";
+      if (menu) menu.querySelectorAll("li").forEach((l) => l.classList.toggle("is-selected", (l.dataset.value || "") === filters.level));
+      renderActiveFilterTags();
+      switchTab("signals");
+    };
+    hero.addEventListener("click", jump);
+    hero.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); jump(); }
+    });
+  });
 }
 
 // ====== App status cards ======
@@ -1355,6 +1466,7 @@ function renderSignalFeed(items, containerId) {
   // updates while on the Home tab, and returning to Home after a while away
   // makes every signal that arrived in the meantime look "new" at once,
   // firing a sound/notification burst for stuff that's minutes old.
+  const feedPrimed = state._signalFeedPrimed === true;
   const newIds = new Set();
   (items || []).forEach((it) => {
     const id = `${it.pair}|${it.source}|${it.emittedAt}`;
@@ -1368,7 +1480,14 @@ function renderSignalFeed(items, containerId) {
   // and "Browser notifications" only ever fired while sitting on the Home
   // tab, silently doing nothing the rest of the time despite both settings
   // claiming to alert on new 3-agree signals unconditionally.
-  if (newIds.size > 0) {
+  //
+  // EXCEPT on the very first fetch after page load: signalFeedIds starts
+  // empty, so EVERY feed item looked "new" and a dashboard with any 3-agree
+  // signal in the last `feedSize` items beeped + spawned notifications for
+  // signals that were minutes old. Prime the ID set silently instead.
+  if (!feedPrimed) {
+    state._signalFeedPrimed = true;
+  } else if (newIds.size > 0) {
     const isNewThreeAgree = (it) =>
       newIds.has(`${it.pair}|${it.source}|${it.emittedAt}`) && it.consensusLevel === "3-agree";
     if (state.settings.sound && items.some(isNewThreeAgree)) playBeep();
@@ -1426,9 +1545,17 @@ function renderSignalFeed(items, containerId) {
   });
 }
 
+// One shared AudioContext — creating a fresh context per beep used to hit
+// the browser's context limit (Chrome caps ~50 per page) after a long
+// session with "Sound on 3-agree" enabled, silently killing the alert.
+let _beepCtx = null;
 function playBeep() {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const Ctor = window.AudioContext || window.webkitAudioContext;
+    if (!Ctor) return;
+    if (!_beepCtx) _beepCtx = new Ctor();
+    if (_beepCtx.state === "suspended") { _beepCtx.resume().catch(() => {}); }
+    const ctx = _beepCtx;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "sine";
@@ -1888,8 +2015,11 @@ async function fetchConsensusHistory(params = {}) {
     graded_only: consensusGradedOnly() ? "1" : "0",
     limit: String(params.limit || 300),
   });
-  if (state.settings.category && state.settings.category !== "all") {
-    q.set("category", state.settings.category);
+  // The category filter lives in `filters` (top bar / Signals grid), NOT in
+  // settings — `state.settings.category` never existed, so the Market Type
+  // filter was silently dead on every Signal History view.
+  if (filters.category) {
+    q.set("category", filters.category);
   }
   const res = await fetch(`/api/consensus-history?${q}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -2162,16 +2292,25 @@ async function renderOverallWinRate() {
       if (res.ok) {
         payload = await res.json();
         state.cachedAppPairLeaders = payload;
+        state._appPairLeadersFetchedAt = Date.now();
       }
     } catch (e) {
       console.warn("[overall-winrate] fetch failed", e);
     }
   } else {
-    // Always reuse the cached payload, but refresh it in the background.
-    fetch("/api/app-pair-leaders", { cache: "no-store" })
-      .then((r) => r.ok ? r.json() : null)
-      .then((p) => { if (p) { state.cachedAppPairLeaders = p; /* re-render only if user is still on this view */ if (state.activeTab === "history" && state.activeHistorySubtab === "overall") renderOverallWinRate(); } })
-      .catch(() => {});
+    // Reuse the cached payload, but refresh it in the background AT MOST
+    // once every 30s. Previously EVERY render fired a background fetch and
+    // each successful fetch re-rendered this view, which armed the next
+    // fetch — so simply sitting on this view generated an endless request
+    // loop (one fetch per network round-trip, forever).
+    const fetchedAgeMs = Date.now() - (state._appPairLeadersFetchedAt || 0);
+    if (fetchedAgeMs > 30000) {
+      state._appPairLeadersFetchedAt = Date.now();
+      fetch("/api/app-pair-leaders", { cache: "no-store" })
+        .then((r) => r.ok ? r.json() : null)
+        .then((p) => { if (p) { state.cachedAppPairLeaders = p; /* re-render only if user is still on this view */ if (state.activeTab === "history" && state.activeHistorySubtab === "overall") renderOverallWinRate(); } })
+        .catch(() => {});
+    }
   }
 
   if (!payload) {
@@ -2394,23 +2533,34 @@ async function openPairDrawer(pair, opts = {}) {
   // opts can carry:
   //   - targetId  : render into a non-drawer element too (drilldown view)
   const targetId = typeof opts === "string" ? opts : opts.targetId;
-  state.drawerPair = pair;
-  drawerOverlay.hidden = false;
-  document.body.style.overflow = "hidden";
-  $("drawer-body").innerHTML = '<p class="placeholder">Loading…</p>';
-  $("drawer-title").textContent = "Loading…";
-  $("drawer-sub").textContent = pair;
+  // Inline render (History → Pair Drilldown): previously this ALSO popped
+  // the modal drawer over the top and locked the page scroll, so the inline
+  // result was hidden behind a duplicate modal. Render inline ONLY.
+  if (!targetId) {
+    state.drawerPair = pair;
+    drawerOverlay.hidden = false;
+    document.body.style.overflow = "hidden";
+    $("drawer-body").innerHTML = '<p class="placeholder">Loading…</p>';
+    $("drawer-title").textContent = "Loading…";
+    $("drawer-sub").textContent = pair;
+  }
   try {
     const res = await fetch(`/api/pair/${encodeURIComponent(pair)}?candle_limit=60`, { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    renderPairDrawer(data);
     if (targetId) {
       const alt = $(targetId);
       if (alt) alt.innerHTML = renderPairDetailHtml(data);
+    } else {
+      renderPairDrawer(data);
     }
   } catch (e) {
-    $("drawer-body").innerHTML = `<p class="placeholder">Failed: ${escHtml(e.message)}</p>`;
+    if (targetId) {
+      const alt = $(targetId);
+      if (alt) alt.innerHTML = `<p class="placeholder">Failed: ${escHtml(e.message)}</p>`;
+    } else {
+      $("drawer-body").innerHTML = `<p class="placeholder">Failed: ${escHtml(e.message)}</p>`;
+    }
   }
 }
 
@@ -2670,22 +2820,22 @@ function renderDiag(d) {
   const nowSec = d.now?.unixSec ?? Math.floor(Date.now() / 1000);
   const apps = (d.apps || []).map((a) => `
     <div class="level-stat">
-      <div class="level-stat__title">${a.app} <span style="color:var(--text-muted);font-weight:400;text-transform:none;">(health: ${a.health})</span></div>
+      <div class="level-stat__title">${escHtml(a.app)} <span style="color:var(--text-muted);font-weight:400;text-transform:none;">(health: ${escHtml(a.health)})</span></div>
       ${_freshnessBadge(a, nowSec)}
       <div class="level-stat__row" style="margin-top:8px;"><span>Raw rows</span><span>${a.rawRows}</span></div>
       <div class="level-stat__row"><span>Normalized</span><span>${a.normalizedSignals}</span></div>
-      <div class="level-stat__row"><span>Skipped</span><span>${JSON.stringify(a.skipped)}</span></div>
+      <div class="level-stat__row"><span>Skipped</span><span>${escHtml(JSON.stringify(a.skipped))}</span></div>
       <div class="level-stat__row"><span>Distinct pairs</span><span>${(a.distinctPairs || []).length}</span></div>
       <div class="level-stat__row"><span>Valid for own candle</span><span>${a.validForOwnCandle} / ${a.invalidForOwnCandle}</span></div>
     </div>`).join("");
 
   const offsets = (d.offsets || []).map((o) => `
     <div class="level-stat">
-      <div class="level-stat__title">${o.apps}</div>
+      <div class="level-stat__title">${escHtml(o.apps)}</div>
       <div class="level-stat__row"><span>Modal offset</span><strong>${o.modalOffsetCandles ?? "—"} candles</strong></div>
       <div class="level-stat__row"><span>Confidence</span><span>${(o.confidence * 100).toFixed(0)}%</span></div>
       <div class="level-stat__row"><span>Samples</span><span>${o.samples}</span></div>
-      <div class="level-stat__row" style="font-size:11px;color:var(--text-dim);">${o.hint}</div>
+      <div class="level-stat__row" style="font-size:11px;color:var(--text-dim);">${escHtml(o.hint)}</div>
     </div>`).join("");
 
   const coverage = d.candleCoverageLast30Candles || {};
@@ -2707,7 +2857,7 @@ function renderDiag(d) {
       <h3 style="font-size:12px;">Notes</h3>
     </div>
     <ul style="color:var(--text-dim);font-size:12px;padding-left:20px;">
-      ${(d.notes || []).map((n) => `<li style="margin-bottom:6px;">${n}</li>`).join("")}
+      ${(d.notes || []).map((n) => `<li style="margin-bottom:6px;">${escHtml(n)}</li>`).join("")}
     </ul>
   `;
 }
@@ -2922,7 +3072,15 @@ settingsInputs.forEach(([id, key, kind]) => {
     // re-translating every [data-i18n] (153 elements) is wasted work
     // when only the polling/theme/etc. changed. The language change
     // handler below calls applyTranslations() explicitly. (REVIEW-2 M46.)
-    if (key === "lang") applyTranslations();
+    if (key === "lang") {
+      applyTranslations();
+      // Re-translate the currently selected dropdown labels too — the
+      // <li> items just changed language, so labels copied from them
+      // would otherwise keep the previous language (e.g. "All pairs"
+      // staying English while the menu itself reads "সব পেয়ার").
+      syncCategoryLabels();
+      resyncDropdownLabels();
+    }
     if (key === "poll") restartPolling();
     if (key === "notify" && el.checked && "Notification" in window && Notification.permission !== "granted") {
       Notification.requestPermission().then(() => {});
@@ -3028,6 +3186,9 @@ applySettings();
 // (perf optimization, REVIEW-2 M46) — but the INITIAL load needs the
 // translations applied once, so do it explicitly here.
 applyTranslations();
+wireHeroCards();
+syncCategoryLabels();
+resyncDropdownLabels();
 startPolling();
 refreshBacktestStatus();
 // Pre-load the Signal Sources config so the Settings panel is instant and

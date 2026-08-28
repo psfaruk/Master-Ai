@@ -2,6 +2,16 @@
    Original color palette preserved (dark theme). Light theme supported.
 */
 
+/* ---- hidden attribute always wins ----
+   Several components (folder grids, health alert, drawer overlay) set an
+   explicit author `display` (grid/flex). In some cascade situations that
+   author rule beats the UA stylesheet's [hidden] { display: none }, so
+   JS toggling `el.hidden = true` SILENTLY DID NOTHING: the History and
+   Settings folder grids stayed on screen next to their detail view (the
+   "double/duplicate functions" mess), and the health alert could not be
+   dismissed. This rule makes [hidden] deterministic everywhere. */
+[hidden] { display: none !important; }
+
 :root {
   --bg: #0a0e17;
   --bg-elev: #131822;
@@ -2458,3 +2468,212 @@ a { color: var(--blue); }
 .src-save-app { font-size: 11px; color: var(--text-dim); margin-top: 6px; font-family: var(--font-mono); word-break: break-all; }
 .src-save-app--ok strong { color: var(--emerald); }
 .src-save-app--bad strong { color: var(--red); }
+
+/* ============================================================
+   V2 UI POLISH — desktop side nav, motion, depth, focus states
+   Added by the 2026-08 deep-fix + redesign pass. Everything in
+   this section uses design tokens or numeric rgb()/color-mix()
+   only (no hex, no white rgba surfaces) so the light theme and
+   the history-CSS token audit stay clean.
+   ============================================================ */
+
+/* ---- Tokens (rgb triplets reused via rgba(var(--rgb-…), a)) ---- */
+:root {
+  --sidenav-w: 220px;
+  --rgb-emerald: 16, 185, 129;
+  --rgb-blue: 59, 130, 246;
+  --rgb-violet: 139, 92, 246;
+  --rgb-amber: 245, 158, 11;
+  --rgb-red: 239, 68, 68;
+  --rgb-ink: 2, 6, 16;
+  --lift-shadow: 0 10px 28px rgba(2, 6, 16, 0.35);
+}
+
+/* ---- Desktop side navigation (≥1100px) ------------------------ */
+/* Phones keep the thumb-reachable bottom nav; desktops get a fixed
+   left rail with the same 4 items. Exactly one rail is visible per
+   breakpoint. */
+.sidenav {
+  display: none;
+}
+@media (min-width: 1100px) {
+  .sidenav {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: var(--sidenav-w);
+    padding: 18px 12px 16px;
+    background: var(--bg-elev);
+    border-right: 1px solid var(--border);
+    z-index: 70;
+  }
+  .sidenav__brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 10px 16px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 14px;
+  }
+  .sidenav__logo { font-size: 24px; line-height: 1; }
+  .sidenav__name { font-weight: 700; font-size: 15px; letter-spacing: 0.02em; }
+  .sidenav__items {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .sidenav__item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 11px 12px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.15s;
+  }
+  .sidenav__item:hover {
+    background: var(--bg-card-hover);
+    color: var(--text);
+    transform: translateX(2px);
+  }
+  .sidenav__item--active {
+    background: rgba(var(--rgb-blue), 0.14);
+    border-color: rgba(var(--rgb-blue), 0.35);
+    color: var(--blue);
+  }
+  .sidenav__item--active .sidenav__icon { transform: scale(1.12); }
+  .sidenav__icon { font-size: 17px; line-height: 1; transition: transform 0.15s; }
+  .sidenav__label { letter-spacing: 0.02em; }
+  .sidenav__foot {
+    margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 10px 0;
+    border-top: 1px solid var(--border);
+  }
+  .sidenav__hint { font-size: 10px; color: var(--text-muted); line-height: 1.4; }
+  .sidenav__foot .topbar__status { align-self: flex-start; }
+  .bottomnav { display: none; }
+  .content {
+    margin-left: var(--sidenav-w);
+    max-width: none;
+    padding-left: 28px;
+    padding-right: 28px;
+    padding-bottom: 32px;
+  }
+}
+
+/* ---- Glassy sticky top bar ------------------------------------ */
+.topbar {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: color-mix(in srgb, var(--bg-elev) 84%, transparent);
+}
+@media (min-width: 1100px) {
+  .topbar { left: var(--sidenav-w); }
+}
+
+/* ---- Hero cards: tappable, lifted, glowing --------------------- */
+.hero {
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+  position: relative;
+  overflow: hidden;
+}
+.hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 90% at 100% 0%, rgba(var(--rgb-blue), 0.09), transparent 60%);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+.hero:hover { transform: translateY(-3px); box-shadow: var(--lift-shadow); border-color: var(--text-muted); }
+.hero:hover::after { opacity: 1; }
+.hero:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.hero--3agree::after { background: radial-gradient(120% 90% at 100% 0%, rgba(var(--rgb-emerald), 0.14), transparent 60%); }
+.hero--2agree::after { background: radial-gradient(120% 90% at 100% 0%, rgba(var(--rgb-blue), 0.14), transparent 60%); }
+.hero--conflict::after { background: radial-gradient(120% 90% at 100% 0%, rgba(var(--rgb-red), 0.12), transparent 60%); }
+.hero--3agree:hover { border-left-color: var(--emerald); }
+.hero--2agree:hover { border-left-color: var(--blue); }
+.hero--conflict:hover { border-left-color: var(--red); }
+.hero__value { transition: color 0.2s ease; }
+
+/* ---- Cards: subtle lift on hover ------------------------------- */
+.card:hover, .panel:hover { box-shadow: 0 6px 20px rgba(2, 6, 16, 0.22); }
+.card, .panel { transition: box-shadow 0.18s ease; }
+
+/* ---- Tab transitions: slightly richer entrance ----------------- */
+@keyframes tabIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.995); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.tab-panel--active { animation: tabIn 0.24s cubic-bezier(0.22, 0.61, 0.36, 1); }
+
+/* ---- Bottom nav: animated active pill --------------------------- */
+.bottomnav__item--active::after {
+  content: "";
+  position: absolute;
+  bottom: 4px;
+  width: 26px;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--blue), var(--violet));
+  animation: navPill 0.25s ease;
+}
+@keyframes navPill {
+  from { transform: scaleX(0.3); opacity: 0; }
+  to { transform: scaleX(1); opacity: 1; }
+}
+
+/* ---- Global focus visibility (keyboard users) ------------------- */
+.dropdown__trigger:focus-visible,
+.sp-filter-trigger:focus-visible,
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid rgba(var(--rgb-blue), 0.75);
+  outline-offset: 2px;
+}
+
+/* ---- Live feed: direction-colored edge + new-item pop ---------- */
+.feed-item--new { animation: feedPop 0.45s cubic-bezier(0.22, 0.61, 0.36, 1); }
+@keyframes feedPop {
+  0% { transform: translateX(10px) scale(0.98); opacity: 0; }
+  60% { transform: translateX(-2px) scale(1.0); opacity: 1; }
+  100% { transform: translateX(0) scale(1); opacity: 1; }
+}
+
+/* ---- Status pill: cleaner live ring ----------------------------- */
+.topbar__status.is-down, .topbar__status.is-stale {
+  color: var(--text);
+}
+
+/* ---- History folder cards: entrance + hover depth --------------- */
+.folder-card { transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease; }
+.folder-card:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(2, 6, 16, 0.25); }
+
+/* ---- Filter tags: pop in ---------------------------------------- */
+.sp-active-tag { animation: tagIn 0.18s ease; }
+@keyframes tagIn {
+  from { transform: scale(0.92); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+/* ---- Skeleton shimmer kept; table rows get a soft hover --------- */
+.sp-table tbody tr { transition: background 0.12s ease; }
+
+/* ---- Very wide screens: content breathes ------------------------- */
+@media (min-width: 1600px) {
+  .content { padding-left: 44px; padding-right: 44px; }
+}
