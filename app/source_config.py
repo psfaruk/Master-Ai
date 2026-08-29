@@ -341,6 +341,18 @@ class SourceConfig:
             for app_id, out in normalized.items():
                 if "base_url" in out:
                     self._overrides[app_id] = out["base_url"]
+                    # A base-URL repoint (the standard "app redeployed under a
+                    # new subdomain" flow — see the /api/sources docstring
+                    # example, which only ever sends baseUrl) must supersede
+                    # any previously saved per-endpoint override. Without
+                    # this, resolve_url() keeps returning the OLD, now-dead
+                    # endpoint URL for whichever kind had an override, even
+                    # though the base looks fully reconnected — silently
+                    # starving that endpoint's fetches after every redeploy
+                    # that follows an earlier advanced per-endpoint save.
+                    # Endpoint overrides included in THIS SAME payload are
+                    # (re)applied right below, so they still take effect.
+                    self._endpoint_overrides[app_id] = {}
                 for kind, url in out.get("endpoints", {}).items():
                     self._endpoint_overrides.setdefault(app_id, {})[kind] = url
             self.updated_at_ms = int(time.time() * 1000)

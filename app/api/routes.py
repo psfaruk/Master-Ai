@@ -1923,7 +1923,13 @@ def _serialize_signal(s) -> dict:
 
 
 def _serialize_signal_sample(s, now_sec: int) -> dict:
-    lead = s.candle_time - s.timestamp
+    # Guard exactly like _serialize_signal / the /api/pairs signal detail /
+    # get_signal_feed above: s.timestamp == 0 means "source didn't report an
+    # emit time" (a real, expected case). Without the guard, lead becomes
+    # candle_time - 0 (~1.7 billion seconds), which _signal_timing_status
+    # then mislabels "prediction" instead of "unknown", and /api/diag ships
+    # a nonsensical multi-billion-second leadSec for that sample.
+    lead = s.candle_time - s.timestamp if s.timestamp > 0 else None
     lag = now_sec - s.candle_time
     return {
         "pair": s.pair,

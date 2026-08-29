@@ -349,39 +349,48 @@ async def _poll_app2() -> None:
         return
     st.poll_in_progress = True
     try:
-        data = await fetch_json_with_timeout(resolve_source_url("app2", "signals"), 8.0)
-        rows = pick_array(data, ["rows", "signals", "data", "items"])
-        if not rows:
-            st.last_poll_ok = data is not None
-            st.last_raw_count = 0
-            st.last_error = "empty_response" if data is None else "no_rows"
-        else:
-            now = int(time.time())
-            server_sec = to_unix_seconds(data.get("timestamp") or data.get("ts") or data.get("server_time")) if isinstance(data, dict) else 0
-            # Prefer the upstream clock, but only if it is sane.
-            ref_sec = server_sec if (server_sec > 0 and abs(server_sec - now) <= 300) else now
+        try:
+            data = await fetch_json_with_timeout(resolve_source_url("app2", "signals"), 8.0)
+            rows = pick_array(data, ["rows", "signals", "data", "items"])
+            if not rows:
+                st.last_poll_ok = data is not None
+                st.last_raw_count = 0
+                st.last_error = "empty_response" if data is None else "no_rows"
+            else:
+                now = int(time.time())
+                server_sec = to_unix_seconds(data.get("timestamp") or data.get("ts") or data.get("server_time")) if isinstance(data, dict) else 0
+                # Prefer the upstream clock, but only if it is sane.
+                ref_sec = server_sec if (server_sec > 0 and abs(server_sec - now) <= 300) else now
 
-            skipped = {"noPair": 0, "neutral": 0}
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                entry = normalize_app2_row(row, ref_sec)
-                if entry is None:
-                    if not canonical_pair(pick_field(row, PAIR_KEYS)):
-                        skipped["noPair"] += 1
-                    else:
-                        skipped["neutral"] += 1
-                    continue
-                _store_entry(st, entry)
+                skipped = {"noPair": 0, "neutral": 0}
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    entry = normalize_app2_row(row, ref_sec)
+                    if entry is None:
+                        if not canonical_pair(pick_field(row, PAIR_KEYS)):
+                            skipped["noPair"] += 1
+                        else:
+                            skipped["neutral"] += 1
+                        continue
+                    _store_entry(st, entry)
 
-            st.last_skipped = skipped
-            st.last_raw_count = len(rows)
-            st.last_poll_ok = True
-            st.last_error = None
+                st.last_skipped = skipped
+                st.last_raw_count = len(rows)
+                st.last_poll_ok = True
+                st.last_error = None
+        except Exception as e:
+            st.last_poll_ok = False
+            st.last_error = str(e) or type(e).__name__
+            logger.error("[app2-cache] poll error: %s", st.last_error)
 
         # Prune entries older than CACHE_TTL_SEC, and drop empty pairs. Runs
-        # every cycle — including when this poll returned no rows — so a
-        # stretch of empty responses can't leave stale history un-pruned.
+        # every cycle — including when this poll returned no rows AND when
+        # the fetch above raised outright (a network blip, or the upstream's
+        # own redeploy window — exactly the condition this cache exists to
+        # ride out) — so neither an empty response nor a hard fetch failure
+        # can leave stale history un-pruned for as long as that keeps
+        # happening.
         cutoff = time.time() * 1000 - CACHE_TTL_SEC * 1000
         for pair, pair_cache in list(st.cache.items()):
             for ct, sig in list(pair_cache.items()):
@@ -393,10 +402,6 @@ async def _poll_app2() -> None:
         # Persist (debounced) so restarts don't lose the history the
         # backtest depends on.
         _save_disk_cache(st)
-    except Exception as e:
-        st.last_poll_ok = False
-        st.last_error = str(e) or type(e).__name__
-        logger.error("[app2-cache] poll error: %s", st.last_error)
     finally:
         st.last_poll_at = time.time() * 1000
         st.poll_in_progress = False

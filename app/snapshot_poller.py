@@ -48,6 +48,14 @@ class SnapshotPollerState:
     # (REVIEW-1 H7.)
     initial_task: Optional[asyncio.Task] = None
     started: bool = False
+    # Set right before a poll starts, cleared right after it finishes.
+    # refresh_snapshot() awaits this instead of just calling _poll_once()
+    # directly — otherwise a "force refresh" that lands while the
+    # background burst-interval loop is already mid-poll silently no-ops
+    # (poll_in_progress guard) and the caller gets whatever was cached
+    # BEFORE that in-flight poll started, with no sign the force didn't
+    # happen.
+    poll_done_event: Optional[asyncio.Event] = None
 
 
 _state: Optional[SnapshotPollerState] = None
@@ -74,8 +82,17 @@ def _next_gap_sec() -> float:
 async def _poll_once() -> None:
     st = _get_state()
     if st.poll_in_progress:
+        # A poll is already running. Wait for THAT one to finish instead of
+        # silently returning — a caller that reaches this branch specifically
+        # wants a fresh result (refresh_snapshot() / GET /api/snapshot?refresh=1
+        # / GET /api/diag), and the old bare `return` here handed back
+        # whatever was cached BEFORE the in-flight poll even started, with no
+        # sign the "forced" refresh never happened.
+        if st.poll_done_event is not None:
+            await st.poll_done_event.wait()
         return
     st.poll_in_progress = True
+    st.poll_done_event = asyncio.Event()
     try:
         snap = await aggregate_signals(1800)
         st.cached_snapshot = snap
@@ -86,6 +103,7 @@ async def _poll_once() -> None:
         logger.error("[poller] error: %s", e)
     finally:
         st.poll_in_progress = False
+        st.poll_done_event.set()
 
 
 async def _poll_loop() -> None:

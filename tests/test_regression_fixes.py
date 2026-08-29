@@ -246,6 +246,71 @@ def test_h5_online_is_strict_ok():
     assert True  # behavior asserted in test_one_app_down_does_not_hide_others
 
 
+def test_refresh_snapshot_waits_for_an_in_flight_poll_instead_of_no_op():
+    """GET /api/snapshot?refresh=1 (and /api/diag) call refresh_snapshot() to
+    force a fresh poll. Before this fix, _poll_once() silently RETURNED when
+    the background burst-interval loop already had a poll in flight — the
+    caller got back whatever was cached BEFORE that in-flight poll started,
+    with no sign the "forced" refresh never happened. It must now wait for
+    the in-flight poll to finish and use its (genuinely fresh) result."""
+    import asyncio as _asyncio
+
+    from app import snapshot_poller as sp
+
+    async def run():
+        st = sp._get_state()
+        old_snapshot, old_progress, old_event = (
+            st.cached_snapshot, st.poll_in_progress, st.poll_done_event,
+        )
+        try:
+            started = _asyncio.Event()
+            release = _asyncio.Event()
+            calls = []
+
+            async def fake_aggregate(freshness_window_sec):
+                calls.append(freshness_window_sec)
+                started.set()
+                await release.wait()
+                return f"snap-{len(calls)}"
+
+            original_aggregate = sp.aggregate_signals
+            sp.aggregate_signals = fake_aggregate
+            try:
+                task1 = _asyncio.create_task(sp._poll_once())
+                await started.wait()
+                assert st.poll_in_progress is True
+
+                # A concurrent "force refresh" call lands while task1 is
+                # still running.
+                task2 = _asyncio.create_task(sp.refresh_snapshot())
+                await _asyncio.sleep(0)
+                # It must NOT have returned yet — the old bug made this a
+                # same-tick no-op that completed instantly here.
+                assert not task2.done(), (
+                    "refresh_snapshot() returned immediately instead of "
+                    "waiting for the in-flight poll"
+                )
+
+                release.set()
+                await task1
+                await task2
+            finally:
+                sp.aggregate_signals = original_aggregate
+
+            # Only ONE aggregate_signals call happened — task2 joined
+            # task1's poll rather than starting (or silently skipping) its
+            # own, and both see the result that poll produced.
+            assert len(calls) == 1
+            assert st.cached_snapshot == "snap-1"
+            assert st.poll_in_progress is False
+        finally:
+            st.cached_snapshot = old_snapshot
+            st.poll_in_progress = old_progress
+            st.poll_done_event = old_event
+
+    _asyncio.run(run())
+
+
 def test_h7_poller_states_track_initial_task():
     """REVIEW-1 H7: every poller state must expose `initial_task` so the
     lifespan shutdown hook can cancel the previously-fire-and-forget
@@ -684,6 +749,46 @@ def test_app2_cache_disk_load_prunes_expired_entries(tmp_path):
     finally:
         st.disk_path = None
         app2_cache.reset_app2_cache_for_tests()
+
+
+def test_app2_poll_prunes_expired_entries_even_when_fetch_raises(monkeypatch):
+    """A hard fetch failure (network blip, or the upstream's own redeploy
+    window — exactly the condition this cache exists to ride out) must not
+    ALSO suspend pruning for that cycle. Before this fix, the prune block
+    sat inside the same try as the fetch, so an exception jumped straight to
+    `except` and skipped it — stale history could then linger past
+    CACHE_TTL_SEC for as long as the upstream kept failing."""
+    import time
+
+    st = app2_cache._get_state()
+    old_cache = st.cache
+    old_disk_path = st.disk_path
+    st.cache = {}
+    st.disk_path = None  # keep this test in-memory only
+    try:
+        expired = _make_cache_entry(
+            pair="EXPIREDPAIR",
+            captured_at=time.time() * 1000 - 2 * app2_cache.CACHE_TTL_SEC * 1000,
+        )
+        app2_cache._store_entry(st, expired)
+        assert app2_cache.get_app2_cache_size() == 1
+
+        async def raising_fetch(*args, **kwargs):
+            raise ConnectionError("upstream unreachable")
+
+        monkeypatch.setattr(app2_cache, "fetch_json_with_timeout", raising_fetch)
+
+        import asyncio
+        asyncio.run(app2_cache._poll_app2())
+
+        assert st.last_poll_ok is False
+        assert st.last_error  # the exception message, preserved
+        # The prune step still ran despite the fetch raising — the expired
+        # entry is gone even though this poll never got any fresh data.
+        assert app2_cache.get_app2_cache_size() == 0
+    finally:
+        st.cache = old_cache
+        st.disk_path = old_disk_path
 
 
 # ---------------------------------------------------------------------------

@@ -305,6 +305,19 @@ def test_serialize_signal_lead_is_none_when_no_timestamp():
     assert out["leadSec"] is None
 
 
+def test_serialize_signal_sample_lead_is_none_when_no_timestamp():
+    """_serialize_signal_sample (used by /api/diag's per-app 'sample' list)
+    must guard timestamp==0 exactly like _serialize_signal does — without
+    it, lead becomes candle_time - 0 (~1.7 billion seconds), which
+    _signal_timing_status then mislabels 'prediction' instead of 'unknown',
+    and /api/diag ships a nonsensical multi-billion-second leadSec."""
+    from app.api.routes import _serialize_signal_sample
+    sig = _FakeSignal("app1", "USDBDT_otc", "CALL", 0, 1700000000)
+    out = _serialize_signal_sample(sig, now_sec=1700000010)
+    assert out["leadSec"] is None
+    assert out["timingStatus"] == "unknown"
+
+
 # ---------------------------------------------------------------------------
 # _signal_timing_status classification
 # ---------------------------------------------------------------------------
