@@ -160,10 +160,16 @@ ASSET_VERSION = _asset_version()
 async def dashboard(request: Request):
     """The main dashboard page — a server-rendered HTML shell that polls the
     JSON API for live data."""
+    # The HTML shell must NEVER be cached: it carries the ?v=<hash> asset
+    # URLs, so a cached page would keep loading the previous JS/CSS bundle
+    # and the deployed UI would look out of date ("deploy hoy ni") even
+    # after a successful rollout. The API router's NO_STORE_HEADERS promise
+    # the same thing for JSON — this extends it to the shell.
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
         context={"version": "1.0.0", "asset_version": ASSET_VERSION},
+        headers=NO_STORE_HEADERS,
     )
 
 
