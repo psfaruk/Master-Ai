@@ -1649,7 +1649,7 @@ function renderBacktest(bt) {
   const levelStats = Object.entries(bt.levels || {}).map(([level, s]) => {
     const total = s.win + s.loss;
     const winRate = total > 0 ? ((s.win / total) * 100).toFixed(1) : "—";
-    const wrBarCls = winRate === "—" ? "none" : parseFloat(winRate) >= 60 ? "good" : parseFloat(winRate) >= 40 ? "mid" : "low";
+    const wrBarCls = winRate === "—" ? "none" : wrClass(parseFloat(winRate));
     return `
       <div class="level-stat">
         <div class="level-stat__title">${level}</div>
@@ -1780,7 +1780,7 @@ function renderPerPairTable() {
       return `${s.win}/${s.loss}`;
     };
     const wr = p.winRate;
-    const wrCls = wr == null ? "none" : wr >= 60 ? "good" : wr >= 40 ? "mid" : "low";
+    const wrCls = wrClass(wr);
     const wrTxt = wr == null ? "—" : `${wr.toFixed(0)}%`;
     const totalW = (ls["3-agree"]?.win || 0) + (ls["2-agree"]?.win || 0) + (ls["1-only"]?.win || 0);
     const totalL = (ls["3-agree"]?.loss || 0) + (ls["2-agree"]?.loss || 0) + (ls["1-only"]?.loss || 0);
@@ -2118,7 +2118,11 @@ async function renderConsensusList(level) {
   wireConsensusRowToggles(body, items);
 }
 
-function rowKey(c) { return `${c.pair}|${c.ts}`; }
+// Namespaced so this Set is never shared with the per-pair drawer's history
+// table (renderSimpleHistoryRows uses the same pair|ts shape) — without the
+// prefix, expanding a row in one view could render the SAME candle
+// pre-expanded in the other view the user never actually clicked there.
+function rowKey(c) { return `list:${c.pair}|${c.ts}`; }
 
 function renderConsensusRow(c) {
   const key = rowKey(c);
@@ -2532,7 +2536,14 @@ document.addEventListener("keydown", (e) => {
 async function openPairDrawer(pair, opts = {}) {
   // opts can carry:
   //   - targetId  : render into a non-drawer element too (drilldown view)
+  //   - subset    : app-subset key (e.g. "app1+app2") to pre-filter the
+  //                 Signal History table to. Set by the Per-Pair Stats
+  //                 table's per-subset cells and the Subset Pair List's
+  //                 "History" button — both promise "the drawer opens with
+  //                 the subset chip pre-selected", so it has to actually
+  //                 filter the table, not just be accepted and dropped.
   const targetId = typeof opts === "string" ? opts : opts.targetId;
+  const subset = typeof opts === "string" ? null : (opts.subset || null);
   // Inline render (History → Pair Drilldown): previously this ALSO popped
   // the modal drawer over the top and locked the page scroll, so the inline
   // result was hidden behind a duplicate modal. Render inline ONLY.
@@ -2548,6 +2559,15 @@ async function openPairDrawer(pair, opts = {}) {
     const res = await fetch(`/api/pair/${encodeURIComponent(pair)}?candle_limit=60`, { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (subset) {
+      // Filter to the requested app-subset only. Tagging the filter onto
+      // `data` (rather than threading it through every render function's
+      // signature) lets the existing re-render call in the expand/collapse
+      // handler (which reads state.drawerHistoryPair) keep working
+      // unchanged — it already re-renders from this same filtered list.
+      data.clusterHistory = (data.clusterHistory || []).filter((c) => c.app_subset_key === subset);
+      data.__subsetFilter = subset;
+    }
     if (targetId) {
       const alt = $(targetId);
       if (alt) alt.innerHTML = renderPairDetailHtml(data);
@@ -2581,6 +2601,10 @@ function renderPairDrawer(data) {
 function renderPairDetailHtml(data) {
   const clusterHistory = data.clusterHistory || [];
   const historyMinutes = data.clusterHistoryMinutes || 60;
+  const subsetFilter = data.__subsetFilter || null;
+  const subsetChip = subsetFilter
+    ? ` <span class="pill pill--filter">Filtered: ${escHtml(subsetLabel(subsetFilter))} <button type="button" class="pill__clear" data-clear-subset="${escAttr(data.pair)}" title="Show all agreement types" aria-label="Clear filter">&times;</button></span>`
+    : "";
 
   const favBtn = state.favorites.has(data.pair)
     ? `<button class="btn btn--ghost" id="drawer-unfav">★ Unfavorite</button>`
@@ -2590,7 +2614,7 @@ function renderPairDetailHtml(data) {
     ${renderDrawerWinRateCard(data)}
     ${renderDrawerSubsetStrip(data)}
     <div class="drawer__section drawer__section--history">
-      <h3>Signal History — Last ${historyMinutes} min <span class="drawer__section-count">${clusterHistory.length} candles</span></h3>
+      <h3>Signal History — Last ${historyMinutes} min <span class="drawer__section-count">${clusterHistory.length} candles</span>${subsetChip}</h3>
       <p class="drawer__hint"><i class="fas fa-hand-pointer"></i> Tap any row for the per-app breakdown.</p>
       <div class="table-scroll">
         <table class="pair-table pair-table--history" id="drawer-history-table">
@@ -2695,7 +2719,10 @@ function renderSimpleHistoryRows(clusterHistory, data) {
   state.drawerHistoryPair = data;
 
   return withRunningWr.map((c) => {
-    const key = `${data.pair}|${c.ts}`;
+    // "drawer:" prefix keeps this Set entry distinct from the Signal
+    // History list's rowKey() for the same (pair, candle) — see that
+    // function's comment.
+    const key = `drawer:${data.pair}|${c.ts}`;
     const expanded = state.expandedHistoryRows.has(key);
     const prediction = c.direction || null;
     const result = c.outcome === 1 ? prediction : c.outcome === 0 ? oppositeDir(prediction) : null;
@@ -2740,6 +2767,15 @@ document.addEventListener("click", (e) => {
       state.drawerHistoryPair,
     );
   }
+});
+
+// Clear an active subset filter (the "x" on the "Filtered: App 1 + App 2"
+// chip) — re-opens the same pair's drawer with every agreement type shown.
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest?.("[data-clear-subset]");
+  if (!btn) return;
+  e.stopPropagation();
+  openPairDrawer(btn.dataset.clearSubset);
 });
 
 // Delegate fav button in drawer

@@ -204,6 +204,21 @@ def test_wr_class_thresholds_match_the_rest_of_the_dashboard(js):
     )
 
 
+def test_no_hand_rolled_win_rate_threshold_disagrees_with_wr_class(js):
+    """Two render functions (Backtest per-level cards, Per-Pair Stats table)
+    used to duplicate wrClass()'s good/mid/low logic inline with their own
+    ``>= 40`` cutoff instead of the app-wide ``>= 45`` — so the identical win
+    rate (e.g. 42%) rendered "mid" (amber) in those two panels while every
+    other panel, including the adjacent per-app-subset columns in the SAME
+    table row, rendered "low" (red) via wrClass(). Guard against a hand-rolled
+    threshold ternary reappearing anywhere outside wrClass() itself."""
+    body = js.split("function wrClass(wr) {", 1)[0] + js.split("function wrClass(wr) {", 1)[1].split("\n}", 1)[1]
+    assert not re.search(r">=\s*60\s*\?[^:]*:\s*[a-zA-Z_.]+\s*>=\s*40\b", body), (
+        "found a hand-rolled 60/40 win-rate threshold outside wrClass() — "
+        "use wrClass() instead so every panel agrees on good/mid/low"
+    )
+
+
 # ---------------------------------------------------------------------------
 # i18n
 # ---------------------------------------------------------------------------
@@ -266,3 +281,54 @@ def test_filter_controls_have_accessible_labels(html):
         assert "aria-label" in panel.split(f'id="{sel}"')[0][-200:] or "aria-label" in chunk, (
             f"#{sel} has no accessible label"
         )
+
+
+# ---------------------------------------------------------------------------
+# App Pair Leaders / per-pair drawer subset filter
+# ---------------------------------------------------------------------------
+
+
+def test_app_pair_leader_headline_wr_has_high_and_low_css(css):
+    """renderAppPairLeaders() assigns a "high"/"low" modifier class to
+    .sp-app-pair-leader-col__wr, but the stylesheet only ever defined the
+    base rule — every App Pair Leaders headline win-rate number rendered in
+    the same flat blue regardless of value, unlike the sibling
+    .sp-app-pair-card__wr / .overall-card__wr, which do colour-code."""
+    for mod in ("high", "low"):
+        assert re.search(rf"\.sp-app-pair-leader-col__wr\.{mod}\b", css), (
+            f".sp-app-pair-leader-col__wr.{mod} has no CSS rule — the headline "
+            "win rate can't be colour-coded"
+        )
+
+
+def test_open_pair_drawer_actually_uses_the_subset_option(js):
+    """openPairDrawer(pair, {subset}) is called by two entry points that
+    promise "opens the drawer with the subset chip pre-selected" (the
+    Per-Pair Stats table's per-subset cells, and the Subset Pair List's
+    "History" button) — opts.subset must actually be read and applied,
+    not silently accepted and dropped."""
+    fn = js.split("async function openPairDrawer(pair, opts = {}) {")[1]
+    fn = fn.split("\nfunction closePairDrawer")[0]
+    assert "opts.subset" in fn, "openPairDrawer() never reads opts.subset"
+    assert "clusterHistory" in fn, (
+        "openPairDrawer() must filter data.clusterHistory by the requested "
+        "subset, not just note that a subset was requested"
+    )
+
+
+def test_history_list_and_drawer_row_keys_are_namespaced(js):
+    """state.expandedHistoryRows is a single Set shared by the Signal
+    History level lists (rowKey()) and the per-pair drawer's own history
+    table (renderSimpleHistoryRows()) — both used to build the exact same
+    `${pair}|${ts}` key, so expanding a candle in one view could render the
+    SAME candle pre-expanded in the other view the user never opened there.
+    The two key-builders must use distinct prefixes."""
+    row_key_fn = js.split("function rowKey(c) {", 1)[1].split("\n", 1)[0]
+    drawer_key_line = js.split("function renderSimpleHistoryRows(", 1)[1]
+    drawer_key_line = drawer_key_line.split("const key = `", 1)[1].split("`;", 1)[0]
+    assert "list:" in row_key_fn or "drawer:" not in row_key_fn, (
+        "rowKey() and the drawer's history-row key must not collide"
+    )
+    assert row_key_fn.strip() != f"return `{drawer_key_line}`;".strip()
+    assert "list:" in row_key_fn
+    assert "drawer:" in drawer_key_line

@@ -211,6 +211,55 @@ def test_endpoint_overrides_take_priority(tmp_path, monkeypatch):
     )
 
 
+def test_base_url_only_update_clears_stale_endpoint_overrides(tmp_path, monkeypatch):
+    """A later baseUrl-only repoint (the standard "app redeployed under a new
+    subdomain" flow — POST {"apps": {"app1": {"baseUrl": "..."}}}) must fully
+    take over: it must not leave an EARLIER per-endpoint override still
+    pointing at the OLD, now-dead host. Before this test's fix, resolve_url()
+    kept returning the stale endpoint URL forever because set_apps() only
+    ever added to _endpoint_overrides and never cleared it on a base-only
+    update — the redeploy-repoint feature silently only half-worked."""
+    cfg = _fresh_config(tmp_path, monkeypatch)
+    cfg.set_apps({
+        "app1": {
+            "baseUrl": "https://old-app1.example",
+            "endpoints": {"signals": "https://old-app1.example/custom/signals"},
+        },
+    })
+    assert cfg.resolve_url("app1", "signals") == "https://old-app1.example/custom/signals"
+
+    # The app redeploys under a new subdomain; the operator does the normal
+    # thing and repoints with baseUrl only (no endpoints in this payload).
+    cfg.set_apps({"app1": {"baseUrl": "https://new-app1.example"}})
+
+    assert cfg.get_base_url("app1") == "https://new-app1.example"
+    # Every endpoint — including "signals", which had a per-endpoint
+    # override under the OLD host — must now resolve off the NEW base.
+    assert cfg.resolve_url("app1", "signals") == (
+        "https://new-app1.example" + ENDPOINT_TEMPLATES["app1"]["signals"]
+    )
+    assert cfg.resolve_url("app1", "health") == (
+        "https://new-app1.example" + ENDPOINT_TEMPLATES["app1"]["health"]
+    )
+
+
+def test_base_url_update_with_endpoints_in_same_payload_still_applies_them(tmp_path, monkeypatch):
+    """A baseUrl update that ALSO carries endpoint overrides in the SAME
+    payload should still apply those — only a base-only update clears the
+    old overrides; it must not defeat setting new ones in the same call."""
+    cfg = _fresh_config(tmp_path, monkeypatch)
+    cfg.set_apps({
+        "app1": {
+            "baseUrl": "https://new-app1.example",
+            "endpoints": {"signals": "https://new-app1.example/custom/signals"},
+        },
+    })
+    assert cfg.resolve_url("app1", "signals") == "https://new-app1.example/custom/signals"
+    assert cfg.resolve_url("app1", "health") == (
+        "https://new-app1.example" + ENDPOINT_TEMPLATES["app1"]["health"]
+    )
+
+
 # ---------------------------------------------------------------------------
 # Probing
 # ---------------------------------------------------------------------------
