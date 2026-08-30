@@ -87,6 +87,12 @@ def to_unix_seconds(value: Any) -> int:
                 dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
             except ValueError:
                 return 0
+            # A naive ISO string (no offset) is ambiguous — interpret it as
+            # UTC explicitly rather than letting dt.timestamp() apply the
+            # SERVER's local timezone, which would silently shift candles on
+            # a container with TZ set.
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
             result = int(dt.timestamp())
             return result if 0 < result <= _MAX_SANE_UNIX_SEC else 0
     else:
@@ -130,13 +136,23 @@ def resolve_clock_to_candle(time_str: str, ref_sec: int, max_drift_sec: int = 90
     Strategy, in order:
 
     1. Interpret the string as UTC on ref's date (± a day for wrap-around).
-       If that lands within ``max_drift_sec`` of ref, App 2 really is emitting
-       UTC and we use it verbatim.
+       If that lands within ``MAX_LEAD_SEC`` (5 min) of ref, App 2 really is
+       emitting UTC and we use it verbatim. The window is deliberately TIGHT:
+       a genuine UTC reading for the current/next candle is only seconds to
+       ~2 minutes away from ref, so anything further out is more likely a
+       source rendering a whole-hour-offset timezone (BST, CET, UTC-1, ...)
+       than a UTC timestamp.
     2. Otherwise assume the source renders some other whole-hour timezone. The
        MINUTE is timezone-independent for whole-hour offsets, so pick the
        instant nearest to ref whose minute-of-hour matches. That recovers the
-       correct candle without knowing which timezone the app uses.
-    3. If even that is implausible, fall back to ref's own candle. For a live
+       correct candle for ANY whole-hour offset — including the ±1-hour
+       offsets that step 1 used to swallow (a UTC+1 renderer previously landed
+       exactly one hour in the future and every App 2 signal missed its
+       candle, silently collapsing the 2-agree/3-agree counts).
+    3. If even that is implausible, accept a literal UTC reading that is
+       merely within ``max_drift_sec`` — a genuinely stale-but-UTC row (e.g.
+       a stream that died 20 minutes ago and still names its last candle).
+    4. If nothing is plausible, fall back to ref's own candle. For a live
        snapshot — which is the only thing App 2 exposes — ref's candle is the
        right answer.
     """
@@ -153,7 +169,7 @@ def resolve_clock_to_candle(time_str: str, ref_sec: int, max_drift_sec: int = 90
     if not (0 <= hh <= 23 and 0 <= mm <= 59):
         return ref_candle
 
-    # --- 1. Try a literal UTC reading, allowing day wrap in both directions.
+    # --- 1. Literal UTC reading (day wrap in both directions).
     ref_dt = datetime.fromtimestamp(ref_sec, tz=timezone.utc)
     same_day_utc = int(
         datetime(
@@ -162,10 +178,15 @@ def resolve_clock_to_candle(time_str: str, ref_sec: int, max_drift_sec: int = 90
     )
     utc_candidates = (same_day_utc - 86400, same_day_utc, same_day_utc + 86400)
     best_utc = min(utc_candidates, key=lambda c: abs(c - ref_sec))
-    if abs(best_utc - ref_sec) <= max_drift_sec:
+    utc_drift = abs(best_utc - ref_sec)
+    # A genuine UTC reading is at most one candle ahead (a prediction) or
+    # slightly stale — both well inside MAX_LEAD_SEC.
+    if utc_drift <= MAX_LEAD_SEC:
         return candle_floor(best_utc)
 
     # --- 2. Timezone-agnostic recovery: match on minute-of-hour only.
+    # Works for EVERY whole-hour offset (UTC±1 included), not just the big
+    # ones that fall outside step 1's acceptance window.
     ref_minute_of_hour = ref_dt.minute
     delta_min = mm - ref_minute_of_hour
     # Wrap into [-30, 30) so we pick the nearest matching minute.
@@ -177,7 +198,11 @@ def resolve_clock_to_candle(time_str: str, ref_sec: int, max_drift_sec: int = 90
     if abs(nearest - ref_sec) <= 5 * 60:
         return candle_floor(nearest)
 
-    # --- 3. Give up on the string; the reference clock is more reliable.
+    # --- 3. Stale-but-UTC: the literal reading is the best guess we have.
+    if utc_drift <= max_drift_sec:
+        return candle_floor(best_utc)
+
+    # --- 4. Give up on the string; the reference clock is more reliable.
     return ref_candle
 
 

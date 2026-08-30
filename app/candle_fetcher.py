@@ -156,6 +156,12 @@ class CandleCacheState:
     last_fetch_at: float = 0.0
     last_fetch_ok: bool = False
     fetch_in_progress: bool = False
+    # Set while a fetch is running; concurrent callers of refresh_candles()
+    # wait on it instead of returning with the PREVIOUS cache contents —
+    # the backtest calls refresh_candles() synchronously right before
+    # grading and needs the fresh candles, not whichever ones the in-flight
+    # 45s background refresh happened to still be fetching.
+    fetch_done_event: Optional["asyncio.Event"] = None
     total_candles: int = 0
     task: Optional[asyncio.Task] = None
     # Initial kick-off refresh — tracked so lifespan shutdown can cancel
@@ -299,11 +305,18 @@ def _float_or_nan(v) -> float:
 
 async def refresh_candles() -> None:
     """Refresh the cache from both endpoints. Idempotent — concurrent calls
-    coalesce into a single fetch."""
+    coalesce into a single fetch, and later callers WAIT for the in-flight
+    fetch to complete (so a synchronous caller such as the backtest's
+    pre-grading refresh actually observes the fresh candles)."""
     st = _get_state()
     if st.fetch_in_progress:
+        # A fetch is already running — wait for THAT one rather than
+        # returning instantly with the previous cache contents.
+        if st.fetch_done_event is not None:
+            await st.fetch_done_event.wait()
         return
     st.fetch_in_progress = True
+    st.fetch_done_event = asyncio.Event()
     try:
         # Historical first — these are authoritative for closed candles.
         try:
@@ -344,6 +357,7 @@ async def refresh_candles() -> None:
         logger.error("[candle-cache] refresh error: %s", e)
     finally:
         st.fetch_in_progress = False
+        st.fetch_done_event.set()
 
 
 def _prune_candles(st: CandleCacheState) -> None:

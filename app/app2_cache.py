@@ -98,6 +98,10 @@ class App2CacheState:
     last_raw_count: int = 0
     last_skipped: Dict[str, int] = field(default_factory=lambda: {"noPair": 0, "neutral": 0})
     poll_in_progress: bool = False
+    # Set while a poll is running; other callers of poll_app2_now() wait on
+    # it instead of silently returning with pre-poll state (mirrors
+    # snapshot_poller._poll_once's event pattern).
+    poll_done_event: Optional[asyncio.Event] = None
     task: Optional[asyncio.Task] = None  # background loop task
     # Initial kick-off poll — tracked so lifespan shutdown can cancel it
     # (previously fire-and-forget, leaked on shutdown). (REVIEW-1 H7.)
@@ -170,11 +174,18 @@ def _load_disk_cache(st: App2CacheState) -> None:
             sig = CachedSignal(**{k: item.get(k) for k in _DISK_FIELDS})
         except TypeError:
             continue
-        if (
-            not sig.pair or not sig.signal
-            or not (sig.candle_time and sig.candle_time > 0)
-            or sig.captured_at < cutoff
-        ):
+        # Type-guard the numeric comparisons too — a hand-edited or legacy
+        # row with candle_time="1700000000" (str) or captured_at=None used to
+        # raise TypeError OUTSIDE the constructor's try, escaping this loader
+        # and poisoning the first snapshot poll after boot.
+        try:
+            if (
+                not sig.pair or not sig.signal
+                or not (isinstance(sig.candle_time, int) and not isinstance(sig.candle_time, bool) and sig.candle_time > 0)
+                or not (isinstance(sig.captured_at, (int, float)) and not isinstance(sig.captured_at, bool) and sig.captured_at >= cutoff)
+            ):
+                continue
+        except TypeError:
             continue
         pair_cache = st.cache.setdefault(sig.pair, {})
         existing = pair_cache.get(sig.candle_time)
@@ -346,8 +357,14 @@ def record_app2_signals(entries: List[CachedSignal]) -> None:
 async def _poll_app2() -> None:
     st = _get_state()
     if st.poll_in_progress:
+        # A poll is already running. Wait for THAT one to finish instead of
+        # returning immediately — callers of poll_app2_now() (/api/diag?poll=1,
+        # the post-save reconnect kick) specifically want the FRESH state.
+        if st.poll_done_event is not None:
+            await st.poll_done_event.wait()
         return
     st.poll_in_progress = True
+    st.poll_done_event = asyncio.Event()
     try:
         try:
             data = await fetch_json_with_timeout(resolve_source_url("app2", "signals"), 8.0)
@@ -362,16 +379,21 @@ async def _poll_app2() -> None:
                 # Prefer the upstream clock, but only if it is sane.
                 ref_sec = server_sec if (server_sec > 0 and abs(server_sec - now) <= 300) else now
 
-                skipped = {"noPair": 0, "neutral": 0}
+                skipped = {"noPair": 0, "neutral": 0, "noCandle": 0}
                 for row in rows:
                     if not isinstance(row, dict):
                         continue
                     entry = normalize_app2_row(row, ref_sec)
                     if entry is None:
+                        # Distinguish the skip reason — "noCandle" (an
+                        # unparseable / "—" time field) used to be counted
+                        # under "neutral", hiding the real cause.
                         if not canonical_pair(pick_field(row, PAIR_KEYS)):
                             skipped["noPair"] += 1
-                        else:
+                        elif not parse_direction(pick_field(row, DIRECTION_KEYS)):
                             skipped["neutral"] += 1
+                        else:
+                            skipped["noCandle"] += 1
                         continue
                     _store_entry(st, entry)
 
@@ -405,6 +427,7 @@ async def _poll_app2() -> None:
     finally:
         st.last_poll_at = time.time() * 1000
         st.poll_in_progress = False
+        st.poll_done_event.set()
 
 
 async def _poll_loop() -> None:

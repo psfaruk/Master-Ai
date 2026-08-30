@@ -611,10 +611,15 @@ async def fetch_app2(freshness_window_sec: int, now: int) -> NormalizeResult:
             continue
         entry = normalize_app2_row(row, ref_sec)
         if entry is None:
+            # Distinguish WHY the row was skipped — /api/diag used to lump
+            # an unparseable "time" field (a candle problem) under
+            # noDirection, hiding the real reason App 2 rows vanish.
             if not canonical_pair(pick_field(row, PAIR_KEYS)):
                 skipped["noPair"] += 1
-            else:
+            elif not parse_direction(pick_field(row, DIRECTION_KEYS)):
                 skipped["noDirection"] += 1
+            else:
+                skipped["noCandle"] = skipped.get("noCandle", 0) + 1
             continue
         live_entries.append(entry)
         sig = _app2_cached_to_signal(entry, src["name"], now, freshness_window_sec, offset)
@@ -789,6 +794,7 @@ async def fetch_app3(freshness_window_sec: int, now: int) -> NormalizeResult:
         logger.warning("[app3] live fetch failed: %s", e)
 
     error: Optional[str] = None
+    detail: Optional[str] = None
     if not hist_ok and not live_ok:
         health = "down"
         error = "fetch_failed"
@@ -801,6 +807,7 @@ async def fetch_app3(freshness_window_sec: int, now: int) -> NormalizeResult:
         # show "App 3: degraded" rather than falsely green. (REVIEW-1 M16.)
         health = "disconnected"
         error = "hist_fetch_failed"
+        detail = "live OK — history endpoint failed (graded history may be thin)"
 
     return NormalizeResult(
         signals=out,
@@ -808,6 +815,7 @@ async def fetch_app3(freshness_window_sec: int, now: int) -> NormalizeResult:
         raw_count=raw_count,
         skipped=skipped,
         error=error,
+        detail=detail,
     )
 
 

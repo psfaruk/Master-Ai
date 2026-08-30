@@ -291,6 +291,21 @@ const state = {
   healthAlertDismissedApps: new Set(), // app ids/names that were bad at dismissal time
 };
 
+// ====== Out-of-order async-render guard ======
+// Several views fetch data and then paint it into a shared container. Two
+// rapid taps (e.g. "3 Agree" then "2 Agree") start two fetches; if the FIRST
+// response lands LAST it overwrites the newer view — the title says one
+// thing while the rows belong to another. Each guarded view takes a ticket
+// when it starts and only paints if its ticket is still the current one.
+const _renderTickets = {};
+function nextTicket(slot) {
+  _renderTickets[slot] = (_renderTickets[slot] || 0) + 1;
+  return _renderTickets[slot];
+}
+function ticketStillCurrent(slot, n) {
+  return _renderTickets[slot] === n;
+}
+
 const FEED_LIMIT = () => parseInt(state.settings.feedSize, 10) || 50;
 
 // ====== Settings persistence (DEFAULT_SETTINGS / loadSettings / loadFavorites
@@ -369,6 +384,10 @@ function switchTab(name) {
     resetFolderView("history-folder-grid", "history-folder-detail");
     state.historyStack = [];
     state.expandedHistoryRows.clear();
+    // Re-entering the History tab shows the folder GRID — drop any stale
+    // sub-tab so the poller's refreshBacktestStatus() doesn't fire a hidden
+    // live backtest fetch (and paint it into a panel nobody is looking at).
+    state.activeHistorySubtab = "";
     renderHistoryBreadcrumb();
     populateHistoryPairSelector();
     renderPerPairTable();
@@ -537,6 +556,22 @@ function resyncDropdownLabels() {
     const label = $(labelId);
     if (sel && label) label.textContent = sel.textContent.trim();
   });
+}
+
+// Reset ONE dropdown filter menu back to its default item and re-read its
+// label from the (data-i18n translated) DOM. Used by the active-filter tag
+// ✕ buttons — they used to set the label to a hardcoded English "All"/"Any"
+// and leave the menu item itself still marked selected, desyncing the
+// dropdown from the actual filter state.
+function resetMenuSelection(menuId) {
+  const menu = $(menuId);
+  if (!menu) return;
+  const first = menu.querySelector('li[data-value=""]') || menu.querySelector("li");
+  if (!first) return;
+  menu.querySelectorAll("li").forEach((l) => l.classList.toggle("is-selected", l === first));
+  const labelId = menuId.replace("-menu", "-label");
+  const lbl = $(labelId);
+  if (lbl) lbl.textContent = first.textContent.trim();
 }
 
 function wireDropdown(triggerId, menuId, labelId, onSelect) {
@@ -904,10 +939,18 @@ function wireHeroCards() {
     hero.setAttribute("tabindex", "0");
     const jump = () => {
       filters.level = HERO_LEVELS[i] || "";
-      const lbl = $("level-label");
       const menu = $("level-menu");
-      if (lbl) lbl.textContent = filters.level || "All";
-      if (menu) menu.querySelectorAll("li").forEach((l) => l.classList.toggle("is-selected", (l.dataset.value || "") === filters.level));
+      if (menu) {
+        // Mark the menu item and read its (data-i18n translated) text for
+        // the trigger label — the old `lbl.textContent = filters.level || "All"`
+        // showed the raw internal value ("conflict", "1-only") and leaked
+        // hardcoded English into the Bengali UI.
+        const match = Array.from(menu.querySelectorAll("li")).find((l) => (l.dataset.value || "") === filters.level)
+          || menu.querySelector('li[data-value=""]');
+        menu.querySelectorAll("li").forEach((l) => l.classList.toggle("is-selected", l === match));
+        const lbl = $("level-label");
+        if (lbl && match) lbl.textContent = match.textContent.trim();
+      }
       renderActiveFilterTags();
       switchTab("signals");
     };
@@ -929,14 +972,14 @@ function renderAppCards(apps) {
     return `
       <div class="card">
         <div class="card__header">
-          <span class="card__title">${a.name}</span>
+          <span class="card__title">${escHtml(a.name)}</span>
           <span class="card__accent card__accent--${accent}"></span>
         </div>
         <div class="card__metric">${a.signalCount} <span>signals</span></div>
-        <div class="card__detail">${a.detail || a.health || "—"}</div>
+        <div class="card__detail">${escHtml(a.detail || a.health || "—")}</div>
         <div class="card__latency">latency ${latency}${uptime ? ` · up ${uptime}` : ""}${a.activeStreams != null ? ` · ${a.activeStreams} streams` : ""}</div>
         <div style="margin-top:8px;">
-          <span class="card__health ${healthCls}">${a.health || "unknown"}</span>
+          <span class="card__health ${healthCls}">${escHtml(a.health || "unknown")}</span>
         </div>
       </div>`;
   }).join("");
@@ -958,6 +1001,10 @@ function renderConsensusHighlights(pairs) {
   // setting affects the Signals tab table (renderPairTable), not the Home
   // tab's top-signal strip — drop the dead filter. (REVIEW-2 M4.)
   highlights = highlights.slice(0, 8);
+  // Keep the header meta fresh even when there is nothing to highlight —
+  // the early return below used to freeze "N pairs · HH:MM" at the last
+  // non-empty snapshot (or "—" forever on a cold start).
+  $("home-meta").textContent = `${pairs.length} pairs · ${fmtTime(new Date(state.snapshot.timestamp), false)}`;
   if (highlights.length === 0) {
     container.innerHTML = '<p class="placeholder">No 2-bot or 3-bot agreements right now.</p>';
     return;
@@ -979,7 +1026,6 @@ function renderConsensusHighlights(pairs) {
   $$("#consensus-highlights .highlight").forEach((el) => {
     el.addEventListener("click", () => openPairDrawer(el.dataset.pair));
   });
-  $("home-meta").textContent = `${pairs.length} pairs · ${fmtTime(new Date(state.snapshot.timestamp), false)}`;
 }
 
 // ====== Per-pair table (Signals tab — SignalPro design) ======
@@ -1284,15 +1330,15 @@ function renderActiveFilterTags() {
   const container = $("sp-active-filters");
   if (!container) return;
   const tags = [];
-  if (filters.category) tags.push({ label: `Market: ${filters.category.toUpperCase()}`, clear: () => { filters.category = ""; const e = $("cat-label2"); if (e) e.textContent = "All"; } });
-  if (filters.level) tags.push({ label: `Level: ${filters.level}`, clear: () => { filters.level = ""; const e = $("level-label"); if (e) e.textContent = "All"; } });
-  if (filters.direction) tags.push({ label: `Final: ${filters.direction}`, clear: () => { filters.direction = ""; const e = $("dir-label"); if (e) e.textContent = "All"; } });
-  if (filters.agreeCount > 0) tags.push({ label: `Agree ≥ ${filters.agreeCount}`, clear: () => { filters.agreeCount = 0; const e = $("agree-label"); if (e) e.textContent = "Any"; } });
-  if (filters.app1Dir) tags.push({ label: `App 1: ${filters.app1Dir === "NONE" ? "missing" : filters.app1Dir}`, clear: () => { filters.app1Dir = ""; const e = $("app1-label"); if (e) e.textContent = "All"; } });
-  if (filters.app2Dir) tags.push({ label: `App 2: ${filters.app2Dir === "NONE" ? "missing" : filters.app2Dir}`, clear: () => { filters.app2Dir = ""; const e = $("app2-label"); if (e) e.textContent = "All"; } });
-  if (filters.app3Dir) tags.push({ label: `App 3: ${filters.app3Dir === "NONE" ? "missing" : filters.app3Dir}`, clear: () => { filters.app3Dir = ""; const e = $("app3-label"); if (e) e.textContent = "All"; } });
-  if (filters.wr60Min > 0) tags.push({ label: `60m WR ≥ ${filters.wr60Min}%`, clear: () => { filters.wr60Min = 0; const e = $("wr60-label"); if (e) e.textContent = "Any"; } });
-  if (filters.freshSec > 0) tags.push({ label: `Fresh ≤ ${filters.freshSec}s`, clear: () => { filters.freshSec = 0; const e = $("fresh-label"); if (e) e.textContent = "Any"; } });
+  if (filters.category) tags.push({ label: `Market: ${filters.category.toUpperCase()}`, clear: () => { filters.category = ""; syncCategoryLabels(); } });
+  if (filters.level) tags.push({ label: `Level: ${filters.level}`, clear: () => { filters.level = ""; resetMenuSelection("level-menu"); } });
+  if (filters.direction) tags.push({ label: `Final: ${filters.direction}`, clear: () => { filters.direction = ""; resetMenuSelection("dir-menu"); } });
+  if (filters.agreeCount > 0) tags.push({ label: `Agree ≥ ${filters.agreeCount}`, clear: () => { filters.agreeCount = 0; resetMenuSelection("agree-menu"); } });
+  if (filters.app1Dir) tags.push({ label: `App 1: ${filters.app1Dir === "NONE" ? "missing" : filters.app1Dir}`, clear: () => { filters.app1Dir = ""; resetMenuSelection("app1-menu"); } });
+  if (filters.app2Dir) tags.push({ label: `App 2: ${filters.app2Dir === "NONE" ? "missing" : filters.app2Dir}`, clear: () => { filters.app2Dir = ""; resetMenuSelection("app2-menu"); } });
+  if (filters.app3Dir) tags.push({ label: `App 3: ${filters.app3Dir === "NONE" ? "missing" : filters.app3Dir}`, clear: () => { filters.app3Dir = ""; resetMenuSelection("app3-menu"); } });
+  if (filters.wr60Min > 0) tags.push({ label: `60m WR ≥ ${filters.wr60Min}%`, clear: () => { filters.wr60Min = 0; resetMenuSelection("wr60-menu"); } });
+  if (filters.freshSec > 0) tags.push({ label: `Fresh ≤ ${filters.freshSec}s`, clear: () => { filters.freshSec = 0; resetMenuSelection("fresh-menu"); } });
   if (filters.search) tags.push({ label: `Pair: "${filters.search}"`, clear: () => { filters.search = ""; const a = $("filter-pair-sp"); if (a) a.value = ""; const b = $("search-input"); if (b) b.value = ""; } });
   if (filters.favoritesOnly) tags.push({ label: `★ Favorites only`, clear: () => { filters.favoritesOnly = false; const e = $("favorites-only"); if (e) e.checked = false; } });
   if (tags.length === 0) { container.innerHTML = ""; return; }
@@ -1604,7 +1650,10 @@ function renderHomeBacktestSummary(s) {
   const el = $("home-backtest");
   if (!el) return;
   if (!s.hasResult) {
-    el.innerHTML = '<p class="placeholder">Run a backtest to see per-level accuracy.</p>';
+    // t() — the identical string ships as `placeholder_run_backtest_home`
+    // in BOTH translation tables; hardcoding it flipped the panel back to
+    // English the moment a Bengali user opened the Home tab.
+    el.innerHTML = `<p class="placeholder">${escHtml(t("placeholder_run_backtest_home"))}</p>`;
     return;
   }
   const v = s.verdict || {};
@@ -1648,14 +1697,16 @@ function renderBacktest(bt) {
   const v = bt.verdict || {};
   const levelStats = Object.entries(bt.levels || {}).map(([level, s]) => {
     const total = s.win + s.loss;
-    const winRate = total > 0 ? ((s.win / total) * 100).toFixed(1) : "—";
-    const wrBarCls = winRate === "—" ? "none" : wrClass(parseFloat(winRate));
+    // Render "—" WITHOUT a trailing "%" — the old `${winRate}%` produced
+    // a malformed "—%" cell whenever a bucket had zero graded signals.
+    const winRateTxt = total > 0 ? `${((s.win / total) * 100).toFixed(1)}%` : "—";
+    const wrBarCls = total > 0 ? wrClass((s.win / total) * 100) : "none";
     return `
       <div class="level-stat">
         <div class="level-stat__title">${level}</div>
         <div class="level-stat__row"><span>Total</span><strong>${s.total}</strong></div>
         <div class="level-stat__row"><span>Win / Loss</span><strong>${s.win} / ${s.loss}</strong></div>
-        <div class="level-stat__row loss"><span>Win rate</span><span class="wr-bar wr-bar--${wrBarCls}">${winRate}%</span></div>
+        <div class="level-stat__row loss"><span>Win rate</span><span class="wr-bar wr-bar--${wrBarCls}">${winRateTxt}</span></div>
         <div class="level-stat__row"><span>Unknown</span><span>${s.unknown}</span></div>
         <div class="level-stat__row"><span>Draw</span><span>${s.draw}</span></div>
         <div class="level-stat__row"><span>CALL W/L</span><span>${s.callWin}/${s.callLoss}</span></div>
@@ -1665,14 +1716,14 @@ function renderBacktest(bt) {
 
   const sourceStats = Object.entries(bt.sources || {}).map(([src, s]) => {
     const total = s.win + s.loss;
-    const wr = total > 0 ? ((s.win / total) * 100).toFixed(1) : "—";
+    const wrTxt = total > 0 ? `${((s.win / total) * 100).toFixed(1)}%` : "—";
     return `
       <div class="level-stat">
         <div class="level-stat__title">${src}</div>
         <div class="level-stat__row"><span>Total</span><strong>${s.total}</strong></div>
         <div class="level-stat__row"><span>Win</span><strong>${s.win}</strong></div>
         <div class="level-stat__row loss"><span>Loss</span><strong>${s.loss}</strong></div>
-        <div class="level-stat__row"><span>Win rate</span><span>${wr}%</span></div>
+        <div class="level-stat__row"><span>Win rate</span><span>${wrTxt}</span></div>
         <div class="level-stat__row"><span>Unknown</span><span>${s.unknown}</span></div>
         <div class="level-stat__row"><span>Draw</span><span>${s.draw}</span></div>
       </div>`;
@@ -1711,7 +1762,7 @@ function renderBacktest(bt) {
   }).join("");
 
   $("backtest-content").innerHTML = `
-    <div class="verdict verdict--${v.kind}">${v.message || "—"}</div>
+    <div class="verdict verdict--${escAttr(v.kind || "insufficient")}">${escHtml(v.message || "—")}</div>
     <div class="panel__header" style="padding-left:0;border-bottom:1px solid var(--border);margin-bottom:10px;">
       <h3 style="font-size:12px;">Per-level stats</h3>
       <span class="panel__meta">${bt.totalSignals} signals · ${bt.totalClusters} clusters</span>
@@ -1758,7 +1809,12 @@ function renderPerPairTable() {
   }
   $("perpair-meta").textContent = `${pairs.length} pairs · cached ${(state.snapshot.backtestCacheAgeSec != null && state.snapshot.backtestCacheAgeSec >= 0) ? state.snapshot.backtestCacheAgeSec.toFixed(0) + "s" : "—"}`;
 
-  body.innerHTML = pairs.slice(0, 100).map((p) => {
+  // Same honesty note the consensus list shows: the header counts ALL
+  // matching pairs but the table renders only the first 100.
+  const capNote = pairs.length > 100
+    ? `<tr class="perpair-cap-note"><td colspan="9" class="placeholder" style="padding:6px 10px;">Showing the top 100 of ${pairs.length} pairs (sorted by win rate).</td></tr>`
+    : "";
+  body.innerHTML = capNote + pairs.slice(0, 100).map((p) => {
     const ls = p.levelStats || {};
     const aps = p.appPairStats || {};
     // Format a per-app-pair stat cell: shows win/loss and a tiny win-rate badge.
@@ -1782,8 +1838,12 @@ function renderPerPairTable() {
     const wr = p.winRate;
     const wrCls = wrClass(wr);
     const wrTxt = wr == null ? "—" : `${wr.toFixed(0)}%`;
-    const totalW = (ls["3-agree"]?.win || 0) + (ls["2-agree"]?.win || 0) + (ls["1-only"]?.win || 0);
-    const totalL = (ls["3-agree"]?.loss || 0) + (ls["2-agree"]?.loss || 0) + (ls["1-only"]?.loss || 0);
+    // Include "conflict" — the backend's headline winRate/gradedTotal counts
+    // graded conflict-majority clusters too (backtest_runner.pair_to_dict),
+    // so this column used to contradict the Win % cell right next to it
+    // (e.g. "3/2" next to a rate computed over 8W/7L).
+    const totalW = (ls["3-agree"]?.win || 0) + (ls["2-agree"]?.win || 0) + (ls["conflict"]?.win || 0) + (ls["1-only"]?.win || 0);
+    const totalL = (ls["3-agree"]?.loss || 0) + (ls["2-agree"]?.loss || 0) + (ls["conflict"]?.loss || 0) + (ls["1-only"]?.loss || 0);
     const isFav = state.favorites.has(p.pair);
     return `
       <tr data-pair="${escAttr(p.pair)}">
@@ -1844,6 +1904,7 @@ async function renderAppPairLeaders() {
       verdict: cached.verdict,
     };
   }
+  const ticket = nextTicket("apppair-leaders");
   if (!payload) {
     try {
       if (meta) meta.textContent = "loading…";
@@ -1852,6 +1913,8 @@ async function renderAppPairLeaders() {
     } catch (e) {
       console.warn("[app-pair-leaders] fetch failed", e);
     }
+    // A newer render superseded this one while we were fetching — bail.
+    if (!ticketStillCurrent("apppair-leaders", ticket)) return;
   }
 
   if (!payload) {
@@ -2084,13 +2147,20 @@ async function renderConsensusList(level) {
   if (!body) return;
   body.innerHTML = `<tr><td colspan="8" class="placeholder">${escHtml(t("placeholder_loading"))}</td></tr>`;
 
+  // Guard against out-of-order responses: tapping "3 Agree" then quickly
+  // "2 Agree" starts two fetches; the slower FIRST one must not overwrite
+  // the newer view (and must not revert state.activeConsensusLevel).
+  const ticket = nextTicket("consensuslist");
   let data;
   try {
     data = await fetchConsensusHistory({ level });
   } catch (e) {
-    body.innerHTML = `<tr><td colspan="8" class="placeholder placeholder--error">Could not load: ${escHtml(String(e.message || e))}</td></tr>`;
+    if (ticketStillCurrent("consensuslist", ticket)) {
+      body.innerHTML = `<tr><td colspan="8" class="placeholder placeholder--error">Could not load: ${escHtml(String(e.message || e))}</td></tr>`;
+    }
     return;
   }
+  if (!ticketStillCurrent("consensuslist", ticket)) return; // a newer request superseded us
   state.consensusHistory = data;
 
   const s = data.summary || {};
@@ -2424,20 +2494,29 @@ async function renderSubsetPairList(subset) {
   if (meta) meta.textContent = "loading…";
   body.innerHTML = '<tr><td colspan="7" class="placeholder">Loading…</td></tr>';
 
+  // Guard against out-of-order responses — rapidly tapping two subset
+  // cards starts two fetches; the slower FIRST one must not paint its
+  // pairs under the newer card's title.
+  const ticket = nextTicket("subsetpairs");
   let payload = null;
   try {
     const res = await fetch(`/api/app-pair/${encodeURIComponent(subset)}/pairs`, { cache: "no-store" });
     if (res.ok) payload = await res.json();
     else if (res.status === 400) {
-      body.innerHTML = `<tr><td colspan="7" class="placeholder">Invalid subset. Pick one of: app1, app2, app3, app1+app2, app1+app3, app2+app3, app1+app2+app3.</td></tr>`;
-      if (meta) meta.textContent = "error";
+      if (ticketStillCurrent("subsetpairs", ticket)) {
+        body.innerHTML = `<tr><td colspan="7" class="placeholder">Invalid subset. Pick one of: app1, app2, app3, app1+app2, app1+app3, app2+app3, app1+app2+app3.</td></tr>`;
+        if (meta) meta.textContent = "error";
+      }
       return;
     }
   } catch (e) {
-    body.innerHTML = `<tr><td colspan="7" class="placeholder">Failed: ${escHtml(e.message)}</td></tr>`;
-    if (meta) meta.textContent = "error";
+    if (ticketStillCurrent("subsetpairs", ticket)) {
+      body.innerHTML = `<tr><td colspan="7" class="placeholder">Failed: ${escHtml(e.message)}</td></tr>`;
+      if (meta) meta.textContent = "error";
+    }
     return;
   }
+  if (!ticketStillCurrent("subsetpairs", ticket)) return;
   if (!payload) {
     body.innerHTML = '<tr><td colspan="7" class="placeholder">No data.</td></tr>';
     return;
@@ -2549,16 +2628,23 @@ async function openPairDrawer(pair, opts = {}) {
   // result was hidden behind a duplicate modal. Render inline ONLY.
   if (!targetId) {
     state.drawerPair = pair;
+    state.drawerSubset = subset;
     drawerOverlay.hidden = false;
     document.body.style.overflow = "hidden";
     $("drawer-body").innerHTML = '<p class="placeholder">Loading…</p>';
     $("drawer-title").textContent = "Loading…";
     $("drawer-sub").textContent = pair;
   }
+  // Guard against out-of-order responses: opening pair A then quickly pair
+  // B starts two fetches; A's slower response must not overwrite B's view
+  // while state.drawerPair is already B (which would also make the ★ button
+  // toggle the WRONG pair).
+  const ticket = nextTicket(targetId ? `drilldown:${targetId}` : "drawer");
   try {
     const res = await fetch(`/api/pair/${encodeURIComponent(pair)}?candle_limit=60`, { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (!ticketStillCurrent(targetId ? `drilldown:${targetId}` : "drawer", ticket)) return;
     if (subset) {
       // Filter to the requested app-subset only. Tagging the filter onto
       // `data` (rather than threading it through every render function's
@@ -2575,6 +2661,7 @@ async function openPairDrawer(pair, opts = {}) {
       renderPairDrawer(data);
     }
   } catch (e) {
+    if (!ticketStillCurrent(targetId ? `drilldown:${targetId}` : "drawer", ticket)) return;
     if (targetId) {
       const alt = $(targetId);
       if (alt) alt.innerHTML = `<p class="placeholder">Failed: ${escHtml(e.message)}</p>`;
@@ -2588,6 +2675,7 @@ function closePairDrawer() {
   drawerOverlay.hidden = true;
   document.body.style.overflow = "";
   state.drawerPair = null;
+  state.drawerSubset = null;
 }
 
 function renderPairDrawer(data) {
@@ -2783,8 +2871,11 @@ document.addEventListener("click", (e) => {
   if (e.target.id === "drawer-fav" || e.target.id === "drawer-unfav") {
     if (state.drawerPair) {
       toggleFavorite(state.drawerPair);
-      // Re-render drawer
-      openPairDrawer(state.drawerPair);
+      // Re-render drawer — KEEP the subset filter the drawer was opened
+      // with (Per-Pair Stats cells / subset list open it pre-filtered);
+      // refetching without it made the chip + filtered table vanish as a
+      // side effect of pressing ★.
+      openPairDrawer(state.drawerPair, { subset: state.drawerSubset || null });
       renderFavorites();
       renderPairTable();
     }

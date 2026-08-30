@@ -393,6 +393,7 @@ async def run_backtest_coordinated() -> Dict[str, Any]:
 
 async def _refresh_in_background() -> None:
     c = _get_cache()
+    this_task = asyncio.current_task()
     try:
         # wait_for caps the run so a wedged upstream can't hold the refresh
         # flag forever (see _ensure_refresh_task's safety valve).
@@ -407,7 +408,15 @@ async def _refresh_in_background() -> None:
         c.last_refresh_error = str(e) or type(e).__name__
         logger.warning("[backtest-cache] background refresh failed: %s", c.last_refresh_error)
     finally:
-        c.refresh_in_progress = False
+        # Only clear the in-progress flag if THIS task is still the
+        # registered refresh. When _ensure_refresh_task cancelled us as
+        # "wedged" and started a replacement, the old task's finally used to
+        # run a tick LATER and clobber refresh_in_progress back to False
+        # while the replacement was mid-flight — every subsequent caller
+        # then started yet another concurrent run_backtest() and the runs
+        # raced to write c.result with stale data.
+        if c.refresh_task is this_task:
+            c.refresh_in_progress = False
 
 
 # ---------------------------------------------------------------------------
@@ -894,7 +903,11 @@ async def run_backtest() -> Dict[str, Any]:
     )
 
     if app1_d is not None:
-        for s in pick_array(app1_d, ["signals", "rows", "data"]):
+        # SAME envelope-key tolerance as the aggregator's fetch_app1 — the
+        # backtest used to miss "history" (App 1's most plausible envelope
+        # name), so a bare {"history": [...]} upstream change silently zeroed
+        # the backtest's App 1 data while the live dashboard kept working.
+        for s in pick_array(app1_d, ["history", "signals", "rows", "data"]):
             if isinstance(s, dict):
                 push(normalize_app1(s))
 
@@ -950,6 +963,34 @@ async def run_backtest() -> Dict[str, Any]:
             "[backtest] ledger backfilled %d signals the upstreams no longer return "
             "(%d live)", backfilled, live_count,
         )
+
+    # ---- Dedupe (source, pair, candle) BEFORE any stats ----
+    # App 3's resolved history AND its live feed routinely describe the SAME
+    # candle (the just-closed one); App 1's history can contain the same
+    # (pair, entry_ts) row twice. The candle clustering below already
+    # collapses these per-candle, but totalSignals and the per-source stats
+    # iterate the RAW list and double-counted them — a duplicate hist+live
+    # pair inflated sources.app3.total to 2 and diluted its win rate.
+    # Keep the row with a resolved outcome (the historical one), then the
+    # earliest emission time — mirroring the aggregator's "history rows win"
+    # merge rule.
+    dedup: Dict[tuple, NormalizedSignal] = {}
+    for s in all_signals:
+        key = (s.source, s.pair, s.candle_time)
+        cur = dedup.get(key)
+        if cur is None:
+            dedup[key] = s
+            continue
+        if cur.outcome is None and s.outcome is not None:
+            dedup[key] = s
+        elif (cur.outcome is None and s.outcome is None) and s.ts < cur.ts:
+            dedup[key] = s
+    if len(dedup) != len(all_signals):
+        logger.debug(
+            "[backtest] deduped %d duplicate (source, pair, candle) rows",
+            len(all_signals) - len(dedup),
+        )
+    all_signals = list(dedup.values())
 
     # Grade signals that lack an outcome, using candle close data.
     _grade_with_candles(all_signals)

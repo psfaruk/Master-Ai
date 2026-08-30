@@ -1959,4 +1959,7 @@ def _serialize_candle(c) -> dict:
         "result": c.result,
         "app3Direction": c.app3_direction,
         "fetchedAt": c.fetched_at,
+        # False = the close is a mid-candle capture price, not the final
+        # close — the UI must not present it as a settled OHLC bar.
+        "isFinal": c.is_final,
     }

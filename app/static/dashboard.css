@@ -573,6 +573,7 @@ html, body {
 .verdict--partial { background: rgba(245, 158, 11, 0.1); border-left: 3px solid var(--amber); color: var(--amber); }
 .verdict--anomaly { background: rgba(239, 68, 68, 0.1); border-left: 3px solid var(--red); color: var(--red); }
 .verdict--insufficient { background: rgba(138, 147, 167, 0.1); border-left: 3px solid var(--text-dim); color: var(--text-dim); }
+.verdict--error { background: rgba(239, 68, 68, 0.1); border-left: 3px solid var(--red); color: var(--red); font-weight: 600; }
 
 .level-stats {
   display: grid;
@@ -1683,6 +1684,7 @@ a { color: var(--blue); }
 }
 .sp-detail-signal__outcome--WIN { background: rgba(16, 185, 129, 0.2); color: var(--emerald); }
 .sp-detail-signal__outcome--LOSS { background: rgba(239, 68, 68, 0.2); color: var(--red); }
+.sp-detail-signal__outcome--DRAW { background: rgba(245, 158, 11, 0.18); color: var(--amber); }
 .sp-detail-signal__outcome--unknown { background: rgba(138, 147, 167, 0.15); color: var(--text-dim); }
 
 /* Responsive — signals tab.
@@ -2441,6 +2443,7 @@ a { color: var(--blue); }
 }
 .src-chip--custom { background: rgba(16, 185, 129, 0.15); color: var(--emerald); }
 .src-chip--env { background: rgba(245, 158, 11, 0.15); color: var(--amber); }
+.src-chip--default { background: rgba(138, 147, 167, 0.15); color: var(--text-dim); }
 .src-url-input {
   width: 100%;
   background: var(--bg);
