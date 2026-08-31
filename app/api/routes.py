@@ -54,6 +54,7 @@ from ..app2_cache import (
 )
 from ..signal_ledger import ledger_stats
 from ..backtest_runner import (
+    _get_cache,
     get_backtest_cache_age_sec,
     get_cached_backtest,
     get_or_refresh_backtest,
@@ -669,6 +670,10 @@ async def get_pair_history(
     wr = winrate_lookup.get(pair, {})
     now_sec = int(datetime.now(timezone.utc).timestamp())
 
+    # Same "+"-decoding normalization as /api/consensus-history — a
+    # hand-typed ``?subset=app1+app2`` must not silently match nothing.
+    subset = (subset or "").strip().replace(" ", "+")
+
     cached = get_cached_backtest() or {}
     full_history: List[Dict[str, Any]] = []
     for p in cached.get("perPair", []):
@@ -816,6 +821,11 @@ async def get_consensus_history(
     level = (level or "all").strip()
     direction = (direction or "").strip().upper()
     category = (category or "").strip().lower()
+    # A literal "+" in a query string is form-decoded to a space, so a
+    # hand-typed ``?subset=app1+app2`` would arrive as "app1 app2" and
+    # silently match nothing. Normalize both spellings to the canonical
+    # subset key (URLSearchParams callers already send %2B).
+    subset = (subset or "").strip().replace(" ", "+")
 
     # Flatten every pair's cluster history into one list, stamping the pair
     # identity onto each row (the per-pair history dicts don't carry the
@@ -1008,6 +1018,102 @@ async def get_backtest_status(request: Request):
     })
 
 
+# Canonical app-subset keys — kept in sync with backtest_runner.APP_SUBSET_KEYS.
+APP_SUBSET_KEYS_ROUTES = ["app1", "app2", "app3", "app1+app2", "app1+app3", "app2+app3", "app1+app2+app3"]
+
+
+def _aggregate_app_pair_global(per_pair: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Global per-app-subset aggregate across every pair.
+
+    Reads each pair's serialized ``appPairStats`` (all 7 canonical subset
+    keys, zeroed when absent) and sums win/loss/unknown/draw/total per
+    subset. Shared by ``/api/app-pair-leaders`` and ``/api/live-winrate`` —
+    previously this logic lived inline in the leaders endpoint only, so the
+    new lightweight win-rate endpoint would have had to duplicate it.
+    """
+    agg: Dict[str, Dict[str, int]] = {
+        k: {"total": 0, "win": 0, "loss": 0, "unknown": 0, "draw": 0}
+        for k in APP_SUBSET_KEYS_ROUTES
+    }
+    for p in per_pair:
+        for key, st in (p.get("appPairStats") or {}).items():
+            if key not in agg:
+                agg[key] = {"total": 0, "win": 0, "loss": 0, "unknown": 0, "draw": 0}
+            a = agg[key]
+            a["total"] += st.get("total", 0)
+            a["win"] += st.get("win", 0)
+            a["loss"] += st.get("loss", 0)
+            a["unknown"] += st.get("unknown", 0)
+            a["draw"] += st.get("draw", 0)
+    out: Dict[str, Dict[str, Any]] = {}
+    for key, a in agg.items():
+        graded = a["win"] + a["loss"]
+        out[key] = {
+            **a,
+            "gradedTotal": graded,
+            "winRate": round((a["win"] / graded) * 100, 1) if graded else None,
+        }
+    return out
+
+
+@router.get("/live-winrate")
+async def get_live_winrate(request: Request):
+    """Lightweight LIVE win-rate summary for the Signals tab panel.
+
+    One cheap call that answers, across the whole 6h backtest window:
+
+      - overall graded win rate (all consensus levels)
+      - per-level win rate (3-agree / 2-agree / conflict / 1-only)
+      - per-app-combination win rate (app1+app2 / app1+app3 / app2+app3 /
+        all-3, plus the singletons)
+
+    Unlike ``/api/backtest`` this never ships perPair[] / cluster history /
+    samples — the Signals tab polls it alongside the snapshot, so the
+    payload must stay small. Unlike ``/api/app-pair-leaders`` it also
+    carries the per-level rates (the leaders endpoint only aggregates
+    app subsets), so the panel needs exactly ONE round trip.
+
+    Cold cache: joins/triggers a background refresh (same contract as
+    ``/api/app-pair-leaders``) and reports ``hasResult: false`` so the UI
+    can render a "waiting for first backtest" state instead of zeros.
+    """
+    start_app2_cache_poller()
+    start_candle_poller()
+    await get_or_refresh_backtest()
+    cached = get_cached_backtest()
+    bt_state = _get_cache()
+
+    levels = (cached.get("levels") or {}) if cached else {}
+
+    # Overall = sum of every consensus level's graded outcomes. This is the
+    # same population the per-pair headline winRate counts (3-agree +
+    # 2-agree + conflict + 1-only), so the panel's "Overall" card matches
+    # what the pair rows already show.
+    overall = {"total": 0, "win": 0, "loss": 0, "unknown": 0, "draw": 0}
+    for s in levels.values():
+        overall["total"] += s.get("total", 0)
+        overall["win"] += s.get("win", 0)
+        overall["loss"] += s.get("loss", 0)
+        overall["unknown"] += s.get("unknown", 0)
+        overall["draw"] += s.get("draw", 0)
+    graded = overall["win"] + overall["loss"]
+    overall["gradedTotal"] = graded
+    overall["winRate"] = round((overall["win"] / graded) * 100, 1) if graded else None
+
+    return _json({
+        "hasResult": cached is not None,
+        "cacheAgeSec": (round(age, 1) if (age := get_backtest_cache_age_sec()) is not None else None),
+        "refreshInProgress": bool(bt_state.refresh_in_progress),
+        "lastRefreshError": bt_state.last_refresh_error,
+        "verdict": cached.get("verdict") if cached else None,
+        "levels": levels,
+        "appPair": _aggregate_app_pair_global(cached.get("perPair", []) if cached else []),
+        "overall": overall,
+        "subsetKeys": APP_SUBSET_KEYS_ROUTES,
+        "now": int(datetime.now(timezone.utc).timestamp()),
+    })
+
+
 @router.get("/app-pair-leaders")
 async def get_app_pair_leaders(request: Request):
     """Per-app-subset leaderboard from the cached backtest.
@@ -1032,34 +1138,16 @@ async def get_app_pair_leaders(request: Request):
 
     leaders = cached.get("appPairLeaders", {}) if cached else {}
 
-    # Global aggregate per app subset (across all pairs).
-    APP_SUBSET_KEYS = ["app1", "app2", "app3", "app1+app2", "app1+app3", "app2+app3", "app1+app2+app3"]
-    global_agg: Dict[str, Dict[str, int]] = {k: {"total": 0, "win": 0, "loss": 0, "unknown": 0, "draw": 0} for k in APP_SUBSET_KEYS}
-    for p in (cached.get("perPair", []) if cached else []):
-        for key, st in (p.get("appPairStats") or {}).items():
-            if key not in global_agg:
-                global_agg[key] = {"total": 0, "win": 0, "loss": 0, "unknown": 0, "draw": 0}
-            agg = global_agg[key]
-            agg["total"] += st.get("total", 0)
-            agg["win"] += st.get("win", 0)
-            agg["loss"] += st.get("loss", 0)
-            agg["unknown"] += st.get("unknown", 0)
-            agg["draw"] += st.get("draw", 0)
-    global_summary = {}
-    for key, agg in global_agg.items():
-        graded = agg["win"] + agg["loss"]
-        global_summary[key] = {
-            **agg,
-            "gradedTotal": graded,
-            "winRate": round((agg["win"] / graded) * 100, 1) if graded else None,
-        }
+    # Global aggregate per app subset (across all pairs) — shared helper
+    # with /api/live-winrate so both endpoints always agree.
+    global_summary = _aggregate_app_pair_global(cached.get("perPair", []) if cached else [])
 
     return _json({
         "appPairLeaders": leaders,
         "appPairGlobal": global_summary,
         "cacheAgeSec": (round(age, 1) if (age := get_backtest_cache_age_sec()) is not None else None),
         "verdict": cached.get("verdict") if cached else None,
-        "subsetKeys": APP_SUBSET_KEYS,
+        "subsetKeys": APP_SUBSET_KEYS_ROUTES,
     })
 
 

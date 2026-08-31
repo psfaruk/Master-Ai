@@ -617,7 +617,12 @@ def test_history_subtab_reset_on_tab_reentry(js):
 
 def test_hero_card_label_read_from_menu(js, js_code):
     """Hero-card jump must read the (translated) menu item text, not write
-    the raw internal level value into the trigger label."""
+    the raw internal level value into the trigger label.
+
+    The label-sync logic now lives in the shared setLevelFilter() helper
+    (also used by the Signals tab's Live Win Rate level cards) and
+    wireHeroCards() delegates to it — the guarantee being tested is that
+    the jump path still goes through the menu-text-reading helper."""
     m = re.search(r"function wireHeroCards\(\) \{.*?\n\}", js, re.S)
     assert m, "wireHeroCards not found"
     # Strip // comments so the explanatory comment (which quotes the old
@@ -626,4 +631,12 @@ def test_hero_card_label_read_from_menu(js, js_code):
         re.sub(r"\s*//.*$", "", ln) for ln in m.group(0).splitlines()
     )
     assert 'filters.level || "All"' not in body
-    assert "match.textContent.trim()" in body
+    assert "setLevelFilter(" in body, (
+        "wireHeroCards() must delegate the level-filter update to setLevelFilter()"
+    )
+    helper = re.search(r"function setLevelFilter\(level\) \{.*?\n\}", js, re.S)
+    assert helper, "setLevelFilter helper not found"
+    helper_body = "\n".join(
+        re.sub(r"\s*//.*$", "", ln) for ln in helper.group(0).splitlines()
+    )
+    assert "match.textContent.trim()" in helper_body

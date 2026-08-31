@@ -177,6 +177,14 @@ REQUIRED_CLASSES = [
     "level-chip-row", "level-chip", "level-chip__name", "level-chip__wl",
     "wr-bar--lg", "panel__note", "panel__sub", "placeholder--error", "check",
     "drawer__headline",
+    "drawer-tabs", "drawer-tab", "drawer-tab--active", "drawer-tab__name",
+    "drawer-tab__wr", "drawer-tab__stats",
+    "subfolder-heading", "panel__body--flush",
+    "sp-wr-section", "sp-wr-head", "sp-wr-title", "sp-wr-meta",
+    "sp-wr-grid", "sp-wr-card", "sp-wr-card__label", "sp-wr-card__wr",
+    "sp-wr-card__sub",
+    "sp-history-section", "sp-history-tabs", "sp-history-tab",
+    "sp-history-summary", "sp-history-tablewrap", "sp-history-scroll",
 ]
 
 
@@ -302,18 +310,38 @@ def test_app_pair_leader_headline_wr_has_high_and_low_css(css):
 
 
 def test_open_pair_drawer_actually_uses_the_subset_option(js):
-    """openPairDrawer(pair, {subset}) is called by two entry points that
-    promise "opens the drawer with the subset chip pre-selected" (the
-    Per-Pair Stats table's per-subset cells, and the Subset Pair List's
-    "History" button) — opts.subset must actually be read and applied,
-    not silently accepted and dropped."""
+    """openPairDrawer(pair, {subset}) is called by three entry points that
+    promise "opens the drawer already scoped to that combination" (the
+    Per-Pair Stats table's per-subset cells, the Subset Pair List's
+    "History" button, and the inline detail row's app-pair cards) —
+    opts.subset must actually be read and applied as the drawer's active
+    agreement TAB, not silently accepted and dropped."""
     fn = js.split("async function openPairDrawer(pair, opts = {}) {")[1]
     fn = fn.split("\nfunction closePairDrawer")[0]
     assert "opts.subset" in fn, "openPairDrawer() never reads opts.subset"
     assert "clusterHistory" in fn, (
-        "openPairDrawer() must filter data.clusterHistory by the requested "
-        "subset, not just note that a subset was requested"
+        "openPairDrawer() must scope data.clusterHistory via the requested "
+        "subset tab, not just note that a subset was requested"
     )
+    assert "drawerTab" in fn, (
+        "opts.subset must preselect the drawer's agreement tab"
+    )
+
+
+def test_drawer_agreement_tabs_cover_the_user_asked_combinations(js):
+    """The pair drawer must expose one tab per agreement type the user asked
+    for: 2-agree, 3-agree, app1+app2, app1+app3, app2+app3 (plus "all").
+    Each pairwise tab maps 1:1 onto the backend's app_subset_key."""
+    block = js.split("const DRAWER_TABS = [")[1].split("];", 1)[0]
+    keys = re.findall(r'key: "([a-z0-9+-]+)"', block)
+    assert keys == ["all", "3-agree", "2-agree", "app1+app2", "app1+app3", "app2+app3"]
+
+
+def test_signals_history_panel_tabs_match_drawer_tabs(html):
+    """The Signals tab's Live Signal History panel exposes the same
+    agreement-type filter tabs (plus All) as the pair drawer."""
+    tabs = re.findall(r'data-shfilter="([a-z0-9+-]+)"', html)
+    assert tabs == ["all", "3-agree", "2-agree", "app1+app2", "app1+app3", "app2+app3"]
 
 
 def test_history_list_and_drawer_row_keys_are_namespaced(js):

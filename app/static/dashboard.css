@@ -1188,6 +1188,123 @@ a { color: var(--blue); }
   font-family: 'JetBrains Mono', ui-monospace, monospace;
 }
 
+/* ====== LIVE WIN RATE PANEL (Signals tab) ======
+   Global per-level + per-app-combination win rates, graded by the 6h
+   backtest. Sits between the stat cards and the filter section so the
+   win-rate context is visible before the pair rows. */
+#tab-signals > .sp-wr-section,
+#tab-signals > .sp-history-section {
+  position: relative;
+  z-index: 1;
+  padding: 0 28px;
+}
+.sp-wr-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 0 10px;
+}
+.sp-wr-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  color: var(--text);
+}
+.sp-wr-title i { color: var(--blue); font-size: 12px; }
+.sp-wr-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.sp-wr-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 10px;
+  padding-bottom: 16px;
+}
+.sp-wr-card {
+  appearance: none;
+  text-align: left;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+  transition: border-color 0.25s, transform 0.25s;
+}
+.sp-wr-card:hover { border-color: var(--blue); transform: translateY(-2px); }
+.sp-wr-card__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.sp-wr-card__wr {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+.sp-wr-card__wr.high { color: var(--emerald); }
+.sp-wr-card__wr.mid  { color: var(--amber); }
+.sp-wr-card__wr.low  { color: var(--red); }
+.sp-wr-card__wr.none { color: var(--text-muted); }
+.sp-wr-card__sub {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+/* ====== LIVE SIGNAL HISTORY PANEL (Signals tab) ====== */
+.sp-history-section { padding-bottom: 28px !important; }
+.sp-history-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+}
+.sp-history-tab {
+  appearance: none;
+  white-space: nowrap;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+}
+.sp-history-tab:hover { border-color: var(--blue); color: var(--text); }
+.sp-history-tab.is-active {
+  border-color: var(--blue);
+  color: var(--blue);
+  background: var(--bg-card-hover);
+}
+.sp-history-summary { margin-bottom: 10px; }
+.sp-history-tablewrap {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.sp-history-scroll { overflow-x: auto; }
+/* The history rows reuse .pair-table--history; give them the Signals-tab
+   padding inside the card so they line up with the rest of the panel. */
+#tab-signals .sp-history-tablewrap .pair-table { font-size: 12.5px; }
+
 /* ====== FILTER SECTION ====== */
 #tab-signals .sp-filter-section {
   background: rgba(17, 24, 39, 0.6);
@@ -2211,6 +2328,23 @@ a { color: var(--blue); }
 .breadcrumb__current { font-weight: 600; padding: 3px 2px; }
 
 /* ---- Sub-folder cards (the agreement-level picker) ---- */
+/* The picker's wrapper (#consensus-level-grid) is a plain vertical stack:
+   the JS renders TWO labelled grids inside it (agreement levels + app
+   combinations), each with its own .subfolder-heading. */
+#consensus-level-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.subfolder-heading {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  font-weight: 700;
+  margin-top: 4px;
+}
+.panel__body--flush { padding: 0; }
 .subfolder-grid {
   display: grid;
   gap: 12px;
@@ -2357,6 +2491,48 @@ a { color: var(--blue); }
 .level-chip__wl { font-family: var(--font-mono); }
 
 .drawer__headline { margin: 6px 0 10px; }
+/* ---- Drawer agreement-type tabs (3-agree / 2-agree / App1+2 / ...) ----
+   One button per agreement type; each carries ITS OWN win rate + W/L so
+   the tabs are directly comparable, and switching a tab re-scopes the
+   history table below to that exact population. */
+.drawer-tabs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+  gap: 8px;
+}
+.drawer-tab {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 9px 11px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+.drawer-tab:hover { border-color: var(--blue); }
+.drawer-tab--active,
+.drawer-tab--active:hover {
+  border-color: var(--blue);
+  background: var(--bg-card-hover);
+}
+.drawer-tab__name {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+}
+.drawer-tab--active .drawer-tab__name { color: var(--blue); }
+.drawer-tab__wr { justify-content: center; min-width: 52px; }
+.drawer-tab__stats {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
 .panel__note { font-size: 11px; color: var(--text-muted); margin-top: 8px; }
 .panel__sub { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
 .placeholder--error { color: var(--red); }
@@ -2398,6 +2574,20 @@ a { color: var(--blue); }
   #drawer-history-table th:nth-child(6),
   #drawer-history-table td:nth-child(6) { display: none; }
   #drawer-history-table .hist-detail-row > td { display: table-cell; }
+
+  /* And for the Signals tab's Live Signal History table — same 8-column
+     shape as the consensus list, same two columns dropped. */
+  #sp-history-table th:nth-child(3),
+  #sp-history-table td:nth-child(3),
+  #sp-history-table th:nth-child(7),
+  #sp-history-table td:nth-child(7) { display: none; }
+  #sp-history-table .hist-detail-row > td { display: table-cell; }
+
+  /* Drawer agreement tabs: 6 buttons stop fitting two-across on phones —
+     drop to two columns so every tab stays tappable without scroll. */
+  .drawer-tabs { grid-template-columns: repeat(3, 1fr); }
+  #tab-signals > .sp-wr-section,
+  #tab-signals > .sp-history-section { padding-left: 16px; padding-right: 16px; }
 }
 
 /* The expanded detail row spans the full table width regardless of how many

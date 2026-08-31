@@ -196,6 +196,21 @@
         <!-- Populated by JS — renderSignalStats() -->
       </div>
 
+      <!-- Live Win Rate panel — global per-level + per-app-combination win
+           rates graded by the 6h backtest, refreshed alongside the snapshot
+           poll. Each card is tappable: level cards filter the table below,
+           combination cards open the History tab's per-combination signal
+           history. -->
+      <section class="sp-wr-section">
+        <div class="sp-wr-head">
+          <span class="sp-wr-title"><i class="fas fa-bullseye"></i> <span data-i18n="panel_live_wr_title">Live Win Rate</span></span>
+          <span class="sp-wr-meta" id="sp-wr-meta">—</span>
+        </div>
+        <div class="sp-wr-grid" id="sp-live-winrate">
+          <p class="placeholder" data-i18n="placeholder_loading">Loading…</p>
+        </div>
+      </section>
+
       <!-- Filter section — comprehensive, all columns filterable.
            Laid out as a 2-pair grid (label/control × 2) so filters
            are aligned like a table row, and collapse to 1 column on
@@ -389,6 +404,46 @@
           </div>
         </div>
       </div>
+
+      <!-- Live Signal History panel — the graded, candle-by-candle consensus
+           history across ALL pairs, filterable by agreement level AND by
+           app combination (app1+app2 / app1+app3 / app2+app3). Rows reuse
+           the same expandable per-app breakdown as the History tab list,
+           and every row opens the pair drawer on tap. -->
+      <section class="sp-history-section">
+        <div class="sp-wr-head">
+          <span class="sp-wr-title"><i class="fas fa-clock-rotate-left"></i> <span data-i18n="panel_sig_history_title">Live Signal History</span></span>
+          <span class="sp-wr-meta" id="sp-history-meta">—</span>
+        </div>
+        <div class="sp-history-tabs" id="sp-history-tabs" role="tablist">
+          <button type="button" class="sp-history-tab is-active" data-shfilter="all">All</button>
+          <button type="button" class="sp-history-tab" data-shfilter="3-agree">3-agree</button>
+          <button type="button" class="sp-history-tab" data-shfilter="2-agree">2-agree</button>
+          <button type="button" class="sp-history-tab" data-shfilter="app1+app2">App 1+2</button>
+          <button type="button" class="sp-history-tab" data-shfilter="app1+app3">App 1+3</button>
+          <button type="button" class="sp-history-tab" data-shfilter="app2+app3">App 2+3</button>
+        </div>
+        <div class="sp-history-summary" id="sp-history-summary"></div>
+        <div class="sp-history-tablewrap">
+          <div class="sp-history-scroll">
+            <table class="pair-table pair-table--history" id="sp-history-table">
+              <thead><tr>
+                <th data-i18n="th_time">Time</th>
+                <th data-i18n="th_pair">Pair</th>
+                <th data-i18n="th_apps">Apps</th>
+                <th data-i18n="th_prediction">Prediction</th>
+                <th data-i18n="th_result">Result</th>
+                <th data-i18n="th_wl">W/L</th>
+                <th data-i18n="th_winrate">Win Rate</th>
+                <th aria-label="expand"></th>
+              </tr></thead>
+              <tbody id="sp-history-body">
+                <tr><td colspan="8" class="placeholder" data-i18n="loading_ellipsis">Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
     </section>
 
     <!-- ============ HISTORY ============ -->
@@ -451,8 +506,8 @@
               <h2 data-i18n="panel_consensus_title">Signal History</h2>
               <p class="panel__sub" data-i18n="panel_consensus_sub">Pick an agreement level. Counts cover the last 6 hours of saved signals.</p>
             </div>
-            <div class="panel__body">
-              <div class="subfolder-grid" id="consensus-level-grid">
+            <div class="panel__body panel__body--flush">
+              <div id="consensus-level-grid">
                 <p class="placeholder" data-i18n="placeholder_loading">Loading…</p>
               </div>
             </div>
