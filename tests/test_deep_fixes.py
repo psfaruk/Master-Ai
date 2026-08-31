@@ -505,138 +505,107 @@ def css() -> str:
     return open(CSS_PATH, encoding="utf-8").read()
 
 
-def test_perpair_overall_wl_includes_conflict(js):
-    """The Overall W/L column must sum ALL four levels (the backend's
-    headline winRate counts graded conflict-majority clusters too)."""
-    m = re.search(
-        r"const totalW = (.*?);\n\s*const totalL = (.*?);", js, re.S
-    )
-    assert m, "totalW/totalL computation not found"
-    assert 'ls["conflict"]?.win' in m.group(1), (
-        "Overall W/L column excludes graded conflict clusters — it contradicts "
-        "the Win % cell next to it"
-    )
-    assert 'ls["conflict"]?.loss' in m.group(2)
-
-
 def test_backtest_win_rate_no_dash_percent(js, js_code):
     """A zero-graded bucket must render a bare em-dash, never '—%'."""
     # The old pattern was `${winRate}%` where winRate could be "—".
     assert "`${winRate}%`" not in js_code
-    # The level/source stat cells build the text with the % baked in only
-    # when there are graded signals.
-    assert 'total > 0 ? `${((s.win / total) * 100).toFixed(1)}%` : "—"' in js_code
-
-
-def test_backtest_verdict_escaped(js):
-    """The History backtest verdict must escHtml/escAttr the payload — the
-    Home twin already did; this one didn't."""
-    assert '<div class="verdict verdict--${escAttr(v.kind || "insufficient")}">${escHtml(v.message || "—")}</div>' in js
+    # Every percent-text interpolation must sit behind a null guard
+    # ("graded ?" / "wr == null ?") — fmtWr() is the canonical one.
+    for m in re.finditer(r"\$\{[^}]*\.toFixed\(1\)\}%`", js_code):
+        frag = js_code[max(0, m.start() - 200):m.start()]
+        guarded = (
+            re.search(r"== null \? ", frag)
+            or re.search(r"graded \?", frag)
+            or re.search(r"graded\s*\?\s*Number", frag)
+        )
+        assert guarded, f"unguarded toFixed(1)+% interpolation near: {m.group(0)[:60]}"
 
 
 def test_app_cards_escape_upstream_text(js):
-    """App status card title/detail/health must be escaped — `detail` is
+    """App status card title/detail must be escaped — `detail` is
     free-form upstream error text."""
     m = re.search(r"function renderAppCards\(apps\) \{.*?\n\}", js, re.S)
     assert m, "renderAppCards not found"
     body = m.group(0)
     assert "${escHtml(a.name)}" in body
     assert "${escHtml(a.detail" in body
-    assert "${escHtml(a.health" in body
 
 
 def test_out_of_order_guard_exists(js):
     """The async-render ticket guard must exist and be used by the views
     that had out-of-order response races."""
     assert "function nextTicket(" in js
-    assert "function ticketStillCurrent(" in js
-    for slot in ("consensuslist", "subsetpairs", "apppair-leaders", "drawer"):
+    assert "function ticketCurrent(" in js
+    for slot in ("livewr", "sphistory", "histlist", "drawer"):
         assert f'"{slot}"' in js, f"ticket guard not wired for {slot}"
 
 
-def test_drawer_fav_keeps_subset(js):
-    """Toggling ★ in the pair drawer must re-open with the SAME subset
-    filter the drawer was opened with."""
-    m = re.search(
-        r"if \(e\.target\.id === \"drawer-fav\".*?\n  \}\n\}\);", js, re.S
-    )
+def test_drawer_fav_keeps_the_same_pair(js):
+    """Toggling ☆ in the pair drawer must re-render the SAME pair's
+    drawer (state.drawerData), not drop back to a loading state."""
+    m = re.search(r'\$\("drawer-fav"\)\?\.addEventListener[\s\S]*?\n  \}\);', js)
     assert m, "drawer fav handler not found"
-    assert "state.drawerSubset" in m.group(0), (
-        "fav toggle refetches without the subset — the filtered history table "
-        "and its chip vanish on ★"
+    assert "state.drawerData" in m.group(0), (
+        "fav toggle must re-render from state.drawerData"
     )
-
-
-def test_home_meta_updated_before_empty_return(js):
-    """home-meta must be refreshed even when there are no highlights."""
-    m = re.search(
-        r"function renderConsensusHighlights\(pairs\) \{.*?if \(highlights\.length === 0\)",
-        js, re.S,
-    )
-    assert m, "renderConsensusHighlights not found"
-    assert '("home-meta").textContent' in m.group(0), (
-        "home-meta update must run BEFORE the empty-highlights early return"
-    )
-
-
-def test_filter_tag_clear_uses_dom_labels(js):
-    """Filter-tag ✕ buttons must reset the menu selection + read the
-    translated label from the DOM, not hardcode English 'All'/'Any'."""
-    m = re.search(r"function renderActiveFilterTags\(\) \{.*?\n\}", js, re.S)
-    assert m, "renderActiveFilterTags not found"
-    body = m.group(0)
-    assert 'textContent = "All"' not in body
-    assert 'textContent = "Any"' not in body
-    assert "resetMenuSelection(" in body
-    assert "syncCategoryLabels()" in body
 
 
 def test_home_backtest_placeholder_translated(js):
-    """The Home consensus placeholder must go through t() — the key exists
+    """The Home backtest placeholder must go through t() — the key exists
     in both translation tables."""
     assert 't("placeholder_run_backtest_home")' in js
-    assert "Run a backtest to see per-level accuracy.</p>" not in js
 
 
 def test_missing_css_classes_now_defined(css):
     for cls in (
-        "sp-detail-signal__outcome--DRAW",
-        "src-chip--default",
-        "verdict--error",
+        "placeholder--error",
+        "hist-detail__verdict--pending",
+        "drawer-tab--active",
+        "hist-app-card--silent",
+        "wr--none",
     ):
         assert f".{cls}" in css, f"CSS rule for .{cls} is missing"
 
 
-def test_history_subtab_reset_on_tab_reentry(js):
-    """switchTab('history') must drop a stale activeHistorySubtab so the
-    poller doesn't fire a hidden live backtest into an invisible panel."""
-    m = re.search(r'if \(name === "history"\) \{.*?renderConsensusLevels\(\);', js, re.S)
-    assert m, "switchTab history branch not found"
-    assert 'state.activeHistorySubtab = ""' in m.group(0)
+def test_hero_cards_set_the_level_filter_select(js):
+    """Hero-card jump must set the native #filter-level <select> (whose
+    option labels are translated by data-i18n), never write a raw internal
+    level value into any visible label."""
+    m = re.search(r'\$\$\("\[data-hero-level\]"\)[\s\S]*?\}\);', js)
+    assert m, "hero card wiring not found"
+    body = m.group(0)
+    assert '$("filter-level").value' in body
+    assert "textContent" not in body
 
 
-def test_hero_card_label_read_from_menu(js, js_code):
-    """Hero-card jump must read the (translated) menu item text, not write
-    the raw internal level value into the trigger label.
+def test_win_rate_cards_filter_or_navigate(js):
+    """The Signals win-rate cards: 3-agree/2-agree filter the table,
+    combination cards navigate to the History list for that subset."""
+    fn = js.split("function renderLiveWrPanel() {")[1].split("\n}", 1)[0]
+    assert 'data-wrcard=' in fn or "data-wrcard" in fn
+    assert '"3-agree"' in fn and '"2-agree"' in fn
+    assert "#/history/" in fn
 
-    The label-sync logic now lives in the shared setLevelFilter() helper
-    (also used by the Signals tab's Live Win Rate level cards) and
-    wireHeroCards() delegates to it — the guarantee being tested is that
-    the jump path still goes through the menu-text-reading helper."""
-    m = re.search(r"function wireHeroCards\(\) \{.*?\n\}", js, re.S)
-    assert m, "wireHeroCards not found"
-    # Strip // comments so the explanatory comment (which quotes the old
-    # pattern) doesn't trip the check.
-    body = "\n".join(
-        re.sub(r"\s*//.*$", "", ln) for ln in m.group(0).splitlines()
-    )
-    assert 'filters.level || "All"' not in body
-    assert "setLevelFilter(" in body, (
-        "wireHeroCards() must delegate the level-filter update to setLevelFilter()"
-    )
-    helper = re.search(r"function setLevelFilter\(level\) \{.*?\n\}", js, re.S)
-    assert helper, "setLevelFilter helper not found"
-    helper_body = "\n".join(
-        re.sub(r"\s*//.*$", "", ln) for ln in helper.group(0).splitlines()
-    )
-    assert "match.textContent.trim()" in helper_body
+
+def test_drawer_history_running_win_rate_scoped_to_active_tab(js):
+    """The drawer's running win rate must be computed over the ACTIVE
+    tab's filtered rows (oldest→newest), not the unfiltered history."""
+    fn = js.split("function renderDrawerHtml(data) {")[1].split("\n}", 1)[0]
+    assert "activeDef.match" in fn, "rows must be filtered by the active tab"
+    assert "__runningWr" in fn
+
+
+def test_single_fetch_for_live_win_rate(js):
+    """Both the Signals cards and the History overall cards must read the
+    ONE cached /api/live-winrate payload — no second endpoint, no
+    divergent numbers."""
+    assert js.count('"/api/live-winrate"') == 1
+    assert "renderOverallWinRate();" in js.split("async function fetchLiveWinRate")[1].split("\n}", 1)[0]
+
+
+def test_poll_table_repaints_only_on_change(js):
+    """renderSignalFeed must skip the DOM write when the HTML didn't
+    change — the adaptive poll refires every second during the burst
+    window and a full rebuild every tick makes the feed flicker."""
+    fn = js.split("function renderSignalFeed(items) {")[1].split("\n}", 1)[0]
+    assert "state._feedHtml === html" in fn

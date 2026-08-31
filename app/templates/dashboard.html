@@ -3,22 +3,373 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#0a0e17">
+  <meta name="theme-color" content="#0b0f1a">
   <title>Master-Ai · Live Signal Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/dashboard.css?v={{ asset_version }}">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='24' font-size='24'%3E📊%3C/text%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='24' font-size='24'%3E%F0%9F%93%8A%3C/text%3E%3C/svg%3E">
 </head>
-<body data-theme="dark" data-tz="utc" data-lang="en">
+<body data-theme="dark" data-tz="both" data-lang="en">
 
-  <!-- ===================== DESKTOP SIDE NAV (shown ≥1100px) ===================== -->
-  <!-- The same 4 tabs as the mobile bottom nav, in a fixed left rail.
-       CSS shows exactly one rail per breakpoint (sidebar on desktop,
-       bottom nav on phones). Both are wired by the shared [data-tab]
-       handler in dashboard.js. -->
+  <!-- ===================== TOP BAR ===================== -->
+  <header class="topbar">
+    <div class="topbar__brand" id="topbar-brand" role="button" tabindex="0">
+      <span class="topbar__logo">📊</span>
+      <div class="topbar__title">
+        <h1>Master-Ai</h1>
+        <p class="topbar__subtitle" data-i18n="topbar_subtitle">Quotex signal aggregator</p>
+      </div>
+    </div>
+    <div class="topbar__right">
+      <div class="clock" id="clock-utc" title="UTC time">
+        <span class="clock__label">UTC</span>
+        <span class="clock__time" id="clock-utc-time">—</span>
+      </div>
+      <div class="clock" id="clock-local" title="Your local time">
+        <span class="clock__label" data-i18n="clock_local">Local</span>
+        <span class="clock__time" id="clock-local-time">—</span>
+      </div>
+      <div class="status" id="status-pill" title="Data feed status">
+        <span class="status__dot"></span>
+        <span id="status-text">connecting…</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===================== APP HEALTH ALERT ===================== -->
+  <div id="app-health-alert" class="alert" hidden>
+    <span class="alert__icon">⚠</span>
+    <div class="alert__body">
+      <div class="alert__title" data-i18n="health_alert_title">Source app issue detected</div>
+      <div class="alert__msg" id="app-health-msg">—</div>
+    </div>
+    <button class="alert__close" id="health-alert-close" type="button" aria-label="Dismiss">✕</button>
+  </div>
+
+  <main class="content">
+
+    <!-- ============ HOME ============ -->
+    <section id="tab-home" class="tab tab--active">
+      <div class="hero-row">
+        <button class="hero hero--3" data-hero-level="3-agree" type="button">
+          <span class="hero__value" id="stat-3agree">—</span>
+          <span class="hero__label" data-i18n="hero_3agree_label">3-Bot Agree</span>
+        </button>
+        <button class="hero hero--2" data-hero-level="2-agree" type="button">
+          <span class="hero__value" id="stat-2agree">—</span>
+          <span class="hero__label" data-i18n="hero_2agree_label">2-Bot Agree</span>
+        </button>
+        <button class="hero hero--conflict" data-hero-level="conflict" type="button">
+          <span class="hero__value" id="stat-conflict">—</span>
+          <span class="hero__label" data-i18n="hero_conflict_label">Conflicts</span>
+        </button>
+        <button class="hero hero--single" data-hero-level="1-only" type="button">
+          <span class="hero__value" id="stat-single">—</span>
+          <span class="hero__label" data-i18n="hero_single_label">Single Only</span>
+        </button>
+      </div>
+
+      <div class="app-grid" id="app-cards"></div>
+
+      <div class="panel">
+        <div class="panel__head">
+          <h2 data-i18n="home_live_feed">Live Signal Feed</h2>
+          <span class="panel__meta" data-i18n="home_live_tag">real-time</span>
+        </div>
+        <div class="panel__body panel__body--scroll" id="home-signal-feed">
+          <p class="placeholder" data-i18n="loading_feed">Loading feed…</p>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel__head">
+          <h2 data-i18n="home_consensus_accuracy">Consensus Accuracy (last 6 hours)</h2>
+          <span class="panel__meta" id="backtest-status">—</span>
+        </div>
+        <div class="panel__body" id="home-backtest">
+          <p class="placeholder" data-i18n="placeholder_run_backtest_home">Waiting for the first backtest…</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SIGNALS ============ -->
+    <section id="tab-signals" class="tab">
+      <!-- Pair switcher — one chip per pair, tap to open its detail.
+           Chips are real hash anchors so they can also be long-pressed
+           → "open in new window" on mobile. -->
+      <section class="strip-section">
+        <div class="strip-head">
+          <span class="strip-title" data-i18n="panel_pair_switcher">Pair Switcher</span>
+          <span class="strip-meta" id="sp-pairstrip-meta">—</span>
+        </div>
+        <div class="pair-strip" id="sp-pair-strip">
+          <p class="placeholder" data-i18n="placeholder_loading">Loading…</p>
+        </div>
+      </section>
+
+      <!-- Win rate cards — one per agreement type. Tapping 3-agree /
+           2-agree filters the table below; combination cards open the
+           pair-scoped history list on the History tab. -->
+      <section class="strip-section">
+        <div class="strip-head">
+          <span class="strip-title" data-i18n="panel_live_wr_title">Live Win Rate</span>
+          <span class="strip-meta" id="sp-wr-meta">—</span>
+        </div>
+        <div class="wr-grid" id="sp-live-winrate">
+          <p class="placeholder" data-i18n="placeholder_loading">Loading…</p>
+        </div>
+      </section>
+
+      <!-- Simple filters -->
+      <div class="filters">
+        <select id="filter-market" aria-label="Market type">
+          <option value="" data-i18n="opt_all_markets">All markets</option>
+          <option value="otc">OTC</option>
+          <option value="real" data-i18n="opt_real">Real</option>
+        </select>
+        <select id="filter-level" aria-label="Signal level">
+          <option value="" data-i18n="opt_all_levels">All levels</option>
+          <option value="3-agree">3-agree</option>
+          <option value="2-agree">2-agree</option>
+          <option value="conflict" data-i18n="lvl_conflict">Conflict</option>
+          <option value="1-only" data-i18n="lvl_single">Single</option>
+        </select>
+        <input type="search" id="filter-search" placeholder="Search pair…" data-i18n-placeholder="ph_search_pair" autocomplete="off">
+      </div>
+
+      <!-- Pairs table -->
+      <div class="panel panel--flush">
+        <div class="table-wrap">
+          <table class="grid-table" id="pair-table">
+            <thead>
+              <tr>
+                <th data-i18n="th_pair">Pair</th>
+                <th data-i18n="filter_candle_utc">Candle (UTC)</th>
+                <th>App 1</th>
+                <th>App 2</th>
+                <th>App 3</th>
+                <th data-i18n="th_final">Final</th>
+                <th data-i18n="th_agree">Agree</th>
+                <th data-i18n="th_winrate60">WR 60m</th>
+              </tr>
+            </thead>
+            <tbody id="pair-table-body">
+              <tr><td colspan="8" class="placeholder" data-i18n="loading_ellipsis">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="table-foot" id="sp-table-count">—</div>
+      </div>
+
+      <!-- Live signal history — graded candle history across ALL pairs,
+           filterable by agreement level AND app combination. -->
+      <section class="strip-section">
+        <div class="strip-head">
+          <span class="strip-title" data-i18n="panel_sig_history_title">Live Signal History</span>
+          <span class="strip-meta" id="sp-history-meta">—</span>
+        </div>
+        <div class="seg-tabs" id="sp-history-tabs" role="tablist">
+          <button type="button" class="seg-tab is-active" data-shfilter="all">All</button>
+          <button type="button" class="seg-tab" data-shfilter="3-agree">3-agree</button>
+          <button type="button" class="seg-tab" data-shfilter="2-agree">2-agree</button>
+          <button type="button" class="seg-tab" data-shfilter="app1+app2">App 1+2</button>
+          <button type="button" class="seg-tab" data-shfilter="app1+app3">App 1+3</button>
+          <button type="button" class="seg-tab" data-shfilter="app2+app3">App 2+3</button>
+        </div>
+        <div class="summary-strip" id="sp-history-summary"></div>
+        <div class="table-wrap">
+          <table class="grid-table grid-table--history" id="sp-history-table">
+            <thead><tr>
+              <th data-i18n="th_time">Time</th>
+              <th data-i18n="th_pair">Pair</th>
+              <th data-i18n="th_apps">Apps</th>
+              <th data-i18n="th_prediction">Prediction</th>
+              <th data-i18n="th_result">Result</th>
+              <th data-i18n="th_wl">W/L</th>
+              <th data-i18n="th_winrate">Win Rate</th>
+              <th aria-label="expand"></th>
+            </tr></thead>
+            <tbody id="sp-history-body">
+              <tr><td colspan="8" class="placeholder" data-i18n="loading_ellipsis">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <!-- ============ HISTORY ============ -->
+    <section id="tab-history" class="tab">
+      <!-- Overall win rate — one card per app subset: App 1/2/3 alone and
+           every combination (1+2, 1+3, 2+3, all 3). -->
+      <section class="strip-section">
+        <div class="strip-head">
+          <span class="strip-title" data-i18n="panel_overall_title">Overall Win Rate</span>
+          <span class="strip-meta" id="overall-meta">—</span>
+        </div>
+        <div class="wr-grid" id="overall-content">
+          <p class="placeholder" data-i18n="placeholder_loading">Loading…</p>
+        </div>
+      </section>
+
+      <!-- Signal history with agreement tabs — same six filters as the
+           Signals panel but with the full 6-hour window and direction
+           filter. -->
+      <section class="strip-section">
+        <div class="strip-head">
+          <span class="strip-title" data-i18n="panel_sig_history_title">Signal History</span>
+          <span class="strip-meta" id="hist-meta">—</span>
+        </div>
+        <div class="seg-tabs" id="hist-tabs" role="tablist">
+          <button type="button" class="seg-tab is-active" data-hfilter="all">All</button>
+          <button type="button" class="seg-tab" data-hfilter="3-agree">3-agree</button>
+          <button type="button" class="seg-tab" data-hfilter="2-agree">2-agree</button>
+          <button type="button" class="seg-tab" data-hfilter="app1+app2">App 1+2</button>
+          <button type="button" class="seg-tab" data-hfilter="app1+app3">App 1+3</button>
+          <button type="button" class="seg-tab" data-hfilter="app2+app3">App 2+3</button>
+        </div>
+        <div class="filters filters--inline">
+          <select id="hist-direction" aria-label="Direction filter">
+            <option value="" data-i18n="opt_dir_both">Both directions</option>
+            <option value="CALL">CALL only</option>
+            <option value="PUT">PUT only</option>
+          </select>
+          <select id="hist-minutes" aria-label="Time window">
+            <option value="60" data-i18n="opt_60m">Last 60 min</option>
+            <option value="180" data-i18n="opt_180m">Last 3 h</option>
+            <option value="360" selected data-i18n="opt_360m">Last 6 h</option>
+          </select>
+        </div>
+        <div class="summary-strip" id="hist-summary"></div>
+        <div class="table-wrap">
+          <table class="grid-table grid-table--history" id="hist-table">
+            <thead><tr>
+              <th data-i18n="th_time">Time</th>
+              <th data-i18n="th_pair">Pair</th>
+              <th data-i18n="th_apps">Apps</th>
+              <th data-i18n="th_prediction">Prediction</th>
+              <th data-i18n="th_result">Result</th>
+              <th data-i18n="th_wl">W/L</th>
+              <th data-i18n="th_winrate">Win Rate</th>
+              <th aria-label="expand"></th>
+            </tr></thead>
+            <tbody id="hist-body">
+              <tr><td colspan="8" class="placeholder" data-i18n="loading_ellipsis">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <!-- ============ SETTINGS ============ -->
+    <section id="tab-settings" class="tab">
+      <div class="panel">
+        <div class="panel__head"><h2 data-i18n="folder_general_title">General</h2></div>
+        <div class="panel__body">
+          <div class="setting-row">
+            <label for="set-theme" data-i18n="lbl_theme">Theme</label>
+            <select id="set-theme">
+              <option value="dark" data-i18n="opt_theme_dark">Dark (default)</option>
+              <option value="light" data-i18n="opt_theme_light">Light</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label for="set-lang" data-i18n="lbl_language">Language</label>
+            <select id="set-lang">
+              <option value="en">English</option>
+              <option value="bn">বাংলা (Bangla)</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label for="set-tz" data-i18n="lbl_clock_display">Clock display</label>
+            <select id="set-tz">
+              <option value="utc" data-i18n="opt_tz_utc">UTC only</option>
+              <option value="local" data-i18n="opt_tz_local">Local only</option>
+              <option value="both" selected data-i18n="opt_tz_both">Both UTC + Local</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label for="set-sound" data-i18n="lbl_sound">Sound on 3-agree</label>
+            <input type="checkbox" id="set-sound">
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel__head"><h2 data-i18n="folder_sources_title">Signal Sources</h2></div>
+        <div class="panel__body">
+          <p class="hint" data-i18n="hint_sources_intro">Paste each app's new Railway URL after a redeploy, then Save &amp; Reconnect — no code change needed.</p>
+          <div id="sources-list"><p class="placeholder" data-i18n="loading_ellipsis">Loading…</p></div>
+          <div class="btn-row">
+            <button class="btn btn--primary" id="btn-sources-save" data-i18n="btn_sources_save">Save &amp; Reconnect</button>
+            <button class="btn btn--ghost" id="btn-sources-reset" data-i18n="btn_sources_reset">Reset to defaults</button>
+          </div>
+          <div id="sources-result" aria-live="polite"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel__head"><h2 data-i18n="folder_about_title">About</h2></div>
+        <div class="panel__body">
+          <div class="btn-row">
+            <button class="btn btn--ghost" id="btn-clear-cache" data-i18n="btn_clear_cache">Clear local cache</button>
+            <button class="btn btn--ghost" id="btn-reset-settings" data-i18n="btn_reset_settings">Reset settings</button>
+          </div>
+          <div class="about-row">
+            <span>Master-Ai v<span id="version">{{ version }}</span></span>
+            <a href="https://github.com/psfaruk/Master-Ai" target="_blank" rel="noopener">GitHub</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===================== PAIR DRAWER (slide-up) ===================== -->
+  <div class="drawer-overlay" id="drawer-overlay" hidden>
+    <aside class="drawer" role="dialog" aria-modal="true">
+      <header class="drawer__header">
+        <div>
+          <h2 id="drawer-title">—</h2>
+          <p class="drawer__sub" id="drawer-sub">—</p>
+        </div>
+        <button class="drawer__close" id="drawer-close" aria-label="Close">✕</button>
+      </header>
+      <!-- Pair switcher — flip through pairs without closing:
+           ◀ prev / dropdown / ▶ next / ↗ new window. -->
+      <div class="drawer__switcher">
+        <button class="drawer__navbtn" id="drawer-prev" type="button" aria-label="Previous pair">◀</button>
+        <select class="drawer__pairselect" id="drawer-pairselect" aria-label="Switch pair"></select>
+        <button class="drawer__navbtn" id="drawer-next" type="button" aria-label="Next pair">▶</button>
+        <a class="drawer__newwin" id="drawer-newwin" href="#/signals" target="_blank" rel="noopener" title="Open in a new window">↗</a>
+      </div>
+      <div class="drawer__body" id="drawer-body">
+        <p class="placeholder" data-i18n="loading_ellipsis">Loading…</p>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ===================== BOTTOM NAV (mobile) ===================== -->
+  <nav class="bottomnav" aria-label="Main navigation">
+    <button class="bottomnav__item bottomnav__item--active" data-tab="home" type="button">
+      <span class="bottomnav__icon">🏠</span>
+      <span class="bottomnav__label" data-i18n="nav_home">Home</span>
+    </button>
+    <button class="bottomnav__item" data-tab="signals" type="button">
+      <span class="bottomnav__icon">📡</span>
+      <span class="bottomnav__label" data-i18n="nav_signals">Signals</span>
+    </button>
+    <button class="bottomnav__item" data-tab="history" type="button">
+      <span class="bottomnav__icon">📊</span>
+      <span class="bottomnav__label" data-i18n="nav_history">History</span>
+    </button>
+    <button class="bottomnav__item" data-tab="settings" type="button">
+      <span class="bottomnav__icon">⚙️</span>
+      <span class="bottomnav__label" data-i18n="nav_settings">Settings</span>
+    </button>
+  </nav>
+
+  <!-- ===================== SIDE NAV (desktop ≥1100px) ===================== -->
   <nav class="sidenav" aria-label="Main navigation">
     <div class="sidenav__brand">
       <span class="sidenav__logo">📊</span>
@@ -38,986 +389,10 @@
         <span class="sidenav__label" data-i18n="nav_history">History</span>
       </button>
       <button class="sidenav__item" data-tab="settings" type="button">
-        <span class="sidenav__icon">⚙</span>
+        <span class="sidenav__icon">⚙️</span>
         <span class="sidenav__label" data-i18n="nav_settings">Settings</span>
       </button>
-      <button class="sidenav__item" data-tab="map" type="button">
-        <span class="sidenav__icon">🗺️</span>
-        <span class="sidenav__label" data-i18n="nav_map">Map</span>
-      </button>
     </div>
-    <div class="sidenav__foot">
-      <div class="topbar__status" id="sidenav-status-pill" title="Data feed status">
-        <span class="pulse"></span>
-      </div>
-      <span class="sidenav__hint" data-i18n="topbar_subtitle">Quotex signal aggregator</span>
-    </div>
-  </nav>
-
-  <!-- ===================== TOP BAR ===================== -->
-  <header class="topbar">
-    <div class="topbar__brand" data-nav="home" role="button" tabindex="0">
-      <span class="topbar__logo">📊</span>
-      <div class="topbar__title">
-        <h1>Master-Ai</h1>
-        <p class="topbar__subtitle" data-i18n="topbar_subtitle">Quotex signal aggregator</p>
-      </div>
-    </div>
-
-    <div class="topbar__center">
-      <div class="clock" id="clock-utc" title="UTC time">
-        <span class="clock__label">UTC</span>
-        <span class="clock__time" id="clock-utc-time">—</span>
-      </div>
-      <div class="clock" id="clock-local" title="Your local time">
-        <span class="clock__label">Local</span>
-        <span class="clock__time" id="clock-local-time">—</span>
-      </div>
-    </div>
-
-    <div class="topbar__actions">
-      <div class="dropdown">
-        <button class="dropdown__trigger" id="cat-trigger" type="button">
-          <span id="cat-label">All pairs</span>
-          <span class="dropdown__caret">▾</span>
-        </button>
-        <ul class="dropdown__menu" id="cat-menu" role="menu">
-          <li role="menuitem" data-value="" data-i18n="opt_all_pairs">All pairs</li>
-          <li role="menuitem" data-value="otc" data-i18n="opt_otc_only">OTC only</li>
-          <li role="menuitem" data-value="real" data-i18n="opt_real_only">Real only</li>
-        </ul>
-      </div>
-      <div class="search">
-        <input type="search" id="search-input" placeholder="Search pair…" data-i18n-placeholder="ph_search_pair" autocomplete="off">
-      </div>
-      <div class="topbar__status" id="status-pill" title="Data feed status">
-        <span class="pulse"></span>
-        <span id="status-text">connecting…</span>
-      </div>
-    </div>
-  </header>
-
-  <!-- ===================== MAIN CONTENT ===================== -->
-  <main class="content">
-
-    <!-- ===================== APP HEALTH ALERT BAR ===================== -->
-    <!-- Shows a prominent warning when any source app is down / token expired /
-         disconnected. Hidden when all 3 apps are healthy. Populated by JS. -->
-    <div id="app-health-alert" class="health-alert" hidden>
-      <div class="health-alert__icon"><i class="fas fa-exclamation-triangle"></i></div>
-      <div class="health-alert__body">
-        <div class="health-alert__title" data-i18n="health_alert_title">Source app issue detected</div>
-        <div class="health-alert__msg" id="app-health-msg">—</div>
-      </div>
-      <button class="health-alert__close" id="health-alert-close" type="button" aria-label="Dismiss"><i class="fas fa-times"></i></button>
-    </div>
-
-    <!-- ============ HOME ============ -->
-    <section id="tab-home" class="tab-panel tab-panel--active">
-      <div class="hero-row">
-        <div class="hero hero--3agree">
-          <div class="hero__label" data-i18n="hero_3agree_label">3-Bot Agree</div>
-          <div class="hero__value" id="stat-3agree">—</div>
-          <div class="hero__sub" id="stat-3agree-sub">across all pairs</div>
-        </div>
-        <div class="hero hero--2agree">
-          <div class="hero__label" data-i18n="hero_2agree_label">2-Bot Agree</div>
-          <div class="hero__value" id="stat-2agree">—</div>
-          <div class="hero__sub" id="stat-2agree-sub">across all pairs</div>
-        </div>
-        <div class="hero hero--conflict">
-          <div class="hero__label" data-i18n="hero_conflict_label">Conflicts</div>
-          <div class="hero__value" id="stat-conflict">—</div>
-          <div class="hero__sub" data-i18n="hero_conflict_sub">split direction</div>
-        </div>
-        <div class="hero hero--single">
-          <div class="hero__label" data-i18n="hero_single_label">Single Only</div>
-          <div class="hero__value" id="stat-single">—</div>
-          <div class="hero__sub" data-i18n="hero_single_sub">only one source</div>
-        </div>
-      </div>
-
-      <div class="card-grid" id="app-cards">
-        <div class="card card--skeleton">
-          <div class="skeleton skeleton--title"></div>
-          <div class="skeleton skeleton--line"></div>
-          <div class="skeleton skeleton--line"></div>
-        </div>
-        <div class="card card--skeleton">
-          <div class="skeleton skeleton--title"></div>
-          <div class="skeleton skeleton--line"></div>
-          <div class="skeleton skeleton--line"></div>
-        </div>
-        <div class="card card--skeleton">
-          <div class="skeleton skeleton--title"></div>
-          <div class="skeleton skeleton--line"></div>
-          <div class="skeleton skeleton--line"></div>
-        </div>
-      </div>
-
-      <div class="grid-2col">
-        <div class="panel">
-          <div class="panel__header">
-            <h2 data-i18n="home_top_signals">Top Signals</h2>
-            <span class="panel__meta" id="home-meta">—</span>
-          </div>
-          <div class="panel__body" id="consensus-highlights">
-            <p class="placeholder" data-i18n="loading_consensus">Loading consensus…</p>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel__header">
-            <h2 data-i18n="home_live_feed">Live Signal Feed</h2>
-            <span class="panel__meta" data-i18n="home_live_tag">real-time</span>
-          </div>
-          <div class="panel__body panel__body--scroll" id="home-signal-feed">
-            <p class="placeholder" data-i18n="loading_feed">Loading feed…</p>
-          </div>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel__header">
-          <h2 data-i18n="home_consensus_accuracy">Consensus Accuracy (last 6 hours)</h2>
-          <span class="panel__meta" id="backtest-status">—</span>
-        </div>
-        <div class="panel__body" id="home-backtest">
-          <p class="placeholder" data-i18n="placeholder_run_backtest_home">Run a backtest to see per-level accuracy.</p>
-        </div>
-      </div>
-    </section>
-
-    <!-- ============ SIGNALS ============ -->
-    <section id="tab-signals" class="tab-panel">
-      <!-- Background grid + glow effects (scoped to signals tab) -->
-      <div class="sp-grid"></div>
-      <div class="sp-glow sp-glow-1"></div>
-      <div class="sp-glow sp-glow-2"></div>
-
-      <!-- Stats bar — summary counts -->
-      <div class="sp-stats-bar" id="sp-stats-bar">
-        <!-- Populated by JS — renderSignalStats() -->
-      </div>
-
-      <!-- Pair switcher strip — one tappable chip PER PAIR, horizontally
-           scrollable. Tap = open that pair's detail drawer; every chip is
-           a real hash link (#/signals/pair/<pair>), so it can also be
-           long-pressed → "open in new window" on mobile. The drawer itself
-           carries ◀ ▶ buttons + a dropdown to flip through pairs one by
-           one without closing it. -->
-      <section class="sp-pairstrip-section">
-        <div class="sp-wr-head">
-          <span class="sp-wr-title"><i class="fas fa-repeat"></i> <span data-i18n="panel_pair_switcher">Pair Switcher</span></span>
-          <span class="sp-wr-meta" id="sp-pairstrip-meta">—</span>
-        </div>
-        <div class="sp-pair-strip" id="sp-pair-strip">
-          <p class="placeholder" data-i18n="placeholder_loading">Loading…</p>
-        </div>
-      </section>
-
-      <!-- Live Win Rate panel — global per-level + per-app-combination win
-           rates graded by the 6h backtest, refreshed alongside the snapshot
-           poll. Each card is tappable: level cards filter the table below,
-           combination cards open the History tab's per-combination signal
-           history. -->
-      <section class="sp-wr-section">
-        <div class="sp-wr-head">
-          <span class="sp-wr-title"><i class="fas fa-bullseye"></i> <span data-i18n="panel_live_wr_title">Live Win Rate</span></span>
-          <span class="sp-wr-meta" id="sp-wr-meta">—</span>
-        </div>
-        <div class="sp-wr-grid" id="sp-live-winrate">
-          <p class="placeholder" data-i18n="placeholder_loading">Loading…</p>
-        </div>
-      </section>
-
-      <!-- Filter section — comprehensive, all columns filterable.
-           Laid out as a 2-pair grid (label/control × 2) so filters
-           are aligned like a table row, and collapse to 1 column on
-           narrow phones (see .sp-filter-grid in dashboard.css). -->
-      <section class="sp-filter-section">
-        <div class="sp-filter-grid">
-          <div class="sp-filter-group">
-            <div class="sp-filter-label" data-i18n="filter_market_type">Market Type</div>
-            <div class="dropdown">
-              <button class="dropdown__trigger sp-filter-trigger" id="cat-trigger2" type="button">
-                <span id="cat-label2">All</span>
-                <span class="dropdown__caret">▾</span>
-              </button>
-              <ul class="dropdown__menu" id="cat-menu2" role="menu">
-                <li role="menuitem" data-value="" data-i18n="opt_all">All</li>
-                <li role="menuitem" data-value="otc">OTC</li>
-                <li role="menuitem" data-value="real" data-i18n="opt_real">Real</li>
-              </ul>
-            </div>
-          </div>
-          <div class="sp-filter-group">
-            <div class="sp-filter-label" data-i18n="filter_level">Signal Level</div>
-            <div class="dropdown">
-              <button class="dropdown__trigger sp-filter-trigger" id="level-trigger" type="button">
-                <span id="level-label">All</span>
-                <span class="dropdown__caret">▾</span>
-              </button>
-              <ul class="dropdown__menu" id="level-menu" role="menu">
-                <li role="menuitem" data-value="" data-i18n="opt_all">All</li>
-                <li role="menuitem" data-value="3-agree">3-agree</li>
-                <li role="menuitem" data-value="2-agree">2-agree</li>
-                <li role="menuitem" data-value="conflict" data-i18n="lvl_conflict">Conflict</li>
-                <li role="menuitem" data-value="1-only" data-i18n="lvl_single">Single</li>
-              </ul>
-            </div>
-          </div>
-          <div class="sp-filter-group">
-            <div class="sp-filter-label" data-i18n="filter_pair_name">Pair Name</div>
-            <input type="text" class="sp-filter-input search" id="filter-pair-sp" placeholder="Search pair..." data-i18n-placeholder="ph_search_pair" autocomplete="off">
-          </div>
-          <div class="sp-filter-group">
-            <div class="sp-filter-label" data-i18n="filter_final_prediction">Final Prediction</div>
-            <div class="dropdown">
-              <button class="dropdown__trigger sp-filter-trigger narrow" id="dir-trigger" type="button">
-                <span id="dir-label">All</span>
-                <span class="dropdown__caret">▾</span>
-              </button>
-              <ul class="dropdown__menu" id="dir-menu" role="menu">
-                <li role="menuitem" data-value="" data-i18n="opt_all">All</li>
-                <li role="menuitem" data-value="CALL">CALL</li>
-                <li role="menuitem" data-value="PUT">PUT</li>
-              </ul>
-            </div>
-          </div>
-          <div class="sp-filter-group">
-            <div class="sp-filter-label" data-i18n="filter_app1_prediction">App 1 Prediction</div>
-            <div class="dropdown">
-              <button class="dropdown__trigger sp-filter-trigger narrow" id="app1-trigger" type="button">
-                <span id="app1-label">All</span>
-                <span class="dropdown__caret">▾</span>
-              </button>
-              <ul class="dropdown__menu" id="app1-menu" role="menu">
-                <li role="menuitem" data-value="" data-i18n="opt_all">All</li>
-                <li role="menuitem" data-value="CALL">CALL</li>
-                <li role="menuitem" data-value="PUT">PUT</li>
-                <li role="menuitem" data-value="NONE" data-i18n="opt_missing">Missing</li>
-              </ul>
-            </div>
-          </div>
-          <div class="sp-filter-group">
-            <div class="sp-filter-label" data-i18n="filter_app2_prediction">App 2 Prediction</div>
-            <div class="dropdown">
-              <button class="dropdown__trigger sp-filter-trigger narrow" id="app2-trigger" type="button">
-                <span id="app2-label">All</span>
-                <span class="dropdown__caret">▾</span>
-              </button>
-              <ul class="dropdown__menu" id="app2-menu" role="menu">
-                <li role="menuitem" data-value="" data-i18n="opt_all">All</li>
-                <li role="menuitem" data-value="CALL">CALL</li>
-                <li role="menuitem" data-value="PUT">PUT</li>
-                <li role="menuitem" data-value="NONE" data-i18n="opt_missing">Missing</li>
-              </ul>
-            </div>
-          </div>
-          <div class="sp-filter-group">
-            <div class="sp-filter-label" data-i18n="filter_app3_prediction">App 3 Prediction</div>
-            <div class="dropdown">
-              <button class="dropdown__trigger sp-filter-trigger narrow" id="app3-trigger" type="button">
-                <span id="app3-label">All</span>
-                <span class="dropdown__caret">▾</span>
-              </button>
-              <ul class="dropdown__menu" id="app3-menu" role="menu">
-                <li role="menuitem" data-value="" data-i18n="opt_all">All</li>
-                <li role="menuitem" data-value="CALL">CALL</li>
-                <li role="menuitem" data-value="PUT">PUT</li>
-                <li role="menuitem" data-value="NONE" data-i18n="opt_missing">Missing</li>
-              </ul>
-            </div>
-          </div>
-          <div class="sp-filter-group">
-            <div class="sp-filter-label" data-i18n="filter_agree">Agree 2/3</div>
-            <div class="dropdown">
-              <button class="dropdown__trigger sp-filter-trigger narrow" id="agree-trigger" type="button">
-                <span id="agree-label">Any</span>
-                <span class="dropdown__caret">▾</span>
-              </button>
-              <ul class="dropdown__menu" id="agree-menu" role="menu">
-                <li role="menuitem" data-value="0" data-i18n="opt_any">Any</li>
-                <li role="menuitem" data-value="2">≥ 2 agree</li>
-                <li role="menuitem" data-value="3">3 agree</li>
-              </ul>
-            </div>
-          </div>
-          <div class="sp-filter-group">
-            <div class="sp-filter-label" data-i18n="filter_winrate60">Win Rate (60m)</div>
-            <div class="dropdown">
-              <button class="dropdown__trigger sp-filter-trigger" id="wr60-trigger" type="button">
-                <span id="wr60-label">Any</span>
-                <span class="dropdown__caret">▾</span>
-              </button>
-              <ul class="dropdown__menu" id="wr60-menu" role="menu">
-                <li role="menuitem" data-value="0" data-i18n="opt_any">Any</li>
-                <li role="menuitem" data-value="50">≥ 50%</li>
-                <li role="menuitem" data-value="55">≥ 55%</li>
-                <li role="menuitem" data-value="60">≥ 60%</li>
-                <li role="menuitem" data-value="65">≥ 65%</li>
-                <li role="menuitem" data-value="70">≥ 70%</li>
-              </ul>
-            </div>
-          </div>
-          <div class="sp-filter-group">
-            <div class="sp-filter-label" data-i18n="filter_freshness">Freshness</div>
-            <div class="dropdown">
-              <button class="dropdown__trigger sp-filter-trigger" id="fresh-trigger" type="button">
-                <span id="fresh-label">Any</span>
-                <span class="dropdown__caret">▾</span>
-              </button>
-              <ul class="dropdown__menu" id="fresh-menu" role="menu">
-                <li role="menuitem" data-value="0" data-i18n="opt_any_age">Any age</li>
-                <li role="menuitem" data-value="60">≤ 1 min</li>
-                <li role="menuitem" data-value="120">≤ 2 min</li>
-                <li role="menuitem" data-value="300">≤ 5 min</li>
-              </ul>
-            </div>
-          </div>
-          <div class="sp-filter-actions">
-            <label class="sp-checkbox">
-              <input type="checkbox" id="favorites-only">
-              <span><i class="fas fa-star"></i> <span data-i18n="lbl_favorites">Favorites</span></span>
-            </label>
-            <button class="sp-btn sp-btn-reset" id="btn-clear-filters" type="button">
-              <i class="fas fa-undo"></i> <span data-i18n="btn_reset">Reset</span>
-            </button>
-            <button class="sp-btn sp-btn-reset" id="btn-export-csv" type="button" title="Export the currently filtered rows as a CSV file">
-              <i class="fas fa-file-csv"></i> <span data-i18n="btn_export_csv">Export CSV</span>
-            </button>
-          </div>
-          <!-- Active filter tags — rendered into the grid as a full-width row -->
-          <div class="sp-active-filters" id="sp-active-filters"></div>
-        </div>
-      </section>
-
-      <!-- Excel-like table -->
-      <div class="sp-table-section">
-        <div class="sp-table-info">
-          <div class="sp-table-count" id="sp-table-count">— pairs</div>
-          <div class="sp-table-meta" id="sp-table-meta">cache —</div>
-        </div>
-        <div class="sp-table-wrapper">
-          <div class="sp-table-scroll">
-            <table class="sp-table">
-              <thead>
-                <tr>
-                  <th class="sp-th sp-th-fav"><i class="fas fa-star"></i></th>
-                  <th class="sp-th sortable" data-sort="market"><span data-i18n="th_market">Market</span> <i class="fas fa-sort sort-icon"></i></th>
-                  <th class="sp-th sortable" data-sort="candle"><span data-i18n="filter_candle_utc">Candle (UTC)</span> <i class="fas fa-sort sort-icon"></i></th>
-                  <th class="sp-th sortable" data-sort="pair"><span data-i18n="th_pair">Pair</span> <i class="fas fa-sort sort-icon"></i></th>
-                  <th class="sp-th">App 1</th>
-                  <th class="sp-th">App 2</th>
-                  <th class="sp-th">App 3</th>
-                  <th class="sp-th sortable" data-sort="agree"><span data-i18n="th_agree">Agree</span> <i class="fas fa-sort sort-icon"></i></th>
-                  <th class="sp-th" data-i18n="th_final_entry">Final + Entry</th>
-                  <th class="sp-th sortable" data-sort="wr60"><span data-i18n="th_winrate60">Win Rate 60min</span> <i class="fas fa-sort sort-icon"></i></th>
-                  <th class="sp-th sp-th-expand"></th>
-                </tr>
-              </thead>
-              <tbody id="pair-table-body">
-                <tr><td colspan="11" class="sp-placeholder" data-i18n="loading_ellipsis">Loading…</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <!-- Live Signal History panel — the graded, candle-by-candle consensus
-           history across ALL pairs, filterable by agreement level AND by
-           app combination (app1+app2 / app1+app3 / app2+app3). Rows reuse
-           the same expandable per-app breakdown as the History tab list,
-           and every row opens the pair drawer on tap. -->
-      <section class="sp-history-section">
-        <div class="sp-wr-head">
-          <span class="sp-wr-title"><i class="fas fa-clock-rotate-left"></i> <span data-i18n="panel_sig_history_title">Live Signal History</span></span>
-          <span class="sp-wr-meta" id="sp-history-meta">—</span>
-        </div>
-        <div class="sp-history-tabs" id="sp-history-tabs" role="tablist">
-          <button type="button" class="sp-history-tab is-active" data-shfilter="all">All</button>
-          <button type="button" class="sp-history-tab" data-shfilter="3-agree">3-agree</button>
-          <button type="button" class="sp-history-tab" data-shfilter="2-agree">2-agree</button>
-          <button type="button" class="sp-history-tab" data-shfilter="app1+app2">App 1+2</button>
-          <button type="button" class="sp-history-tab" data-shfilter="app1+app3">App 1+3</button>
-          <button type="button" class="sp-history-tab" data-shfilter="app2+app3">App 2+3</button>
-        </div>
-        <div class="sp-history-summary" id="sp-history-summary"></div>
-        <div class="sp-history-tablewrap">
-          <div class="sp-history-scroll">
-            <table class="pair-table pair-table--history" id="sp-history-table">
-              <thead><tr>
-                <th data-i18n="th_time">Time</th>
-                <th data-i18n="th_pair">Pair</th>
-                <th data-i18n="th_apps">Apps</th>
-                <th data-i18n="th_prediction">Prediction</th>
-                <th data-i18n="th_result">Result</th>
-                <th data-i18n="th_wl">W/L</th>
-                <th data-i18n="th_winrate">Win Rate</th>
-                <th aria-label="expand"></th>
-              </tr></thead>
-              <tbody id="sp-history-body">
-                <tr><td colspan="8" class="placeholder" data-i18n="loading_ellipsis">Loading…</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-    </section>
-
-    <!-- ============ HISTORY ============ -->
-    <section id="tab-history" class="tab-panel">
-      <!-- Folder-menu landing view — tap a card to open that function.
-           "Overall Win Rate" is the headline folder (first card, spans
-           full width) so the user lands on the single most important
-           question: "of all 3 apps and their combinations, who wins
-           most?". Tapping it opens a 7-card grid of per-app-subset
-           global win rates, each of which drills into a per-pair list
-           for that subset. -->
-      <div class="folder-grid folder-grid--with-headline" id="history-folder-grid">
-        <a class="folder-card folder-card--headline" href="#/history/consensus" data-folder="consensus">
-          <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-layer-group"></i></span>
-          <span class="folder-card__title" data-i18n="folder_consensus_title">Signal History</span>
-          <span class="folder-card__desc" data-i18n="folder_consensus_desc">Every saved signal, grouped by how many apps agreed — 3 Agree, 2 Agree, Conflict, Single. Tap a row for the full per-app breakdown.</span>
-          <span class="folder-card__hint" id="consensus-folder-hint"><i class="fas fa-arrow-right"></i> <span data-i18n="folder_open">Open</span></span>
-          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
-        </a>
-        <a class="folder-card" href="#/history/overall" data-folder="overall">
-          <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-trophy"></i></span>
-          <span class="folder-card__title" data-i18n="folder_overall_title">Overall Win Rate</span>
-          <span class="folder-card__desc" data-i18n="folder_overall_desc">Win rate for App 1, App 2, App 3 and every combination (1+2, 1+3, 2+3, all 3)</span>
-          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
-        </a>
-        <a class="folder-card" href="#/history/backtest" data-folder="backtest">
-          <span class="folder-card__icon folder-card__icon--blue"><i class="fas fa-chart-line"></i></span>
-          <span class="folder-card__title" data-i18n="folder_backtest_title">Backtest</span>
-          <span class="folder-card__desc" data-i18n="folder_backtest_desc">Consensus accuracy over the last 6 hours</span>
-          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
-        </a>
-        <a class="folder-card" href="#/history/perpair" data-folder="perpair">
-          <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-table-list"></i></span>
-          <span class="folder-card__title" data-i18n="folder_perpair_title">Per-Pair Stats</span>
-          <span class="folder-card__desc" data-i18n="folder_perpair_desc">Win rate per pair, by app combination</span>
-          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
-        </a>
-        <a class="folder-card" href="#/history/apppair" data-folder="apppair">
-          <span class="folder-card__icon folder-card__icon--violet"><i class="fas fa-users"></i></span>
-          <span class="folder-card__title" data-i18n="folder_apppair_title">App Pair Leaders</span>
-          <span class="folder-card__desc" data-i18n="folder_apppair_desc">Which pair of apps performs best, and where</span>
-          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
-        </a>
-        <a class="folder-card" href="#/history/drilldown" data-folder="drilldown">
-          <span class="folder-card__icon folder-card__icon--amber"><i class="fas fa-magnifying-glass-chart"></i></span>
-          <span class="folder-card__title" data-i18n="folder_drilldown_title">Pair Drilldown</span>
-          <span class="folder-card__desc" data-i18n="folder_drilldown_desc">Candle history + signals for one pair</span>
-          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
-        </a>
-      </div>
-
-      <!-- Detail view — hidden until a folder card above is tapped.
-           The back button pops ONE level off the nav stack (folder →
-           sub-folder → list → detail), and the breadcrumb shows where you
-           are, so deep drill-downs no longer dump you back at the top. -->
-      <div class="folder-detail" id="history-folder-detail" hidden>
-        <button class="folder-back" id="history-folder-back" type="button"><i class="fas fa-arrow-left"></i> <span id="history-back-label" data-i18n="back_to_history">Back to History</span></button>
-        <nav class="breadcrumb" id="history-breadcrumb" aria-label="History navigation"></nav>
-
-        <!-- Signal History → level picker. Four sub-folder cards, one per
-             agreement level, each showing live counts + win rate so the
-             user can see where the edge is before opening anything. -->
-        <div class="history-panel history-panel--active" id="history-consensus">
-          <div class="panel">
-            <div class="panel__header">
-              <h2 data-i18n="panel_consensus_title">Signal History</h2>
-              <p class="panel__sub" data-i18n="panel_consensus_sub">Pick an agreement level. Counts cover the last 6 hours of saved signals.</p>
-            </div>
-            <div class="panel__body panel__body--flush">
-              <div id="consensus-level-grid">
-                <p class="placeholder" data-i18n="placeholder_loading">Loading…</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Signal History → one level's candle-by-candle list. Rows are
-             expandable: tapping one reveals the full per-app breakdown. -->
-        <div class="history-panel" id="history-consensuslist">
-          <div class="panel">
-            <div class="panel__header">
-              <h2 id="consensuslist-title">Signal History</h2>
-              <div class="filter-bar">
-                <select id="consensus-direction" aria-label="Direction filter">
-                  <option value="" data-i18n="opt_dir_both">Both directions</option>
-                  <option value="CALL">CALL only</option>
-                  <option value="PUT">PUT only</option>
-                </select>
-                <select id="consensus-minutes" aria-label="Time window">
-                  <option value="60">Last 60 min</option>
-                  <option value="180">Last 3 h</option>
-                  <option value="360" selected>Last 6 h</option>
-                </select>
-                <label class="check"><input type="checkbox" id="consensus-graded-only"> <span data-i18n="opt_graded_only">Graded only</span></label>
-              </div>
-            </div>
-            <div class="panel__body" id="consensuslist-summary"></div>
-            <div class="panel__body panel__body--scroll">
-              <div class="table-scroll">
-                <table class="pair-table pair-table--history" id="consensuslist-table">
-                  <thead><tr>
-                    <th data-i18n="th_time">Time</th>
-                    <th data-i18n="th_pair">Pair</th>
-                    <th data-i18n="th_apps">Apps</th>
-                    <th data-i18n="th_prediction">Prediction</th>
-                    <th data-i18n="th_result">Result</th>
-                    <th data-i18n="th_wl">W/L</th>
-                    <th data-i18n="th_winrate">Win Rate</th>
-                    <th aria-label="expand"></th>
-                  </tr></thead>
-                  <tbody id="consensuslist-body">
-                    <tr><td colspan="8" class="placeholder" data-i18n="placeholder_loading">Loading…</td></tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Overall Win Rate sub-tab — 7 app-subset cards (App1, App2,
-             App3, 1+2, 1+3, 2+3, all-3), each showing the global
-             aggregate win rate + signal count + W/L for that subset.
-             Tapping a card opens the per-subset pair list. -->
-        <div class="history-panel" id="history-overall">
-          <div class="panel">
-            <div class="panel__header">
-              <h2 data-i18n="panel_overall_title">Overall Win Rate</h2>
-              <span class="panel__meta" id="overall-meta">—</span>
-            </div>
-            <div class="panel__body" id="overall-content">
-              <p class="placeholder" data-i18n="placeholder_loading_overall">Loading overall win rate…</p>
-            </div>
-          </div>
-        </div>
-
-        <!-- Per-subset pair list sub-tab — shows EVERY pair that has
-             signals for ONE app subset, with per-pair signal count,
-             W/L, win rate, and a "view history" link that opens the
-             per-pair drawer with the subset pre-filtered on the
-             Signal History table. Reached by tapping a card in the
-             Overall Win Rate view. -->
-        <div class="history-panel" id="history-subsetpairs">
-          <div class="panel">
-            <div class="panel__header">
-              <h2 id="subsetpairs-title">Subset</h2>
-              <span class="panel__meta" id="subsetpairs-meta">—</span>
-            </div>
-            <div class="panel__body panel__body--scroll">
-              <div class="table-scroll">
-                <table class="pair-table pair-table--interactive pair-table--subsetpairs">
-                  <thead>
-                    <tr>
-                      <th>★</th>
-                      <th data-i18n="th_pair">Pair</th>
-                      <th data-i18n="th_cat">Cat</th>
-                      <th data-i18n="th_signals">Signals</th>
-                      <th data-i18n="th_wl">W/L</th>
-                      <th data-i18n="th_win_pct">Win %</th>
-                      <th data-i18n="th_action">History</th>
-                    </tr>
-                  </thead>
-                  <tbody id="subsetpairs-table-body">
-                    <tr><td colspan="7" class="placeholder" data-i18n="placeholder_loading_subsetpairs">Loading…</td></tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
-
-      <!-- Backtest sub-tab -->
-      <div class="history-panel" id="history-backtest">
-        <div class="panel">
-          <div class="panel__header">
-            <h2 data-i18n="panel_backtest_title">Consensus Accuracy Backtest</h2>
-            <div class="filter-bar">
-              <span class="panel__meta" id="bt-cache-age">—</span>
-              <button class="btn btn--ghost" id="btn-run-backtest">Run fresh backtest</button>
-            </div>
-          </div>
-          <div class="panel__body" id="backtest-content">
-            <p class="placeholder" data-i18n="placeholder_run_backtest_history">Click "Run fresh backtest" to fetch a verdict, or wait for the auto-cached result to appear.</p>
-          </div>
-        </div>
-      </div>
-
-      <!-- Per-pair stats sub-tab — now includes per-app-pair columns:
-           app1+app2, app1+app3, app2+app3, all-3 win/loss per pair.
-           Lets the user see at a glance WHICH pair of apps performs best
-           on each pair. -->
-      <div class="history-panel" id="history-perpair">
-        <div class="panel">
-          <div class="panel__header">
-            <h2 data-i18n="panel_perpair_title">Per-Pair Win Rate</h2>
-            <span class="panel__meta" id="perpair-meta">—</span>
-          </div>
-          <div class="panel__body panel__body--scroll">
-            <div class="table-scroll">
-              <table class="pair-table pair-table--interactive">
-                <thead>
-                  <tr>
-                    <th>★</th>
-                    <th data-i18n="th_pair">Pair</th>
-                    <th data-i18n="th_cat">Cat</th>
-                    <th data-i18n="th_overall_wl">Overall W/L</th>
-                    <th data-i18n="th_win_pct">Win %</th>
-                    <th>app1+app2</th>
-                    <th>app1+app3</th>
-                    <th>app2+app3</th>
-                    <th>all-3</th>
-                  </tr>
-                </thead>
-                <tbody id="perpair-table-body">
-                  <tr><td colspan="9" class="placeholder" data-i18n="placeholder_loading_perpair">Loading per-pair stats…</td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- App Pair Leaders sub-tab — for each app-subset (singletons + the
-           three 2-app pairs + all-3-agree), shows the global aggregate
-           win rate and the top pairs they perform best on. -->
-      <div class="history-panel" id="history-apppair">
-        <div class="panel">
-          <div class="panel__header">
-            <h2 data-i18n="panel_apppair_title">App Pair Leaders</h2>
-            <span class="panel__meta" id="apppair-meta">—</span>
-          </div>
-          <div class="panel__body" id="apppair-content">
-            <p class="placeholder" data-i18n="placeholder_loading_apppair">Loading app-pair leaderboards…</p>
-          </div>
-        </div>
-      </div>
-
-      <!-- Pair drilldown sub-tab -->
-      <div class="history-panel" id="history-drilldown">
-        <div class="panel">
-          <div class="panel__header">
-            <h2 data-i18n="panel_drilldown_title">Pair Drilldown</h2>
-            <div class="filter-bar">
-              <select id="drilldown-pair"><option value="" data-i18n="opt_select_pair">Select a pair…</option></select>
-            </div>
-          </div>
-          <div class="panel__body" id="drilldown-content">
-            <p class="placeholder" data-i18n="placeholder_pick_pair">Pick a pair to see its candle history + per-app signal breakdown.</p>
-          </div>
-        </div>
-      </div>
-      </div><!-- /#history-folder-detail -->
-    </section>
-
-    <!-- ============ MAP ============ -->
-    <!-- The App Map is the link-up hub: every screen, every History
-         folder + sub-view, every Settings panel, every live pair, every
-         API endpoint and every project file is listed here as a real
-         link. Each row has a ↗ button that opens that view in a NEW
-         browser window (mobile: new tab) — so any "window" of the app
-         can be kept open side by side. -->
-    <section id="tab-map" class="tab-panel">
-      <div class="panel">
-        <div class="panel__header">
-          <h2 data-i18n="map_title">App Map</h2>
-          <span class="panel__meta" data-i18n="map_subtitle">every section, linked</span>
-        </div>
-        <div class="panel__body">
-          <p class="hint" data-i18n="map_open_new_hint">Tap any link to open it here. The ↗ button beside each link opens it in a NEW window, so you can keep several views open side by side on your phone.</p>
-          <div id="map-content"></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ============ SETTINGS ============ -->
-    <section id="tab-settings" class="tab-panel">
-      <!-- Folder-menu landing view — tap a card to open that settings group -->
-      <div class="folder-grid" id="settings-folder-grid">
-        <a class="folder-card" href="#/settings/general" data-folder="general">
-          <span class="folder-card__icon folder-card__icon--blue"><i class="fas fa-sliders"></i></span>
-          <span class="folder-card__title" data-i18n="folder_general_title">General</span>
-          <span class="folder-card__desc" data-i18n="folder_general_desc">Theme, language, clock, time format</span>
-          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
-        </a>
-        <a class="folder-card" href="#/settings/realtime" data-folder="realtime">
-          <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-bolt"></i></span>
-          <span class="folder-card__title" data-i18n="folder_realtime_title">Real-time Refresh</span>
-          <span class="folder-card__desc" data-i18n="folder_realtime_desc">Polling mode, feed size, sound, notifications</span>
-          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
-        </a>
-        <a class="folder-card" href="#/settings/filters" data-folder="filters">
-          <span class="folder-card__icon folder-card__icon--violet"><i class="fas fa-filter"></i></span>
-          <span class="folder-card__title" data-i18n="folder_filters_title">Trading Filters</span>
-          <span class="folder-card__desc" data-i18n="folder_filters_desc">Min win rate, freshness, conflicts, favorites</span>
-          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
-        </a>
-        <a class="folder-card" href="#/settings/sources" data-folder="sources">
-          <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-satellite-dish"></i></span>
-          <span class="folder-card__title" data-i18n="folder_sources_title">Signal Sources</span>
-          <span class="folder-card__desc" data-i18n="folder_sources_desc">Connect redeployed Railway app URLs — live, no code change</span>
-          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
-        </a>
-        <a class="folder-card" href="#/settings/offsets" data-folder="offsets">
-          <span class="folder-card__icon folder-card__icon--amber"><i class="fas fa-clock"></i></span>
-          <span class="folder-card__title" data-i18n="folder_offsets_title">App Candle Offsets</span>
-          <span class="folder-card__desc" data-i18n="folder_offsets_desc">Per-app candle alignment (advanced)</span>
-          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
-        </a>
-        <a class="folder-card" href="#/settings/diagnostics" data-folder="diagnostics">
-          <span class="folder-card__icon folder-card__icon--red"><i class="fas fa-stethoscope"></i></span>
-          <span class="folder-card__title" data-i18n="folder_diagnostics_title">Diagnostics</span>
-          <span class="folder-card__desc" data-i18n="folder_diagnostics_desc">Engineer-facing alignment diagnostics</span>
-          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
-        </a>
-        <a class="folder-card" href="#/settings/about" data-folder="about">
-          <span class="folder-card__icon folder-card__icon--yellow"><i class="fas fa-circle-info"></i></span>
-          <span class="folder-card__title" data-i18n="folder_about_title">Data &amp; About</span>
-          <span class="folder-card__desc" data-i18n="folder_about_desc">Clear cache, reset settings, version, GitHub</span>
-          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
-        </a>
-      </div>
-
-      <!-- Detail view — hidden until a folder card above is tapped -->
-      <div class="folder-detail" id="settings-folder-detail" hidden>
-        <button class="folder-back" id="settings-folder-back" type="button"><i class="fas fa-arrow-left"></i> <span data-i18n="back_to_settings">Back to Settings</span></button>
-
-        <div class="settings-panel settings-panel--active" id="settings-general">
-          <div class="panel">
-            <div class="panel__header"><h2 data-i18n="folder_general_title">General</h2></div>
-            <div class="panel__body">
-              <div class="setting-row">
-                <label for="set-theme" data-i18n="lbl_theme">Theme</label>
-                <select id="set-theme">
-                  <option value="dark" data-i18n="opt_theme_dark">Dark (default)</option>
-                  <option value="light" data-i18n="opt_theme_light">Light</option>
-                </select>
-              </div>
-              <div class="setting-row">
-                <label for="set-lang" data-i18n="lbl_language">Language</label>
-                <select id="set-lang">
-                  <option value="en">English</option>
-                  <option value="bn">বাংলা (Bangla)</option>
-                </select>
-              </div>
-              <div class="setting-row">
-                <label for="set-tz" data-i18n="lbl_clock_display">Clock display</label>
-                <select id="set-tz">
-                  <option value="utc" data-i18n="opt_tz_utc">UTC only</option>
-                  <option value="local" data-i18n="opt_tz_local">Local only</option>
-                  <option value="both" selected data-i18n="opt_tz_both">Both UTC + Local</option>
-                </select>
-              </div>
-              <div class="setting-row">
-                <label for="set-timefmt" data-i18n="lbl_time_format">Time format</label>
-                <select id="set-timefmt">
-                  <option value="24" selected data-i18n="opt_time_24">24-hour</option>
-                  <option value="12" data-i18n="opt_time_12">12-hour (AM/PM)</option>
-                </select>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="settings-panel" id="settings-realtime">
-          <div class="panel">
-            <div class="panel__header"><h2 data-i18n="folder_realtime_title">Real-time Refresh</h2></div>
-            <div class="panel__body">
-              <div class="setting-row">
-                <label for="set-poll" data-i18n="lbl_polling_mode">Polling mode</label>
-                <select id="set-poll">
-                  <option value="adaptive" selected data-i18n="opt_poll_adaptive">Adaptive (burst 1s, idle 3s)</option>
-                  <option value="1" data-i18n="opt_poll_1">Every 1 second (aggressive)</option>
-                  <option value="3" data-i18n="opt_poll_3">Every 3 seconds</option>
-                  <option value="5" data-i18n="opt_poll_5">Every 5 seconds</option>
-                  <option value="10" data-i18n="opt_poll_10">Every 10 seconds (battery saver)</option>
-                </select>
-              </div>
-              <div class="setting-row">
-                <label for="set-feed-size" data-i18n="lbl_feed_size">Signal feed size</label>
-                <select id="set-feed-size">
-                  <option value="20" data-i18n="opt_feed_20">20 items</option>
-                  <option value="50" selected data-i18n="opt_feed_50">50 items</option>
-                  <option value="100" data-i18n="opt_feed_100">100 items</option>
-                </select>
-              </div>
-              <div class="setting-row">
-                <label for="set-sound" data-i18n="lbl_sound">Sound on 3-agree</label>
-                <input type="checkbox" id="set-sound">
-              </div>
-              <div class="setting-row">
-                <label for="set-notify" data-i18n="lbl_notify">Browser notifications</label>
-                <input type="checkbox" id="set-notify">
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="settings-panel" id="settings-filters">
-          <div class="panel">
-            <div class="panel__header"><h2 data-i18n="folder_filters_title">Trading Filters</h2></div>
-            <div class="panel__body">
-              <div class="setting-row">
-                <label for="set-min-wr" data-i18n="lbl_min_wr">Min win rate %</label>
-                <input type="number" id="set-min-wr" min="0" max="100" step="1" value="0">
-              </div>
-              <div class="setting-row">
-                <label for="set-only-fresh" data-i18n="lbl_only_fresh">Hide signals older than (sec)</label>
-                <input type="number" id="set-only-fresh" min="0" max="600" step="5" value="0">
-              </div>
-              <div class="setting-row">
-                <label for="set-hide-conflicts" data-i18n="lbl_hide_conflicts">Hide conflicts</label>
-                <input type="checkbox" id="set-hide-conflicts">
-              </div>
-              <div class="setting-row">
-                <label data-i18n="lbl_favorites">Favorites</label>
-                <div id="favorites-list" class="favorites-list"><span class="placeholder" data-i18n="placeholder_no_favorites">No favorites yet — tap ★ next to a pair.</span></div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="settings-panel" id="settings-sources">
-          <div class="panel">
-            <div class="panel__header"><h2 data-i18n="folder_sources_title">Signal Sources</h2></div>
-            <div class="panel__body">
-              <p class="hint" data-i18n="hint_sources_intro">Paste each app's new Railway URL after a redeploy, then Save &amp; Reconnect — signals reconnect in seconds, no code change. Any URL shape works: bare host, with https://, or a full endpoint URL.</p>
-              <div id="sources-list"><p class="placeholder" data-i18n="loading_ellipsis">Loading…</p></div>
-              <div class="src-actions">
-                <label class="src-purge" id="src-purge-row" hidden>
-                  <input type="checkbox" id="src-purge">
-                  <span data-i18n="lbl_sources_purge">Also clear cached history from the previous URLs</span>
-                </label>
-              </div>
-              <div class="src-actions">
-                <button class="btn btn--primary" id="btn-sources-save" data-i18n="btn_sources_save">Save &amp; Reconnect</button>
-                <button class="btn btn--ghost" id="btn-sources-reset" data-i18n="btn_sources_reset">Reset to defaults</button>
-              </div>
-              <div id="sources-result" aria-live="polite"></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="settings-panel" id="settings-offsets">
-          <div class="panel">
-            <div class="panel__header"><h2 data-i18n="folder_offsets_title">App Candle Offsets</h2></div>
-            <div class="panel__body">
-              <p class="hint" data-i18n="hint_offsets_1">Per-app candle offset, in whole candles. Set this only if /api/diag reports a consistent non-zero offset between two apps.</p>
-              <div class="setting-row">
-                <label for="set-off1" data-i18n="lbl_off1">App 1 (Minimum Pair)</label>
-                <select id="set-off1">
-                  <option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option>
-                  <option value="0" selected data-i18n="opt_offset_default">0 (default)</option>
-                  <option value="1">1</option><option value="2">2</option><option value="3">3</option>
-                </select>
-              </div>
-              <div class="setting-row">
-                <label for="set-off2" data-i18n="lbl_off2">App 2 (Binary Signal)</label>
-                <select id="set-off2">
-                  <option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option>
-                  <option value="0" selected data-i18n="opt_offset_default">0 (default)</option>
-                  <option value="1">1</option><option value="2">2</option><option value="3">3</option>
-                </select>
-              </div>
-              <div class="setting-row">
-                <label for="set-off3" data-i18n="lbl_off3">App 3 (OTC Live)</label>
-                <select id="set-off3">
-                  <option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option>
-                  <option value="0" selected data-i18n="opt_offset_default">0 (default)</option>
-                  <option value="1">1</option><option value="2">2</option><option value="3">3</option>
-                </select>
-              </div>
-              <p class="hint" data-i18n="hint_offsets_2">Note: changing offsets here is informational only — to actually apply offsets server-side, set the APP1/2/3_CANDLE_OFFSET environment variables on Railway.</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="settings-panel" id="settings-diagnostics">
-          <div class="panel">
-            <div class="panel__header"><h2 data-i18n="folder_diagnostics_title">Diagnostics</h2></div>
-            <div class="panel__body">
-              <p class="hint" data-i18n="hint_diagnostics">Engineer-facing alignment diagnostics. Hidden from the main navigation but kept here for power users.</p>
-              <button class="btn btn--ghost" id="btn-refresh-diag" data-i18n="btn_load_diagnostics">Load diagnostics</button>
-              <div id="diag-content" style="margin-top:12px;"></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="settings-panel" id="settings-about">
-          <div class="panel">
-            <div class="panel__header"><h2 data-i18n="folder_about_title">Data &amp; About</h2></div>
-            <div class="panel__body">
-              <div class="setting-row">
-                <button class="btn btn--ghost" id="btn-clear-cache" data-i18n="btn_clear_cache">Clear local cache</button>
-                <button class="btn btn--ghost" id="btn-reset-settings" data-i18n="btn_reset_settings">Reset settings</button>
-              </div>
-              <div class="setting-row about-row">
-                <span>Master-Ai v<span id="version">{{ version }}</span></span>
-                <span>Python · FastAPI · httpx</span>
-                <span><a href="https://github.com/psfaruk/Master-Ai" target="_blank" rel="noopener">GitHub</a></span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <!-- ===================== PAIR DRAWER (slide-up modal) ===================== -->
-  <div class="drawer-overlay" id="drawer-overlay" hidden>
-    <aside class="drawer" id="pair-drawer" role="dialog" aria-modal="true">
-      <header class="drawer__header">
-        <div>
-          <h2 id="drawer-title">Pair detail</h2>
-          <p class="drawer__sub" id="drawer-sub">—</p>
-        </div>
-        <button class="drawer__close" id="drawer-close" aria-label="Close">✕</button>
-      </header>
-      <!-- Pair switcher — flip through pairs one by one without closing
-           the drawer: ◀ previous / ▶ next (wraps around), a dropdown with
-           every live pair, and ↗ which opens this exact pair view in a
-           NEW browser window (#/signals/pair/<pair> deep link). -->
-      <div class="drawer__switcher" id="drawer-switcher">
-        <button class="drawer__navbtn" id="drawer-prev" type="button" aria-label="Previous pair" title="Previous pair">◀</button>
-        <select class="drawer__pairselect" id="drawer-pairselect" aria-label="Switch pair"></select>
-        <button class="drawer__navbtn" id="drawer-next" type="button" aria-label="Next pair" title="Next pair">▶</button>
-        <a class="drawer__newwin" id="drawer-newwin" href="#/signals" target="_blank" rel="noopener" title="Open this pair view in a new window"><i class="fas fa-arrow-up-right-from-square"></i></a>
-      </div>
-      <div class="drawer__body" id="drawer-body">
-        <p class="placeholder" data-i18n="loading_ellipsis">Loading…</p>
-      </div>
-    </aside>
-  </div>
-
-  <!-- ===================== BOTTOM NAV ===================== -->
-  <nav class="bottomnav">
-    <button class="bottomnav__item bottomnav__item--active" data-tab="home">
-      <span class="bottomnav__icon">🏠</span>
-      <span class="bottomnav__label" data-i18n="nav_home">Home</span>
-    </button>
-    <button class="bottomnav__item" data-tab="signals">
-      <span class="bottomnav__icon">📡</span>
-      <span class="bottomnav__label" data-i18n="nav_signals">Signals</span>
-    </button>
-    <button class="bottomnav__item" data-tab="history">
-      <span class="bottomnav__icon">📊</span>
-      <span class="bottomnav__label" data-i18n="nav_history">History</span>
-    </button>
-    <button class="bottomnav__item" data-tab="settings">
-      <span class="bottomnav__icon">⚙</span>
-      <span class="bottomnav__label" data-i18n="nav_settings">Settings</span>
-    </button>
-    <button class="bottomnav__item" data-tab="map">
-      <span class="bottomnav__icon">🗺️</span>
-      <span class="bottomnav__label" data-i18n="nav_map">Map</span>
-    </button>
   </nav>
 
   <script src="/static/dashboard.js?v={{ asset_version }}" defer></script>
