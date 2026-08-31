@@ -360,3 +360,155 @@ def test_history_list_and_drawer_row_keys_are_namespaced(js):
     assert row_key_fn.strip() != f"return `{drawer_key_line}`;".strip()
     assert "list:" in row_key_fn
     assert "drawer:" in drawer_key_line
+
+
+# ---------------------------------------------------------------------------
+# Pair switcher / hash router / App Map (link-up) — regression locks
+# ---------------------------------------------------------------------------
+
+
+def test_folder_cards_are_real_links_with_hash_hrefs(html):
+    """Every History/Settings folder card must be an <a> whose href matches
+    its data-folder, so cards navigate through the hash router and can be
+    long-pressed → "open in new window" on mobile."""
+    for grid_id, prefix in (("history-folder-grid", "/history"),
+                            ("settings-folder-grid", "/settings")):
+        grid = html.split(f'id="{grid_id}"')[1].split('class="folder-detail"')[0]
+        cards = re.findall(r'<a class="folder-card[^"]*" href="#([^"]*)" data-folder="([a-z]+)"', grid)
+        assert cards, f"{grid_id} has no anchor folder cards — did the markup regress to <button>?"
+        for href, folder in cards:
+            assert href == f"{prefix}/{folder}", f"{grid_id}: {folder} card links to {href}"
+
+
+def test_pair_switcher_strip_exists(html):
+    """The Signals tab must have the per-pair switcher strip: the visible
+    "switch through every pair" control."""
+    assert 'id="sp-pair-strip"' in html
+    assert 'id="sp-pairstrip-meta"' in html
+    assert 'data-i18n="panel_pair_switcher"' in html
+
+
+def test_drawer_has_pair_switcher_bar(html):
+    """The pair drawer must let the user flip through pairs without
+    closing: prev/next buttons, a pair dropdown, and a ↗ new-window link."""
+    block = html.split('id="drawer-switcher"')[1].split("</div>", 1)[0]
+    for el in ("drawer-prev", "drawer-next", "drawer-pairselect", "drawer-newwin"):
+        assert el in block, f"drawer switcher is missing {el}"
+    assert 'target="_blank"' in html.split('id="drawer-newwin"')[1][:200], (
+        "drawer ↗ must open in a NEW window"
+    )
+
+
+def test_js_router_covers_all_deep_links(js):
+    """The hash router must understand every route family it emits:
+    plain tabs, signals history filter, pair drawer (+subset), the whole
+    History tree, and the Settings tree."""
+    for marker in (
+        "function applyRoute()",
+        "function applyHistoryRoute(parts)",
+        "function applySettingsRoute(parts)",
+        "function nav(hash)",
+        'addEventListener("hashchange", applyRoute)',
+        '"signals" && parts[1] === "pair"',
+        '"signals" && parts[1] === "history"',
+        'if (head === "history")',
+        'if (head === "settings")',
+    ):
+        assert marker in js, f"router is missing: {marker}"
+    # The boot sequence must apply the initial route so deep links land on
+    # the right view even in a freshly opened window.
+    boot = js.rsplit("startPolling();", 1)[1]
+    assert "applyRoute();" in boot
+
+
+def test_map_tab_is_the_fifth_nav_destination(html, js):
+    """Nav rails carry 5 destinations (home/signals/history/settings/map)
+    and the Map section exists — the link-up hub."""
+    assert len(re.findall(r'data-tab="([a-z]+)"', html)) >= 10  # 5 per rail × 2 rails
+    assert html.count('data-tab="map"') == 2
+    assert 'id="tab-map"' in html
+    assert 'id="map-content"' in html
+    assert "function renderAppMap()" in js
+    assert "function renderMapPairs()" in js
+    # Map rows carry an explicit ↗ sibling that opens a NEW window.
+    map_fn = js.split("function _mapRow(", 1)[1].split("function _mapGroup(", 1)[0]
+    assert 'target="_blank"' in map_fn
+
+
+def test_map_links_cover_screens_folders_apis_and_files(js):
+    """The App Map must link up every section: the 4 screens + map, every
+    History sub-view, every Settings panel, the API endpoints and the
+    project files."""
+    block = js.split("function renderAppMap()", 1)[1].split("function renderMapPairs()", 1)[0]
+    for href in (
+        "#/home", "#/signals", "#/history", "#/settings", "#/map",
+        "#/history/consensus", "#/history/consensus/3-agree",
+        "#/history/subset/app1+app2", "#/history/subset/app1+app3", "#/history/subset/app2+app3",
+        "#/history/overall", "#/history/overall/app1+app2+app3",
+        "#/history/backtest", "#/history/perpair", "#/history/apppair", "#/history/drilldown",
+    ):
+        assert href in block, f"App Map is missing a link to {href}"
+    # Settings panels are built from SETTINGS_SUBS via a template literal.
+    assert "SETTINGS_SUBS.map" in block and "#/settings/${sub}" in block, (
+        "App Map must link every settings panel via SETTINGS_SUBS"
+    )
+    for api in ("/api/snapshot", "/api/pairs", "/api/live-winrate", "/api/diag", "/api/sources"):
+        assert api in block, f"App Map is missing the {api} endpoint link"
+    for path in ("main.py", "app/api/routes.py", "app/static/dashboard.js", "app/templates/dashboard.html"):
+        assert path in block, f"App Map is missing project file {path}"
+    # GitHub base is a module-level constant next to the map renderer.
+    assert 'const MAP_GITHUB_BASE = "https://github.com/psfaruk/Master-Ai/blob/main/"' in js
+    assert "MAP_GITHUB_BASE + path" in block
+
+
+def test_pair_chips_are_anchors_to_pair_routes(js):
+    """Strip chips and map pair chips must be real <a> links to
+    #/signals/pair/<pair> (router-openable, new-window-able)."""
+    strip_fn = js.split("function renderPairStrip()", 1)[1].split("function _rerenderDrawerBody", 1)[0]
+    strip_fn = js.split("function renderPairStrip()", 1)[1].split("// ====== Live Win Rate panel", 1)[0]
+    assert 'href="#/signals/pair/' in strip_fn
+    assert "encodeURIComponent(p.pair)" in strip_fn
+    assert "is-active" in strip_fn  # current drawer pair is highlighted
+    map_pairs = js.split("function renderMapPairs()", 1)[1].split("\n}\n", 1)[0]
+    assert 'href="#/signals/pair/' in map_pairs
+
+
+def test_drawer_close_navigates_back_via_router(js):
+    """Closing the drawer (✕ / overlay tap / Escape) must route back to the
+    view it was opened over, and the router closes it silently when the
+    route itself changed."""
+    close_fn = js.split("function closePairDrawer(", 1)[1].split("\n}", 1)[0]
+    assert "opts.silent" in close_fn or ".silent" in close_fn
+    assert "nav(" in close_fn
+    for caller in ("drawerClose.addEventListener", "requestCloseDrawer()"):
+        assert caller in js
+    assert 'if (e.target === drawerOverlay) requestCloseDrawer();' in js
+
+
+def test_new_ui_classes_have_css_rules(css):
+    """Every class introduced by the pair switcher / drawer switcher /
+    App Map must have a stylesheet rule."""
+    for cls in (
+        "sp-pairstrip-section", "sp-pair-strip", "sp-pair-chip",
+        "sp-pair-chip__dot", "sp-pair-chip__name", "sp-pair-chip__dir",
+        "sp-pair-chip__agree", "sp-pair-chip__dot--otc", "sp-pair-chip__dot--real",
+        "drawer__switcher", "drawer__navbtn", "drawer__pairselect", "drawer__newwin",
+        "map-group", "map-group__title", "map-row", "map-link", "map-link__icon",
+        "map-link__body", "map-link__title", "map-link__desc", "map-newwin",
+        "map-chips", "map-chip", "map-chip__link", "map-newwin--chip",
+        "folder-card__win",
+    ):
+        assert re.search(rf"\.{re.escape(cls)}\b", css), f".{cls} is used but has no CSS"
+
+
+def test_i18n_covers_map_and_switcher_keys(js):
+    """The new UI copy must exist in BOTH languages."""
+    tables = _i18n_tables(js)
+    for key in (
+        "nav_map", "panel_pair_switcher", "map_title", "map_subtitle",
+        "map_open_new_hint", "map_group_screens", "map_group_signals",
+        "map_group_history", "map_group_settings", "map_group_pairs",
+        "map_group_api", "map_group_files", "map_open_pair",
+    ):
+        assert key in tables["en"], f"missing en key {key}"
+        assert key in tables["bn"], f"missing bn key {key}"

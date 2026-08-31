@@ -124,6 +124,27 @@ const TRANSLATIONS = {
     combo_23_desc: "Signals where App 2 and App 3 agreed and App 1 was silent.",
     drawer_hint_tabs: "Tap a tab to see that agreement type's win rate + candle history.",
     drawer_hint_rows: "Tap any row for the per-app breakdown.",
+    nav_map: "Map",
+    panel_pair_switcher: "Pair Switcher",
+    map_title: "App Map", map_subtitle: "every section, linked",
+    map_open_new_hint: "Tap any link to open it here. The ↗ button beside each link opens it in a NEW window, so you can keep several views open side by side on your phone.",
+    map_group_screens: "Screens",
+    map_group_signals: "Signals sections",
+    map_group_history: "History views",
+    map_group_settings: "Settings panels",
+    map_group_pairs: "Live pairs — switch & view each one",
+    map_group_api: "API endpoints (engineer functions)",
+    map_group_files: "Project files & folders (GitHub)",
+    map_desc_home: "Hero counters, app health, top signals, live feed",
+    map_desc_signals: "Pair switcher, live win rate, pair table, live signal history",
+    map_desc_history: "Signal history, overall win rate, backtest, per-pair stats",
+    map_desc_settings: "Theme, polling, filters, sources, offsets, diagnostics",
+    map_desc_wr: "Overall + 3-agree + 2-agree win-rate cards",
+    map_desc_sig_history: "Candle-by-candle history with 6 agreement filters",
+    map_desc_pairstrip: "Every pair as a chip — tap to open, ↗ for a new window",
+    map_api_desc: "Live JSON — opens in a new window",
+    map_files_desc: "Source code on GitHub — opens in a new window",
+    map_open_pair: "Open pair",
   },
   bn: {
     nav_home: "হোম", nav_signals: "সিগন্যাল", nav_history: "হিস্ট্রি", nav_settings: "সেটিংস",
@@ -225,6 +246,27 @@ const TRANSLATIONS = {
     combo_23_desc: "যেসব সিগন্যালে অ্যাপ ২ ও অ্যাপ ৩ একমত হয়েছে (অ্যাপ ১ ছাড়া)।",
     drawer_hint_tabs: "ঐ একমত-প্রকারের উইন রেট ও ক্যান্ডেল হিস্ট্রি দেখতে ট্যাবে ট্যাপ করুন।",
     drawer_hint_rows: "প্রতি-অ্যাপ বিস্তারিত দেখতে যেকোনো রো-তে ট্যাপ করুন।",
+    nav_map: "ম্যাপ",
+    panel_pair_switcher: "পেয়ার সুইচার",
+    map_title: "অ্যাপ ম্যাপ", map_subtitle: "প্রতিটি সেকশন, সব লিংক একসাথে",
+    map_open_new_hint: "যেকোনো লিংকে ট্যাপ করলে এখানেই খুলবে। পাশের ↗ বাটনে ট্যাপ করলে লিংকটি একটি নতুন উইন্ডোতে খুলবে — ফলে ফোনেই একসাথে কয়েকটি ভিউ খোলা রাখতে পারবেন।",
+    map_group_screens: "স্ক্রিনসমূহ",
+    map_group_signals: "সিগন্যাল সেকশন",
+    map_group_history: "হিস্ট্রি ভিউ",
+    map_group_settings: "সেটিংস প্যানেল",
+    map_group_pairs: "লাইভ পেয়ার — একটি একটি করে সুইচ করে দেখুন",
+    map_group_api: "API এন্ডপয়েন্ট (ইঞ্জিনিয়ার ফাংশন)",
+    map_group_files: "প্রজেক্ট ফাইল ও ফোল্ডার (GitHub)",
+    map_desc_home: "হিরো কাউন্টার, অ্যাপ হেলথ, শীর্ষ সিগন্যাল, লাইভ ফিড",
+    map_desc_signals: "পেয়ার সুইচার, লাইভ উইন রেট, পেয়ার টেবিল, লাইভ সিগন্যাল হিস্ট্রি",
+    map_desc_history: "সিগন্যাল হিস্ট্রি, সর্বমোট জয়ের হার, ব্যাকটেস্ট, প্রতি-পেয়ার পরিসংখ্যান",
+    map_desc_settings: "থিম, পোলিং, ফিল্টার, সোর্স, অফসেট, ডায়াগনস্টিকস",
+    map_desc_wr: "Overall + 3-agree + 2-agree উইন রেট কার্ড",
+    map_desc_sig_history: "ক্যান্ডেল-ধরে-ধরে হিস্ট্রি, ৬টি একমত-ফিল্টার সহ",
+    map_desc_pairstrip: "প্রতিটি পেয়ার আলাদা চিপ — ট্যাপে খুলুন, ↗ দিয়ে নতুন উইন্ডোতে",
+    map_api_desc: "লাইভ JSON — নতুন উইন্ডোতে খুলবে",
+    map_files_desc: "GitHub-এ সোর্স কোড — নতুন উইন্ডোতে খুলবে",
+    map_open_pair: "পেয়ার খুলুন",
   },
 };
 
@@ -390,17 +432,19 @@ function applySettings() {
 
 // ====== Bottom nav + tab switching ======
 // Both navigation rails (mobile bottom nav + desktop sidebar) carry a
-// data-tab attribute and are wired through the same handler.
+// data-tab attribute and are wired through the same handler. Navigation
+// goes through the HASH ROUTER (nav) — not switchTab directly — so every
+// screen has its own URL and can be opened in a new browser window.
 $$(".bottomnav__item, .sidenav__item").forEach((btn) => {
-  btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+  btn.addEventListener("click", () => nav("#/" + btn.dataset.tab));
 });
 // Top bar brand — click to go Home. Uses querySelector (class selector)
 // because $() is an ID shortcut.
 const brandEl = document.querySelector(".topbar__brand");
 if (brandEl) {
-  brandEl.addEventListener("click", () => switchTab("home"));
+  brandEl.addEventListener("click", () => nav("#/home"));
   brandEl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); switchTab("home"); }
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); nav("#/home"); }
   });
 }
 
@@ -414,12 +458,14 @@ function switchTab(name) {
   $$(".tab-panel").forEach((p) => p.classList.toggle("tab-panel--active", p.id === `tab-${name}`));
   if (name === "signals") {
     renderPairTable();
+    renderPairStrip();
     // Live Win Rate + Live Signal History panels — refresh on entry (they
     // self-throttle to 30s so re-entering the tab quickly stays cheap).
     fetchLiveWinRate();
     renderSignalsHistoryPanel();
   }
   if (name === "home") refreshBacktestStatus();
+  if (name === "map") renderAppMap();
   if (name === "history") {
     resetFolderView("history-folder-grid", "history-folder-detail");
     state.historyStack = [];
@@ -441,23 +487,230 @@ function switchTab(name) {
   window.scrollTo(0, 0);
 }
 
+// ====== HASH ROUTER — every window of the app is a URL ======
+// Each screen / panel / pair view owns a hash route, so ANY window can be
+// opened in a NEW browser window on mobile (long-press → "open in new tab",
+// or the ↗ buttons in the App Map / pair drawer):
+//
+//   #/home                          Home
+//   #/signals                       Signals table + live panels
+//   #/signals/history/<filter>      Live Signal History panel, one tab
+//                                   (all|3-agree|2-agree|app1+app2|…)
+//   #/signals/pair/<PAIR>           Pair drawer (all agreement types)
+//   #/signals/pair/<PAIR>/<SUBSET>  Pair drawer pre-scoped to a combination
+//   #/history                       History folder grid
+//   #/history/consensus             Signal History level picker
+//   #/history/consensus/<LEVEL>     One level's candle list
+//   #/history/subset/<SUBSET>       One app-combination's candle list
+//   #/history/overall               Overall win rate (7 subset cards)
+//   #/history/overall/<SUBSET>      Per-subset pair list
+//   #/history/backtest|perpair|apppair|drilldown
+//   #/history/drilldown/<PAIR>      Drilldown with the pair preloaded
+//   #/settings                      Settings folder grid
+//   #/settings/<sub>                One settings panel
+//   #/map                           App Map (the link-up hub)
+//
+// The browser back gesture now walks this history naturally — on mobile
+// that means "swipe back" closes the drawer / pops a History level.
+
+const HISTORY_LEVELS = ["3-agree", "2-agree", "conflict", "1-only"];
+const APP_SUBSETS = ["app1", "app2", "app3", "app1+app2", "app1+app3", "app2+app3", "app1+app2+app3"];
+const SETTINGS_SUBS = ["general", "realtime", "filters", "sources", "offsets", "diagnostics", "about"];
+
+function parseHashParts() {
+  let h = location.hash || "";
+  if (h.startsWith("#")) h = h.slice(1);
+  if (h.startsWith("/")) h = h.slice(1);
+  // Pair names and subset keys are percent-encoded when the route is
+  // built; decode each segment individually so "/" inside a pair name
+  // survives as %2F.
+  return h.split("/").filter(Boolean).map((p) => {
+    try { return decodeURIComponent(p); } catch (e) { return p; }
+  });
+}
+
+// Navigate to a hash route. If we're ALREADY there, re-apply the route
+// (idempotent) so tapping the same chip/card twice still works even
+// though no hashchange event fires.
+function nav(hash) {
+  if ((location.hash || "#/home") === hash) { applyRoute(); return; }
+  location.hash = hash;
+}
+
+// The last applied route that was NOT a pair drawer — the drawer's ✕
+// button returns here. Updated by applyRoute itself (NOT by nav()) so
+// plain anchor clicks (strip chips, folder cards) are tracked too.
+let _lastNonPairHash = "#/signals";
+
+// Replace the URL without creating a history entry or re-applying the
+// route — used for client-side-only state that should still be
+// shareable (e.g. switching the drawer's agreement tab).
+function replaceHashSilently(hash) {
+  try { history.replaceState(null, "", hash); } catch (e) { /* file:// etc. */ }
+}
+
+function ensureTab(name) {
+  if (state.activeTab !== name) switchTab(name);
+}
+
+function routeForHistoryEntry(entry) {
+  const name = entry && entry.name;
+  const opts = (entry && entry.opts) || {};
+  switch (name) {
+    case "consensus": return "#/history/consensus";
+    case "consensuslist":
+      if (opts.level) return `#/history/consensus/${encodeURIComponent(opts.level)}`;
+      if (opts.subset) return `#/history/subset/${encodeURIComponent(opts.subset)}`;
+      return "#/history/consensus";
+    case "overall": return "#/history/overall";
+    case "subsetpairs": return opts.subset ? `#/history/overall/${encodeURIComponent(opts.subset)}` : "#/history/overall";
+    case "backtest": return "#/history/backtest";
+    case "perpair": return "#/history/perpair";
+    case "apppair": return "#/history/apppair";
+    case "drilldown": return opts.pair ? `#/history/drilldown/${encodeURIComponent(opts.pair)}` : "#/history/drilldown";
+    default: return "#/history";
+  }
+}
+
+function applyHistoryRoute(parts) {
+  ensureTab("history");
+  const view = parts[1] || "";
+  // The folder grid: switchTab already reset it when the tab CHANGED, but
+  // tapping "History" while already inside a sub-view must ALSO pop back
+  // to the grid — so run the reset unconditionally (idempotent).
+  if (!view) {
+    resetFolderView("history-folder-grid", "history-folder-detail");
+    state.historyStack = [];
+    state.expandedHistoryRows.clear();
+    state.activeHistorySubtab = "";
+    renderHistoryBreadcrumb();
+    populateHistoryPairSelector();
+    renderPerPairTable();
+    refreshBacktestStatus();
+    return;
+  }
+  historyNavReset();
+  switch (view) {
+    case "consensus": {
+      if (parts[2]) {
+        const level = HISTORY_LEVELS.includes(parts[2]) ? parts[2] : "3-agree";
+        const meta = CONSENSUS_LEVEL_META.find((m) => m.level === level);
+        state.historyStack = [{ name: "consensus" }];
+        state.activeConsensusLevel = level;
+        state.activeConsensusSubset = null;
+        switchHistorySubtab("consensuslist", { level, label: meta ? meta.title : level });
+      } else {
+        switchHistorySubtab("consensus");
+      }
+      break;
+    }
+    case "subset": {
+      const subset = APP_SUBSETS.includes(parts[2]) ? parts[2] : "app1+app2";
+      state.historyStack = [{ name: "consensus" }];
+      state.activeConsensusLevel = "all";
+      state.activeConsensusSubset = subset;
+      switchHistorySubtab("consensuslist", { level: "all", subset, label: subsetLabel(subset) });
+      break;
+    }
+    case "overall": {
+      if (parts[2]) {
+        const subset = APP_SUBSETS.includes(parts[2]) ? parts[2] : "app1+app2";
+        state.historyStack = [{ name: "overall" }];
+        state.activeSubset = subset;
+        switchHistorySubtab("subsetpairs", { subset, label: subsetLabel(subset) });
+      } else {
+        switchHistorySubtab("overall");
+      }
+      break;
+    }
+    case "backtest":
+    case "perpair":
+    case "apppair":
+      switchHistorySubtab(view);
+      break;
+    case "drilldown": {
+      switchHistorySubtab("drilldown");
+      if (parts[2]) {
+        const sel = $("drilldown-pair");
+        if (sel) sel.value = parts[2];
+        openPairDrawer(parts[2], "drilldown-content");
+      }
+      break;
+    }
+    default:
+      // Unknown sub-view → back to the folder grid.
+      resetFolderView("history-folder-grid", "history-folder-detail");
+      state.historyStack = [];
+      renderHistoryBreadcrumb();
+      return;
+  }
+  window.scrollTo(0, 0);
+}
+
+function applySettingsRoute(parts) {
+  ensureTab("settings");
+  const sub = parts[1] || "";
+  if (!sub) return; // folder grid
+  if (!SETTINGS_SUBS.includes(sub)) return;
+  $("settings-folder-grid").hidden = true;
+  $("settings-folder-detail").hidden = false;
+  $$(".settings-panel").forEach((p) => p.classList.toggle("settings-panel--active", p.id === `settings-${sub}`));
+  if (sub === "sources") loadSourcesUI();
+  window.scrollTo(0, 0);
+}
+
+function applyRoute() {
+  const parts = parseHashParts();
+  const head = parts[0] || "home";
+  const isPairRoute = head === "signals" && parts[1] === "pair" && !!parts[2];
+  if (!isPairRoute) _lastNonPairHash = location.hash || "#/home";
+
+  // ---- Signals tab deep routes ----
+  if (isPairRoute) {
+    ensureTab("signals");
+    const subset = DRAWER_TABS.some((t2) => t2.key === parts[3] && parts[3] !== "all") ? parts[3] : null;
+    state._drawerReturnHash = _lastNonPairHash;
+    openPairDrawer(parts[2], { subset, fromRoute: true });
+    return;
+  }
+  if (head === "signals" && parts[1] === "history") {
+    ensureTab("signals");
+    const key = SP_HISTORY_FILTERS.some((f) => f.key === parts[2]) ? parts[2] : "all";
+    setSignalsHistoryFilter(key);
+    return;
+  }
+
+  // ---- History / Settings trees ----
+  if (head === "history") { applyHistoryRoute(parts); closePairDrawer({ silent: true }); return; }
+  if (head === "settings") { applySettingsRoute(parts); closePairDrawer({ silent: true }); return; }
+
+  // ---- Plain tabs ----
+  if (["home", "signals", "history", "settings", "map"].includes(head) && parts.length === 1) {
+    ensureTab(head);
+    closePairDrawer({ silent: true });
+    return;
+  }
+
+  // Unknown route → home.
+  replaceHashSilently("#/home");
+  applyRoute();
+}
+
+window.addEventListener("hashchange", applyRoute);
+
 // ====== Folder-menu navigation (History / Settings) ======
-// Each section shows a grid of tappable "folder" cards; tapping one opens
-// its detail view (hiding the grid) and a back button returns to the grid.
+// Each section shows a grid of tappable "folder" cards. The cards are now
+// REAL ANCHORS (href="#/history/..." / "#/settings/...") — tapping one
+// navigates through the hash router (so the browser back gesture pops one
+// level, and long-press → "open in new window" works on mobile). The old
+// per-card click listeners are gone; applyHistoryRoute/applySettingsRoute
+// do the work.
 function resetFolderView(gridId, detailId) {
   const grid = $(gridId);
   const detail = $(detailId);
   if (grid) grid.hidden = false;
   if (detail) detail.hidden = true;
 }
-
-$$("#history-folder-grid .folder-card").forEach((card) => {
-  card.addEventListener("click", () => {
-    historyNavReset();
-    switchHistorySubtab(card.dataset.folder);
-    window.scrollTo(0, 0);
-  });
-});
 
 // ---- History nav stack ----------------------------------------------------
 // The History tab is a tree, not a flat list of sub-tabs:
@@ -469,11 +722,10 @@ $$("#history-folder-grid .folder-card").forEach((card) => {
 //     └── Overall Win Rate        → 7 subset cards
 //           └── App 1 + App 2     → per-pair list
 //
-// Previously every view just flipped `history-panel--active` and the single
-// back button always jumped straight to the top — so drilling three levels
-// deep and pressing Back lost all context ("sequence thik nai"). We now
-// keep an explicit stack: Back pops ONE level, and a breadcrumb shows the
-// full path.
+// The stack mirrors the URL: #/history/consensus/3-agree is exactly
+// [consensus, consensuslist(3-agree)]. Back / breadcrumb buttons navigate
+// by ROUTE (nav), so the in-page stack and the browser history can never
+// disagree.
 const HISTORY_LABELS = {
   consensus: "Signal History",
   consensuslist: "Signals",
@@ -525,25 +777,20 @@ function renderHistoryBreadcrumb() {
   }
 }
 
-// Jump to crumb index `i` (0 = the folder grid).
+// Jump to crumb index `i` (0 = the folder grid). Navigates by ROUTE so the
+// browser history stays in sync with the in-page breadcrumb.
 function historyNavTo(i) {
-  if (i <= 0) {
-    resetFolderView("history-folder-grid", "history-folder-detail");
-    state.historyStack = [];
-    renderHistoryBreadcrumb();
-    window.scrollTo(0, 0);
-    return;
-  }
-  const stack = (state.historyStack || []).slice(0, i);
-  const target = stack[stack.length - 1];
-  state.historyStack = stack.slice(0, -1);
-  switchHistorySubtab(target.name, target.opts || {});
-  window.scrollTo(0, 0);
+  if (i <= 0) { nav("#/history"); return; }
+  const stack = state.historyStack || [];
+  const target = stack[i - 1];
+  if (!target) { nav("#/history"); return; }
+  nav(routeForHistoryEntry(target));
 }
 
 function historyNavBack() {
   const stack = state.historyStack || [];
-  historyNavTo(stack.length - 1);
+  if (stack.length <= 1) { nav("#/history"); return; }
+  nav(routeForHistoryEntry(stack[stack.length - 2]));
 }
 
 $("history-folder-back")?.addEventListener("click", historyNavBack);
@@ -568,18 +815,7 @@ function switchHistorySubtab(name, opts = {}) {
   if (name === "drilldown") populateHistoryPairSelector();
 }
 
-$$("#settings-folder-grid .folder-card").forEach((card) => {
-  card.addEventListener("click", () => {
-    $("settings-folder-grid").hidden = true;
-    $("settings-folder-detail").hidden = false;
-    $$(".settings-panel").forEach((p) => p.classList.toggle("settings-panel--active", p.id === `settings-${card.dataset.folder}`));
-    window.scrollTo(0, 0);
-  });
-});
-$("settings-folder-back")?.addEventListener("click", () => {
-  resetFolderView("settings-folder-grid", "settings-folder-detail");
-  window.scrollTo(0, 0);
-});
+$("settings-folder-back")?.addEventListener("click", () => nav("#/settings"));
 
 // ====== Dropdowns ======
 // Every wired dropdown registers itself here so labels can be re-synced
@@ -881,6 +1117,10 @@ function render() {
   renderAppCards(state.snapshot.apps);
   renderConsensusHighlights(state.snapshot.pairs);
   renderPairTable();
+  renderPairStrip();
+  if (state.activeTab === "map") renderMapPairs();
+  // Keep the drawer's pair dropdown / ↗ link pointing at live pairs.
+  if (state.drawerPair && !state.drawerContainerId && state.drawerData) updateDrawerSwitcher(state.drawerData);
   renderBacktestStatus();
   updateSourceDots();
   // Signal feed is polled separately for finer cadence.
@@ -1007,7 +1247,7 @@ function wireHeroCards() {
     hero.setAttribute("tabindex", "0");
     const jump = () => {
       setLevelFilter(HERO_LEVELS[i] || "");
-      switchTab("signals");
+      nav("#/signals");
     };
     hero.addEventListener("click", jump);
     hero.addEventListener("keydown", (e) => {
@@ -1324,9 +1564,10 @@ function renderPairTable() {
       const pair = row.dataset.pair;
       // The chevron column keeps the OLD inline-expand behaviour (quick
       // per-app glance at the latest candle) — everywhere else, a tap now
-      // opens the pair drawer with its agreement-type tabs (3-agree /
-      // 2-agree / App1+2 / App1+3 / App2+3), per-tab win rates and the
-      // tab-scoped signal history.
+      // navigates to the pair's own URL (#/signals/pair/<pair>), which the
+      // router turns into the pair drawer with its agreement-type tabs
+      // (3-agree / 2-agree / App1+2 / App1+3 / App2+3), per-tab win rates
+      // and the tab-scoped signal history — openable in a new window too.
       if (e.target.closest(".td-expand")) {
         if (expandedPairs.has(pair)) expandedPairs.delete(pair);
         else expandedPairs.add(pair);
@@ -1334,7 +1575,7 @@ function renderPairTable() {
         e.stopPropagation();
         return;
       }
-      openPairDrawer(pair);
+      nav(`#/signals/pair/${encodeURIComponent(pair)}`);
     });
   });
 }
@@ -1389,6 +1630,202 @@ function renderSignalStats(rows) {
       <div class="sp-stat-card__sub">${withWr.length} graded pairs</div>
     </div>
   `;
+}
+
+// ====== Pair Switcher strip (Signals tab) ======
+// One tappable chip PER PAIR, horizontally scrollable — the missing
+// "switch through every pair" control. Each chip is a REAL anchor
+// (href="#/signals/pair/<pair>"), so:
+//   - a tap navigates through the hash router → the pair drawer opens;
+//   - long-press → "open in new window/tab" works natively on mobile;
+//   - the chip for the currently-open drawer pair is highlighted.
+// Chips mirror the live snapshot: direction colour, agree count and the
+// OTC/real market dot, so the strip doubles as a compact signal index.
+function renderPairStrip() {
+  const strip = $("sp-pair-strip");
+  const meta = $("sp-pairstrip-meta");
+  if (!strip) return;
+  const pairs = state.snapshot?.pairs || [];
+  if (meta) meta.textContent = pairs.length ? `${pairs.length} pairs` : "—";
+  if (!pairs.length) {
+    strip.innerHTML = `<p class="placeholder">${escHtml(t("placeholder_loading"))}</p>`;
+    return;
+  }
+  const list = drawerPairList();
+  const html = list.map((p) => {
+    const dir = p.consensus?.direction || null;
+    const level = p.consensus?.level || "";
+    const dirCls = dir === "CALL" ? "call" : dir === "PUT" ? "put" : "none";
+    const dirIcon = dir === "CALL" ? "▲" : dir === "PUT" ? "▼" : "—";
+    const agree = level === "3-agree" ? "3/3" : level === "2-agree" ? "2/3" : "·";
+    const active = state.drawerPair === p.pair ? " is-active" : "";
+    return `<a class="sp-pair-chip${active}" href="#/signals/pair/${encodeURIComponent(p.pair)}" title="${escAttr(p.displayPair)} — open its signal view">
+      <span class="sp-pair-chip__dot sp-pair-chip__dot--${escAttr(p.category)}"></span>
+      <span class="sp-pair-chip__name">${escHtml(p.displayPair)}</span>
+      <span class="sp-pair-chip__dir sp-pair-chip__dir--${dirCls}">${dirIcon}</span>
+      <span class="sp-pair-chip__agree">${agree}</span>
+    </a>`;
+  }).join("");
+  // Skip identical rebuilds — a rebuild every poll tick would both thrash
+  // the DOM and reset the strip's horizontal scroll position mid-read.
+  if (strip.dataset.html === html) return;
+  const keepScroll = strip.scrollLeft;
+  strip.innerHTML = html;
+  strip.dataset.html = html;
+  strip.scrollLeft = keepScroll;
+}
+
+// ====== App Map (5th tab) — every section of the app, linked ======
+// The link-up hub the user asked for: every screen, every History folder
+// + sub-view, every Settings panel, every LIVE PAIR, every API endpoint
+// and every project file is listed as a real link. Each row has a ↗
+// sibling button (target="_blank") that opens that exact view in a NEW
+// browser window — so on a phone you can keep several windows open.
+const MAP_GITHUB_BASE = "https://github.com/psfaruk/Master-Ai/blob/main/";
+
+function _mapRow(href, icon, tone, title, desc, opts = {}) {
+  const external = !!opts.external;
+  const newTab = external ? ' target="_blank" rel="noopener"' : "";
+  return `
+    <div class="map-row">
+      <a class="map-link" href="${escAttr(href)}"${external ? newTab : ""}>
+        <span class="map-link__icon map-link__icon--${escAttr(tone)}"><i class="fas ${escAttr(icon)}"></i></span>
+        <span class="map-link__body">
+          <span class="map-link__title">${escHtml(title)}</span>
+          ${desc ? `<span class="map-link__desc">${escHtml(desc)}</span>` : ""}
+        </span>
+      </a>
+      <a class="map-newwin" href="${escAttr(href)}" target="_blank" rel="noopener" title="${escAttr(t("map_open_new_hint"))}" aria-label="Open in new window: ${escAttr(title)}"><i class="fas fa-arrow-up-right-from-square"></i></a>
+    </div>`;
+}
+
+function _mapGroup(title, rowsHtml) {
+  return `<div class="map-group"><div class="map-group__title">${escHtml(title)}</div><div class="map-rows">${rowsHtml}</div></div>`;
+}
+
+function renderAppMap() {
+  const root = $("map-content");
+  if (!root) return;
+
+  // ---- Screens ----
+  const screens = [
+    _mapRow("#/home", "fa-house", "blue", t("nav_home"), t("map_desc_home")),
+    _mapRow("#/signals", "fa-satellite-dish", "emerald", t("nav_signals"), t("map_desc_signals")),
+    _mapRow("#/history", "fa-chart-line", "violet", t("nav_history"), t("map_desc_history")),
+    _mapRow("#/settings", "fa-gear", "amber", t("nav_settings"), t("map_desc_settings")),
+    _mapRow("#/map", "fa-map", "emerald", t("nav_map"), ""),
+  ].join("");
+
+  // ---- Signals sections ----
+  const signals = [
+    _mapRow("#/signals", "fa-repeat", "emerald", t("panel_pair_switcher"), t("map_desc_pairstrip")),
+    _mapRow("#/signals/history/all", "fa-bullseye", "blue", t("map_desc_wr"), ""),
+    _mapRow("#/signals/history/3-agree", "fa-star", "emerald", "Live Win Rate — 3-agree", ""),
+    _mapRow("#/signals/history/2-agree", "fa-star-half-stroke", "cyan", "Live Win Rate — 2-agree", ""),
+    _mapRow("#/signals/history/app1+app2", "fa-link", "violet", "Live Signal History — App 1+2", ""),
+    _mapRow("#/signals/history/app1+app3", "fa-link", "violet", "Live Signal History — App 1+3", ""),
+    _mapRow("#/signals/history/app2+app3", "fa-link", "violet", "Live Signal History — App 2+3", ""),
+  ].join("");
+
+  // ---- History views ----
+  const historyViews = [
+    _mapRow("#/history/consensus", "fa-layer-group", "emerald", t("folder_consensus_title"), t("panel_consensus_sub")),
+    _mapRow("#/history/consensus/3-agree", "fa-star", "emerald", "3-agree — candle list", ""),
+    _mapRow("#/history/consensus/2-agree", "fa-star-half-stroke", "blue", "2-agree — candle list", ""),
+    _mapRow("#/history/consensus/conflict", "fa-triangle-exclamation", "amber", t("lvl_conflict") + " — candle list", ""),
+    _mapRow("#/history/consensus/1-only", "fa-user", "violet", t("lvl_single") + " — candle list", ""),
+    _mapRow("#/history/subset/app1+app2", "fa-link", "violet", "App 1+2 — candle list", t("combo_12_desc")),
+    _mapRow("#/history/subset/app1+app3", "fa-link", "violet", "App 1+3 — candle list", t("combo_13_desc")),
+    _mapRow("#/history/subset/app2+app3", "fa-link", "violet", "App 2+3 — candle list", t("combo_23_desc")),
+    _mapRow("#/history/overall", "fa-trophy", "emerald", t("folder_overall_title"), t("folder_overall_desc")),
+    _mapRow("#/history/overall/app1+app2", "fa-table-list", "blue", "App 1+2 — per-pair list", ""),
+    _mapRow("#/history/overall/app1+app3", "fa-table-list", "blue", "App 1+3 — per-pair list", ""),
+    _mapRow("#/history/overall/app2+app3", "fa-table-list", "blue", "App 2+3 — per-pair list", ""),
+    _mapRow("#/history/overall/app1+app2+app3", "fa-crown", "amber", "All 3 apps — per-pair list", ""),
+    _mapRow("#/history/backtest", "fa-chart-line", "blue", t("folder_backtest_title"), t("folder_backtest_desc")),
+    _mapRow("#/history/perpair", "fa-table-list", "emerald", t("folder_perpair_title"), t("folder_perpair_desc")),
+    _mapRow("#/history/apppair", "fa-users", "violet", t("folder_apppair_title"), t("folder_apppair_desc")),
+    _mapRow("#/history/drilldown", "fa-magnifying-glass-chart", "amber", t("folder_drilldown_title"), t("folder_drilldown_desc")),
+  ].join("");
+
+  // ---- Settings panels ----
+  const settings = SETTINGS_SUBS.map((sub) =>
+    _mapRow(`#/settings/${sub}`, "fa-sliders", "blue", $(`settings-${sub}`)?.querySelector("h2")?.textContent || sub, "")
+  ).join("");
+
+  // ---- APIs (the backend's "functions" — live JSON, new window) ----
+  const apis = [
+    ["/api/snapshot", "Full live snapshot"],
+    ["/api/pairs", "Per-pair predictions"],
+    ["/api/signal-feed?limit=50", "Live signal feed"],
+    ["/api/consensus-history?minutes=360", "Saved signal history (6h)"],
+    ["/api/live-winrate", "Live win rates per level/combination"],
+    ["/api/app-pair-leaders", "App pair leaderboards"],
+    ["/api/backtest/status", "Backtest cache status"],
+    ["/api/diag", "Candle alignment diagnostics"],
+    ["/api/sources", "Source app configuration"],
+  ].map(([path, label]) =>
+    _mapRow(path, "fa-code", "blue", label, `${path} — ${t("map_api_desc")}`, { external: true })
+  ).join("");
+
+  // ---- Project files & folders on GitHub ----
+  const files = [
+    ["main.py", "FastAPI entrypoint"],
+    ["app/api/routes.py", "All API endpoints"],
+    ["app/signal_aggregator.py", "Signal aggregation classes"],
+    ["app/backtest_runner.py", "Backtest engine"],
+    ["app/signal_ledger.py", "Signal history ledger"],
+    ["app/candle_fetcher.py", "Candle fetcher"],
+    ["app/snapshot_poller.py", "Snapshot poller"],
+    ["app/signal_normalize.py", "Signal normalization"],
+    ["app/source_config.py", "Source URL config"],
+    ["app/http_fetcher.py", "HTTP fetcher"],
+    ["app/app2_cache.py", "App 2 cache"],
+    ["app/templates/dashboard.html", "Dashboard HTML"],
+    ["app/static/dashboard.js", "Dashboard JS"],
+    ["app/static/dashboard.css", "Dashboard CSS"],
+    ["tests/", "Test suite"],
+  ].map(([path, label]) =>
+    _mapRow(MAP_GITHUB_BASE + path, "fa-folder", "amber", path, label + " — " + t("map_files_desc"), { external: true })
+  ).join("");
+
+  root.innerHTML = `
+    ${_mapGroup(t("map_group_screens"), screens)}
+    ${_mapGroup(t("map_group_signals"), signals)}
+    ${_mapGroup(t("map_group_history"), historyViews)}
+    ${_mapGroup(t("map_group_settings"), settings)}
+    <div class="map-group">
+      <div class="map-group__title">${escHtml(t("map_group_pairs"))}</div>
+      <div class="map-chips" id="map-pairs"></div>
+    </div>
+    ${_mapGroup(t("map_group_api"), apis)}
+    ${_mapGroup(t("map_group_files"), files)}
+  `;
+  renderMapPairs();
+}
+
+// Live pair chips inside the App Map — refreshed on every snapshot poll
+// while the Map tab is open.
+function renderMapPairs() {
+  const host = $("map-pairs");
+  if (!host) return;
+  const list = drawerPairList();
+  if (!list.length) {
+    host.innerHTML = `<p class="placeholder">${escHtml(t("placeholder_loading"))}</p>`;
+    return;
+  }
+  host.innerHTML = list.map((p) => {
+    const dir = p.consensus?.direction || null;
+    const dirCls = dir === "CALL" ? "call" : dir === "PUT" ? "put" : "none";
+    return `<span class="map-chip">
+      <a class="map-chip__link" href="#/signals/pair/${encodeURIComponent(p.pair)}" title="${escAttr(t("map_open_pair"))} ${escAttr(p.displayPair)}">
+        <span class="sp-pair-chip__dot sp-pair-chip__dot--${escAttr(p.category)}"></span>
+        ${escHtml(p.displayPair)}
+        <span class="sp-pair-chip__dir sp-pair-chip__dir--${dirCls}">${dir === "CALL" ? "▲" : dir === "PUT" ? "▼" : "—"}</span>
+      </a>
+      <a class="map-newwin map-newwin--chip" href="#/signals/pair/${encodeURIComponent(p.pair)}" target="_blank" rel="noopener" aria-label="Open in new window: ${escAttr(p.displayPair)}"><i class="fas fa-arrow-up-right-from-square"></i></a>
+    </span>`;
+  }).join("");
 }
 
 // ====== Live Win Rate panel (Signals tab) ======
@@ -1465,21 +1902,19 @@ function renderLiveWinRatePanel() {
       const key = card.dataset.wrcard;
       if (key === "3-agree" || key === "2-agree") {
         setLevelFilter(key);
-        switchTab("signals");
-        renderPairTable();
+        nav("#/signals");
         window.scrollTo(0, 0);
         return;
       }
       if (key === "overall") {
         setLevelFilter("");
-        renderPairTable();
+        nav("#/signals");
         window.scrollTo(0, 0);
         return;
       }
-      // App combination → History tab, combination-filtered list.
-      switchTab("history");
-      historyNavReset();
-      switchHistorySubtab("consensuslist", { level: "all", subset: key, label: subsetLabel(key) });
+      // App combination → History tab, combination-filtered list (routed:
+      // #/history/subset/<key>).
+      nav(`#/history/subset/${encodeURIComponent(key)}`);
       window.scrollTo(0, 0);
     });
   });
@@ -1582,16 +2017,22 @@ function _paintSignalsHistory(data) {
   wireConsensusRowToggles(body, items);
 }
 
-// Filter tab clicks — force a refetch so the running win rate is always
-// computed over exactly the filtered population.
+// Filter tab clicks navigate through the router (#/signals/history/<key>)
+// so the active filter is part of the URL — a refresh or a new window
+// lands on the same filtered view. applyRoute → setSignalsHistoryFilter
+// does the actual work.
 $$("#sp-history-tabs .sp-history-tab").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    if (state.signalsHistoryFilter === btn.dataset.shfilter) return;
-    state.signalsHistoryFilter = btn.dataset.shfilter;
-    state.expandedHistoryRows.clear();
-    renderSignalsHistoryPanel(true);
-  });
+  btn.addEventListener("click", () => nav(`#/signals/history/${encodeURIComponent(btn.dataset.shfilter)}`));
 });
+
+// Apply one filter key of the Signals tab's Live Signal History panel.
+// Called by the router (and therefore by the tab clicks above).
+function setSignalsHistoryFilter(key) {
+  if (!SP_HISTORY_FILTERS.some((f) => f.key === key)) key = "all";
+  state.signalsHistoryFilter = key;
+  state.expandedHistoryRows.clear();
+  renderSignalsHistoryPanel(true);
+}
 
 function renderActiveFilterTags() {
   const container = $("sp-active-filters");
@@ -2444,20 +2885,13 @@ async function renderConsensusLevels() {
 
   $$("[data-level]", grid).forEach((btn) => {
     btn.addEventListener("click", () => {
-      const level = btn.dataset.level;
-      state.activeConsensusLevel = level;
-      state.activeConsensusSubset = null;
-      const meta = CONSENSUS_LEVEL_META.find((m) => m.level === level);
-      switchHistorySubtab("consensuslist", { level, label: meta ? meta.title : level });
+      nav(`#/history/consensus/${encodeURIComponent(btn.dataset.level)}`);
       window.scrollTo(0, 0);
     });
   });
   $$("[data-subset]", grid).forEach((btn) => {
     btn.addEventListener("click", () => {
-      const subset = btn.dataset.subset;
-      state.activeConsensusLevel = "all";
-      state.activeConsensusSubset = subset;
-      switchHistorySubtab("consensuslist", { level: "all", subset, label: subsetLabel(subset) });
+      nav(`#/history/subset/${encodeURIComponent(btn.dataset.subset)}`);
       window.scrollTo(0, 0);
     });
   });
@@ -2793,9 +3227,7 @@ async function renderOverallWinRate() {
 
   $$("#overall-content .overall-card[data-subset]").forEach((card) => {
     card.addEventListener("click", () => {
-      const subset = card.dataset.subset;
-      state.activeSubset = subset;
-      switchHistorySubtab("subsetpairs", { subset, label: subsetLabel(subset) });
+      nav(`#/history/overall/${encodeURIComponent(card.dataset.subset)}`);
       window.scrollTo(0, 0);
     });
   });
@@ -2933,18 +3365,73 @@ function populateHistoryPairSelector() {
 $("drilldown-pair")?.addEventListener("change", async (e) => {
   const pair = e.target.value;
   if (!pair) return;
-  await openPairDrawer(pair, "drilldown-content");
+  // Routed: #/history/drilldown/<pair> — so the drilldown view + selected
+  // pair are one shareable URL.
+  nav(`#/history/drilldown/${encodeURIComponent(pair)}`);
 });
 
 // ====== Pair drawer (Signals tab row-tap) ======
 const drawerOverlay = $("drawer-overlay");
 const drawerClose = $("drawer-close");
-drawerClose.addEventListener("click", closePairDrawer);
+drawerClose.addEventListener("click", requestCloseDrawer);
 drawerOverlay.addEventListener("click", (e) => {
-  if (e.target === drawerOverlay) closePairDrawer();
+  if (e.target === drawerOverlay) requestCloseDrawer();
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !drawerOverlay.hidden) closePairDrawer();
+  if (e.key === "Escape" && !drawerOverlay.hidden) requestCloseDrawer();
+});
+
+// ---- Drawer pair switcher — flip through pairs WITHOUT closing ----
+// ◀ / ▶ step through every live pair (wrapping), the dropdown jumps to any
+// pair, and ↗ opens the CURRENT pair view in a NEW browser window
+// (#/signals/pair/<pair> deep link). Each switch navigates through the
+// router, so the drawer content, the URL and the browser history stay in
+// sync.
+function drawerPairList() {
+  const pairs = (state.snapshot?.pairs || []).slice();
+  pairs.sort((a, b) => {
+    const ac = a.consensus?.level === "3-agree" ? 3 : a.consensus?.level === "2-agree" ? 2 : 0;
+    const bc = b.consensus?.level === "3-agree" ? 3 : b.consensus?.level === "2-agree" ? 2 : 0;
+    if (bc !== ac) return bc - ac;
+    return a.displayPair.localeCompare(b.displayPair);
+  });
+  return pairs;
+}
+
+function updateDrawerSwitcher(data) {
+  const sel = $("drawer-pairselect");
+  const newwin = $("drawer-newwin");
+  if (!sel || !data) return;
+  const list = drawerPairList();
+  const hasCurrent = list.some((p) => p.pair === data.pair);
+  if (!hasCurrent && data.pair) list.unshift({ pair: data.pair, displayPair: data.displayPair || data.pair });
+  // Rebuild the options only when the pair set actually changed — a full
+  // rebuild every poll tick would close the native dropdown mid-tap.
+  const sig = list.map((p) => p.pair).join("\n");
+  if (sel.dataset.sig !== sig) {
+    sel.innerHTML = list.map((p) => `<option value="${escAttr(p.pair)}">${escHtml(p.displayPair)}</option>`).join("");
+    sel.dataset.sig = sig;
+  }
+  sel.value = data.pair;
+  if (newwin) newwin.href = `#/signals/pair/${encodeURIComponent(data.pair)}`;
+  const prev = $("drawer-prev");
+  const next = $("drawer-next");
+  if (prev) prev.disabled = list.length < 2;
+  if (next) next.disabled = list.length < 2;
+}
+
+function _drawerStepPair(dir) {
+  const list = drawerPairList();
+  if (list.length < 2) return;
+  const idx = list.findIndex((p) => p.pair === state.drawerPair);
+  const cur = idx === -1 ? 0 : idx;
+  const nextIdx = (cur + dir + list.length) % list.length;
+  nav(`#/signals/pair/${encodeURIComponent(list[nextIdx].pair)}`);
+}
+$("drawer-prev")?.addEventListener("click", () => _drawerStepPair(-1));
+$("drawer-next")?.addEventListener("click", () => _drawerStepPair(1));
+$("drawer-pairselect")?.addEventListener("change", (e) => {
+  if (e.target.value) nav(`#/signals/pair/${encodeURIComponent(e.target.value)}`);
 });
 
 // ---- Agreement-type tabs inside the pair drawer ----
@@ -3004,8 +3491,18 @@ async function openPairDrawer(pair, opts = {}) {
   //                 cards — all promise "opens the drawer already scoped
   //                 to that combination", so the tab must actually filter
   //                 the history table, not just be accepted and dropped.
+  //   - fromRoute : true when the HASH ROUTER opened this drawer (the
+  //                 router already recorded state._drawerReturnHash, so
+  //                 the in-page capture below must not run).
   const targetId = typeof opts === "string" ? opts : opts.targetId;
   const subset = typeof opts === "string" ? null : (opts.subset || null);
+  if (!opts.fromRoute && typeof opts !== "string") {
+    // In-page open (row tap, chip tap, "History" button…): remember where
+    // we are so closing the drawer returns here. Pair→pair switches keep
+    // the ORIGINAL return point.
+    const cur = location.hash || "#/signals";
+    if (!cur.startsWith("#/signals/pair/")) state._drawerReturnHash = cur;
+  }
   // Inline render (History → Pair Drilldown): previously this ALSO popped
   // the modal drawer over the top and locked the page scroll, so the inline
   // result was hidden behind a duplicate modal. Render inline ONLY.
@@ -3055,13 +3552,24 @@ async function openPairDrawer(pair, opts = {}) {
   }
 }
 
-function closePairDrawer() {
+function closePairDrawer(opts = {}) {
+  const silent = typeof opts === "object" && opts !== null && opts.silent;
   drawerOverlay.hidden = true;
   document.body.style.overflow = "";
   state.drawerPair = null;
   state.drawerSubset = null;
   state.drawerData = null;
   state.drawerContainerId = null;
+  // Silent close (route changed elsewhere / the router already navigated)
+  // just hides the overlay. User-initiated close (✕, overlay tap, Escape)
+  // navigates BACK to where the drawer was opened from, so the URL and
+  // the view always agree.
+  if (!silent) nav(state._drawerReturnHash || "#/signals");
+}
+
+// User-initiated close from inside the drawer.
+function requestCloseDrawer() {
+  closePairDrawer();
 }
 
 function renderPairDrawer(data) {
@@ -3073,6 +3581,7 @@ function renderPairDrawer(data) {
   // numbers sitting next to each other.
   $("drawer-sub").innerHTML = `${cat} ${cons} · ${data.signals?.length || 0} live signals`;
   $("drawer-body").innerHTML = renderPairDetailHtml(data);
+  updateDrawerSwitcher(data);
 }
 
 function renderPairDetailHtml(data) {
@@ -3248,7 +3757,9 @@ document.addEventListener("click", (e) => {
 });
 
 // Tab clicks inside the drawer — switch the agreement type, re-render the
-// tab strip + summary + history table from the cached payload.
+// tab strip + summary + history table from the cached payload, and keep
+// the URL in sync (replaceState — no refetch, no extra history entry, but
+// the view stays shareable/openable in a new window).
 document.addEventListener("click", (e) => {
   const btn = e.target.closest?.("[data-drawer-tab]");
   if (!btn) return;
@@ -3262,6 +3773,10 @@ document.addEventListener("click", (e) => {
   state.drawerSubset = key === "all" ? null : key;
   state.expandedHistoryRows.clear();
   _rerenderDrawerBody();
+  if (!state.drawerContainerId) {
+    const sub = key === "all" ? "" : `/${encodeURIComponent(key)}`;
+    replaceHashSilently(`#/signals/pair/${encodeURIComponent(data.pair)}${sub}`);
+  }
 });
 
 // Delegate fav button in drawer
@@ -3566,8 +4081,8 @@ $("btn-sources-reset")?.addEventListener("click", async () => {
 });
 
 // Refresh the panel every time it opens (fresh URLs + fresh status dots).
-document.querySelector('#settings-folder-grid .folder-card[data-folder="sources"]')
-  ?.addEventListener("click", () => loadSourcesUI());
+// (The panel is now opened via the hash router — #/settings/sources —
+// which calls loadSourcesUI() during route application.)
 
 // ====== Settings handlers ======
 const settingsInputs = [
@@ -3719,3 +4234,7 @@ refreshBacktestStatus();
 // Pre-load the Signal Sources config so the Settings panel is instant and
 // the per-app status dots are wired before the first open.
 loadSourcesUI();
+// Apply the initial hash route LAST — deep links (#/signals/pair/…,
+// #/history/overall/…) land on exactly the view in the URL, even in a
+// freshly opened window.
+applyRoute();

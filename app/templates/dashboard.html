@@ -41,6 +41,10 @@
         <span class="sidenav__icon">⚙</span>
         <span class="sidenav__label" data-i18n="nav_settings">Settings</span>
       </button>
+      <button class="sidenav__item" data-tab="map" type="button">
+        <span class="sidenav__icon">🗺️</span>
+        <span class="sidenav__label" data-i18n="nav_map">Map</span>
+      </button>
     </div>
     <div class="sidenav__foot">
       <div class="topbar__status" id="sidenav-status-pill" title="Data feed status">
@@ -195,6 +199,22 @@
       <div class="sp-stats-bar" id="sp-stats-bar">
         <!-- Populated by JS — renderSignalStats() -->
       </div>
+
+      <!-- Pair switcher strip — one tappable chip PER PAIR, horizontally
+           scrollable. Tap = open that pair's detail drawer; every chip is
+           a real hash link (#/signals/pair/<pair>), so it can also be
+           long-pressed → "open in new window" on mobile. The drawer itself
+           carries ◀ ▶ buttons + a dropdown to flip through pairs one by
+           one without closing it. -->
+      <section class="sp-pairstrip-section">
+        <div class="sp-wr-head">
+          <span class="sp-wr-title"><i class="fas fa-repeat"></i> <span data-i18n="panel_pair_switcher">Pair Switcher</span></span>
+          <span class="sp-wr-meta" id="sp-pairstrip-meta">—</span>
+        </div>
+        <div class="sp-pair-strip" id="sp-pair-strip">
+          <p class="placeholder" data-i18n="placeholder_loading">Loading…</p>
+        </div>
+      </section>
 
       <!-- Live Win Rate panel — global per-level + per-app-combination win
            rates graded by the 6h backtest, refreshed alongside the snapshot
@@ -456,37 +476,43 @@
            global win rates, each of which drills into a per-pair list
            for that subset. -->
       <div class="folder-grid folder-grid--with-headline" id="history-folder-grid">
-        <button class="folder-card folder-card--headline" data-folder="consensus" type="button">
+        <a class="folder-card folder-card--headline" href="#/history/consensus" data-folder="consensus">
           <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-layer-group"></i></span>
           <span class="folder-card__title" data-i18n="folder_consensus_title">Signal History</span>
           <span class="folder-card__desc" data-i18n="folder_consensus_desc">Every saved signal, grouped by how many apps agreed — 3 Agree, 2 Agree, Conflict, Single. Tap a row for the full per-app breakdown.</span>
           <span class="folder-card__hint" id="consensus-folder-hint"><i class="fas fa-arrow-right"></i> <span data-i18n="folder_open">Open</span></span>
-        </button>
-        <button class="folder-card" data-folder="overall" type="button">
+          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
+        </a>
+        <a class="folder-card" href="#/history/overall" data-folder="overall">
           <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-trophy"></i></span>
           <span class="folder-card__title" data-i18n="folder_overall_title">Overall Win Rate</span>
           <span class="folder-card__desc" data-i18n="folder_overall_desc">Win rate for App 1, App 2, App 3 and every combination (1+2, 1+3, 2+3, all 3)</span>
-        </button>
-        <button class="folder-card" data-folder="backtest" type="button">
+          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
+        </a>
+        <a class="folder-card" href="#/history/backtest" data-folder="backtest">
           <span class="folder-card__icon folder-card__icon--blue"><i class="fas fa-chart-line"></i></span>
           <span class="folder-card__title" data-i18n="folder_backtest_title">Backtest</span>
           <span class="folder-card__desc" data-i18n="folder_backtest_desc">Consensus accuracy over the last 6 hours</span>
-        </button>
-        <button class="folder-card" data-folder="perpair" type="button">
+          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
+        </a>
+        <a class="folder-card" href="#/history/perpair" data-folder="perpair">
           <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-table-list"></i></span>
           <span class="folder-card__title" data-i18n="folder_perpair_title">Per-Pair Stats</span>
           <span class="folder-card__desc" data-i18n="folder_perpair_desc">Win rate per pair, by app combination</span>
-        </button>
-        <button class="folder-card" data-folder="apppair" type="button">
+          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
+        </a>
+        <a class="folder-card" href="#/history/apppair" data-folder="apppair">
           <span class="folder-card__icon folder-card__icon--violet"><i class="fas fa-users"></i></span>
           <span class="folder-card__title" data-i18n="folder_apppair_title">App Pair Leaders</span>
           <span class="folder-card__desc" data-i18n="folder_apppair_desc">Which pair of apps performs best, and where</span>
-        </button>
-        <button class="folder-card" data-folder="drilldown" type="button">
+          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
+        </a>
+        <a class="folder-card" href="#/history/drilldown" data-folder="drilldown">
           <span class="folder-card__icon folder-card__icon--amber"><i class="fas fa-magnifying-glass-chart"></i></span>
           <span class="folder-card__title" data-i18n="folder_drilldown_title">Pair Drilldown</span>
           <span class="folder-card__desc" data-i18n="folder_drilldown_desc">Candle history + signals for one pair</span>
-        </button>
+          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
+        </a>
       </div>
 
       <!-- Detail view — hidden until a folder card above is tapped.
@@ -691,45 +717,72 @@
       </div><!-- /#history-folder-detail -->
     </section>
 
+    <!-- ============ MAP ============ -->
+    <!-- The App Map is the link-up hub: every screen, every History
+         folder + sub-view, every Settings panel, every live pair, every
+         API endpoint and every project file is listed here as a real
+         link. Each row has a ↗ button that opens that view in a NEW
+         browser window (mobile: new tab) — so any "window" of the app
+         can be kept open side by side. -->
+    <section id="tab-map" class="tab-panel">
+      <div class="panel">
+        <div class="panel__header">
+          <h2 data-i18n="map_title">App Map</h2>
+          <span class="panel__meta" data-i18n="map_subtitle">every section, linked</span>
+        </div>
+        <div class="panel__body">
+          <p class="hint" data-i18n="map_open_new_hint">Tap any link to open it here. The ↗ button beside each link opens it in a NEW window, so you can keep several views open side by side on your phone.</p>
+          <div id="map-content"></div>
+        </div>
+      </div>
+    </section>
+
     <!-- ============ SETTINGS ============ -->
     <section id="tab-settings" class="tab-panel">
       <!-- Folder-menu landing view — tap a card to open that settings group -->
       <div class="folder-grid" id="settings-folder-grid">
-        <button class="folder-card" data-folder="general" type="button">
+        <a class="folder-card" href="#/settings/general" data-folder="general">
           <span class="folder-card__icon folder-card__icon--blue"><i class="fas fa-sliders"></i></span>
           <span class="folder-card__title" data-i18n="folder_general_title">General</span>
           <span class="folder-card__desc" data-i18n="folder_general_desc">Theme, language, clock, time format</span>
-        </button>
-        <button class="folder-card" data-folder="realtime" type="button">
+          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
+        </a>
+        <a class="folder-card" href="#/settings/realtime" data-folder="realtime">
           <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-bolt"></i></span>
           <span class="folder-card__title" data-i18n="folder_realtime_title">Real-time Refresh</span>
           <span class="folder-card__desc" data-i18n="folder_realtime_desc">Polling mode, feed size, sound, notifications</span>
-        </button>
-        <button class="folder-card" data-folder="filters" type="button">
+          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
+        </a>
+        <a class="folder-card" href="#/settings/filters" data-folder="filters">
           <span class="folder-card__icon folder-card__icon--violet"><i class="fas fa-filter"></i></span>
           <span class="folder-card__title" data-i18n="folder_filters_title">Trading Filters</span>
           <span class="folder-card__desc" data-i18n="folder_filters_desc">Min win rate, freshness, conflicts, favorites</span>
-        </button>
-        <button class="folder-card" data-folder="sources" type="button">
+          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
+        </a>
+        <a class="folder-card" href="#/settings/sources" data-folder="sources">
           <span class="folder-card__icon folder-card__icon--emerald"><i class="fas fa-satellite-dish"></i></span>
           <span class="folder-card__title" data-i18n="folder_sources_title">Signal Sources</span>
           <span class="folder-card__desc" data-i18n="folder_sources_desc">Connect redeployed Railway app URLs — live, no code change</span>
-        </button>
-        <button class="folder-card" data-folder="offsets" type="button">
+          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
+        </a>
+        <a class="folder-card" href="#/settings/offsets" data-folder="offsets">
           <span class="folder-card__icon folder-card__icon--amber"><i class="fas fa-clock"></i></span>
           <span class="folder-card__title" data-i18n="folder_offsets_title">App Candle Offsets</span>
           <span class="folder-card__desc" data-i18n="folder_offsets_desc">Per-app candle alignment (advanced)</span>
-        </button>
-        <button class="folder-card" data-folder="diagnostics" type="button">
+          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
+        </a>
+        <a class="folder-card" href="#/settings/diagnostics" data-folder="diagnostics">
           <span class="folder-card__icon folder-card__icon--red"><i class="fas fa-stethoscope"></i></span>
           <span class="folder-card__title" data-i18n="folder_diagnostics_title">Diagnostics</span>
           <span class="folder-card__desc" data-i18n="folder_diagnostics_desc">Engineer-facing alignment diagnostics</span>
-        </button>
-        <button class="folder-card" data-folder="about" type="button">
+          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
+        </a>
+        <a class="folder-card" href="#/settings/about" data-folder="about">
           <span class="folder-card__icon folder-card__icon--yellow"><i class="fas fa-circle-info"></i></span>
           <span class="folder-card__title" data-i18n="folder_about_title">Data &amp; About</span>
           <span class="folder-card__desc" data-i18n="folder_about_desc">Clear cache, reset settings, version, GitHub</span>
-        </button>
+          <span class="folder-card__win"><i class="fas fa-arrow-up-right-from-square"></i></span>
+        </a>
       </div>
 
       <!-- Detail view — hidden until a folder card above is tapped -->
@@ -927,6 +980,16 @@
         </div>
         <button class="drawer__close" id="drawer-close" aria-label="Close">✕</button>
       </header>
+      <!-- Pair switcher — flip through pairs one by one without closing
+           the drawer: ◀ previous / ▶ next (wraps around), a dropdown with
+           every live pair, and ↗ which opens this exact pair view in a
+           NEW browser window (#/signals/pair/<pair> deep link). -->
+      <div class="drawer__switcher" id="drawer-switcher">
+        <button class="drawer__navbtn" id="drawer-prev" type="button" aria-label="Previous pair" title="Previous pair">◀</button>
+        <select class="drawer__pairselect" id="drawer-pairselect" aria-label="Switch pair"></select>
+        <button class="drawer__navbtn" id="drawer-next" type="button" aria-label="Next pair" title="Next pair">▶</button>
+        <a class="drawer__newwin" id="drawer-newwin" href="#/signals" target="_blank" rel="noopener" title="Open this pair view in a new window"><i class="fas fa-arrow-up-right-from-square"></i></a>
+      </div>
       <div class="drawer__body" id="drawer-body">
         <p class="placeholder" data-i18n="loading_ellipsis">Loading…</p>
       </div>
@@ -950,6 +1013,10 @@
     <button class="bottomnav__item" data-tab="settings">
       <span class="bottomnav__icon">⚙</span>
       <span class="bottomnav__label" data-i18n="nav_settings">Settings</span>
+    </button>
+    <button class="bottomnav__item" data-tab="map">
+      <span class="bottomnav__icon">🗺️</span>
+      <span class="bottomnav__label" data-i18n="nav_map">Map</span>
     </button>
   </nav>
 

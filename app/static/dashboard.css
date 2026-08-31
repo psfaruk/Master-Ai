@@ -2885,3 +2885,250 @@ input:focus-visible,
 @media (min-width: 1600px) {
   .content { padding-left: 44px; padding-right: 44px; }
 }
+
+/* =====================================================================
+   PAIR SWITCHER STRIP (Signals tab)
+   One tappable chip per pair, horizontally scrollable. Chips are real
+   anchors (#/signals/pair/<pair>) — tap opens the pair drawer through
+   the hash router; long-press → "open in new window" works natively.
+   ===================================================================== */
+.sp-pairstrip-section {
+  margin-top: 14px;
+  position: relative;
+  z-index: 1;
+}
+.sp-pair-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 6px 2px 10px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+.sp-pair-strip::-webkit-scrollbar { height: 6px; }
+.sp-pair-strip::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
+.sp-pair-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  transition: border-color 0.15s, background 0.15s, transform 0.1s;
+}
+.sp-pair-chip:hover { border-color: var(--blue); }
+.sp-pair-chip:active { transform: scale(0.97); }
+.sp-pair-chip.is-active {
+  border-color: var(--blue);
+  background: rgba(59, 130, 246, 0.14);
+}
+.sp-pair-chip__dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.sp-pair-chip__dot--otc { background: var(--amber); }
+.sp-pair-chip__dot--real { background: var(--blue); }
+.sp-pair-chip__name { font-family: var(--font-mono); font-size: 11.5px; }
+.sp-pair-chip__dir { font-size: 10px; font-weight: 700; }
+.sp-pair-chip__dir--call { color: var(--emerald); }
+.sp-pair-chip__dir--put { color: var(--red); }
+.sp-pair-chip__dir--none { color: var(--text-muted); }
+.sp-pair-chip__agree {
+  font-size: 10px;
+  color: var(--text-dim);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  padding: 2px 5px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+}
+
+/* =====================================================================
+   DRAWER PAIR SWITCHER — ◀ prev / dropdown / ▶ next / ↗ new window
+   Flip through pairs one by one without closing the drawer.
+   ===================================================================== */
+.drawer__switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+}
+.drawer__navbtn {
+  flex: 0 0 auto;
+  width: 34px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.drawer__navbtn:hover:not(:disabled) { background: var(--bg-card-hover); color: var(--blue); border-color: var(--blue); }
+.drawer__navbtn:disabled { opacity: 0.35; cursor: default; }
+.drawer__pairselect {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 9px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+.drawer__newwin {
+  flex: 0 0 auto;
+  width: 34px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 13px;
+  text-decoration: none;
+  transition: color 0.15s, border-color 0.15s;
+}
+.drawer__newwin:hover { color: var(--blue); border-color: var(--blue); }
+
+/* =====================================================================
+   APP MAP (5th tab) — every section of the app, linked.
+   Each row = [main link][↗ open-in-new-window].
+   ===================================================================== */
+.map-group { margin-bottom: 20px; }
+.map-group__title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin: 0 0 8px;
+}
+.map-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.map-link {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+.map-link:hover { background: var(--bg-card-hover); border-color: var(--blue); }
+.map-link__icon {
+  width: 34px; height: 34px;
+  flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+}
+.map-link__icon--blue { background: rgba(59, 130, 246, 0.15); color: var(--blue); }
+.map-link__icon--emerald { background: rgba(16, 185, 129, 0.15); color: var(--emerald); }
+.map-link__icon--violet { background: rgba(139, 92, 246, 0.15); color: var(--violet); }
+.map-link__icon--amber { background: rgba(245, 158, 11, 0.15); color: var(--amber); }
+.map-link__icon--cyan { background: rgba(59, 130, 246, 0.15); color: var(--blue); }
+.map-link__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.map-link__title { font-size: 13px; font-weight: 600; }
+.map-link__desc {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.map-newwin {
+  flex: 0 0 auto;
+  width: 42px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 13px;
+  text-decoration: none;
+  transition: color 0.15s, border-color 0.15s;
+}
+.map-newwin:hover { color: var(--blue); border-color: var(--blue); }
+.map-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.map-chip {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 4px;
+}
+.map-chip__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  transition: border-color 0.15s;
+}
+.map-chip__link:hover { border-color: var(--blue); }
+.map-newwin--chip {
+  width: auto;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+/* =====================================================================
+   FOLDER CARDS AS LINKS + ↗ new-window badge
+   History/Settings folder cards are now real anchors — add the anchor
+   resets and the corner badge hinting at long-press → new window.
+   ===================================================================== */
+a.folder-card { text-decoration: none; color: inherit; position: relative; }
+.folder-card__win {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.65;
+  transition: opacity 0.15s, color 0.15s;
+}
+.folder-card:hover .folder-card__win { opacity: 1; color: var(--blue); }
+
+/* 5-item bottom nav: nudge labels so five items stay comfortable */
+@media (max-width: 360px) {
+  .bottomnav__label { font-size: 9.5px; }
+}
