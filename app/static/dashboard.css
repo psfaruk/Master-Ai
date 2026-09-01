@@ -56,6 +56,16 @@ html { -webkit-text-size-adjust: 100%; }
    flex/grid component that is toggled via the hidden attribute needs this
    explicit guard — otherwise it renders visible on page load. */
 [hidden] { display: none !important; }
+/* Mobile touch quality: ``touch-action: manipulation`` keeps panning and
+   pinch-zoom but removes the double-tap-zoom hold that makes taps on
+   buttons/rows feel dead (slow response) on iOS/Android; the tap-highlight
+   is off so taps give feedback from :active styles instead of the grey
+   flash that lingers over the bottom nav. */
+button, a, input, select, label,
+tr[role="button"], .hero, .wr-card, .seg-tab, .pair-chip, .drawer-tab {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
 body {
   margin: 0;
   font-family: var(--font);
@@ -524,6 +534,8 @@ a { color: var(--accent); text-decoration: none; }
 .bottomnav__icon { font-size: 17px; line-height: 1; }
 .bottomnav__label { letter-spacing: 0.02em; }
 .bottomnav__item--active { color: var(--accent); font-weight: 600; }
+.bottomnav__item:active { color: var(--text); }
+.bottomnav__item:active .bottomnav__icon { transform: scale(0.92); }
 @media (min-width: 1100px) { .bottomnav { display: none; } }
 
 /* ===== Side nav (desktop) ===== */

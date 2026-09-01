@@ -259,6 +259,11 @@ function applyRoute() {
   // drawer opened from History returns to History, not to Signals.
   if (!isPairRoute) state.drawerReturnHash = location.hash || "#/home";
 
+  // A non-pair route must also dismiss an open pair drawer — otherwise
+  // switching tabs from the bottom nav while a drawer is up leaves the
+  // drawer stuck on screen over the new tab.
+  if (!isPairRoute && state.drawerPair) closePairDrawer({ silent: true });
+
   if (head === "signals") {
     switchTab("signals");
     if (isPairRoute && parts[2]) {
@@ -279,6 +284,14 @@ function applyRoute() {
 }
 
 window.addEventListener("hashchange", applyRoute);
+
+// Main navigation — the mobile bottom tab bar and the desktop side rail.
+// Taps route through the hash router (#/home, #/signals, …) so the URL,
+// the active highlight and any open drawer all stay in sync. This block
+// is what makes the tabs respond to touch — it must always stay wired.
+$$(".bottomnav__item, .sidenav__item").forEach((btn) => {
+  btn.addEventListener("click", () => nav(`#/${btn.dataset.tab}`));
+});
 
 // ====== Polling ======
 const POLL_BURST_WINDOW_SEC = 12;

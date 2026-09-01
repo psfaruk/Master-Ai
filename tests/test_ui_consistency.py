@@ -430,3 +430,56 @@ def test_no_dead_feature_code_remains(js):
         "loadDiag", "renderDiag", "runBacktest", "populateHistoryPairSelector",
     ):
         assert gone not in js, f"dead function still present: {gone}"
+
+
+# ---------------------------------------------------------------------------
+# Touch / nav wiring (mobile regression)
+# ---------------------------------------------------------------------------
+
+
+def test_nav_buttons_are_wired_to_the_router(js):
+    """Regression: the 4-tab rebuild shipped both nav rails WITHOUT click
+    listeners — tapping Home/Signals/History/Settings did nothing on mobile
+    and every tab except Home was unreachable by touch. The JS must select
+    both rails and route every tap through nav(#/<tab>)."""
+    pattern = re.compile(
+        r'\$\$\("\.bottomnav__item,\s*\.sidenav__item"\)\s*\.forEach\('
+        r'[^;]*?dataset\.tab',
+        re.S,
+    )
+    assert pattern.search(js), (
+        "nav buttons are not wired: add "
+        '$$(".bottomnav__item, .sidenav__item").forEach((btn) => '
+        'btn.addEventListener("click", () => nav(`#/${btn.dataset.tab}`)))'
+    )
+
+
+def test_nav_wiring_runs_at_boot_not_inside_a_conditional(js):
+    """The listener block sits at top level (runs once on load). If it were
+    inside a function that is never called, tabs would silently die again."""
+    m = re.search(
+        r'^\$\$\("\.bottomnav__item, \.sidenav__item"\)\.forEach',
+        js,
+        re.M,
+    )
+    assert m, "nav wiring must be a top-level statement (column 0), not nested"
+
+
+def test_tab_switch_closes_an_open_pair_drawer(js):
+    """Tapping a nav tab while a pair drawer is open must dismiss the
+    drawer — otherwise the drawer stays stuck over the new tab and every
+    tab feels broken on mobile."""
+    apply_body = js.split("function applyRoute() {")[1].split("\n}")[0]
+    assert re.search(
+        r"if\s*\(!isPairRoute[^)]*\)\s*closePairDrawer", apply_body
+    ), "applyRoute() must closePairDrawer({silent:true}) on non-pair routes"
+
+
+def test_touch_targets_opt_out_of_double_tap_zoom(css):
+    """touch-action: manipulation removes the double-tap-zoom hold that
+    makes taps feel dead on mobile; tap-highlight off so the grey flash
+    does not linger over the bottom nav."""
+    body = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    m = re.search(r"touch-action:\s*manipulation", body)
+    assert m, "add touch-action: manipulation for interactive elements"
+    assert "-webkit-tap-highlight-color" in body
