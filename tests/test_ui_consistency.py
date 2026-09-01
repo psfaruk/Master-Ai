@@ -254,15 +254,26 @@ def test_i18n_tables_contain_no_orphan_map_or_folder_keys(js):
 # ---------------------------------------------------------------------------
 
 COMBOS = ["all", "3-agree", "2-agree", "app1+app2", "app1+app3", "app2+app3"]
+# Direction tabs sit after the agreement tabs in the pair drawer.
+DRAWER_DIRECTION_KEYS = ["dir-call", "dir-put"]
 
 
 def test_drawer_agreement_tabs_cover_the_user_asked_combinations(js):
     """The pair drawer must expose one tab per agreement type the user asked
     for: 2-agree, 3-agree, app1+app2, app1+app3, app2+app3 (plus "all").
-    Each pairwise tab maps 1:1 onto the backend's app_subset_key."""
+    Each pairwise tab maps 1:1 onto the backend's app_subset_key. A CALL and
+    a PUT tab close the row so each side of the market can be judged alone."""
     block = js.split("const DRAWER_TABS = [")[1].split("];", 1)[0]
     keys = re.findall(r'key: "([a-z0-9+-]+)"', block)
-    assert keys == COMBOS
+    assert keys == COMBOS + DRAWER_DIRECTION_KEYS
+
+
+def test_drawer_direction_tabs_match_on_direction(js):
+    """The CALL/PUT drawer tabs must filter on the row's direction, not on
+    level or subset — so 'CALL' counts every CALL candle across levels."""
+    block = js.split("const DRAWER_TABS = [")[1].split("];", 1)[0]
+    assert 'key: "dir-call", label: "CALL", match: (c) => c.direction === "CALL"' in block
+    assert 'key: "dir-put", label: "PUT", match: (c) => c.direction === "PUT"' in block
 
 
 def test_signals_history_panel_tabs_match_drawer_tabs(html):
@@ -394,7 +405,7 @@ def test_narrow_screens_drop_the_crowded_columns(css):
 
 def test_filter_controls_have_accessible_labels(html):
     for sel in ("filter-market", "filter-level", "hist-direction", "hist-minutes",
-                "drawer-pairselect"):
+                "drawer-pairselect", "sh-pair", "hist-pair"):
         # Grab the whole tag that carries the id (aria-label may sit before
         # or after the id attribute).
         tail = html.split(f'id="{sel}"', 1)[1][:160]
@@ -483,3 +494,44 @@ def test_touch_targets_opt_out_of_double_tap_zoom(css):
     m = re.search(r"touch-action:\s*manipulation", body)
     assert m, "add touch-action: manipulation for interactive elements"
     assert "-webkit-tap-highlight-color" in body
+
+
+# ---------------------------------------------------------------------------
+# Pair filter on the history panels (user request)
+# ---------------------------------------------------------------------------
+
+
+def test_history_panels_have_pair_filter_selects(html):
+    """The user asked for a per-pair filter on the live history views: the
+    Signals tab's Live Signal History panel and the History tab's list both
+    carry a pair dropdown."""
+    assert 'id="sh-pair"' in html, "Signals Live Signal History needs a pair filter"
+    assert 'id="hist-pair"' in html, "History tab list needs a pair filter"
+    # Both default to an "All pairs" option and start empty — JS fills them.
+    assert html.count('data-i18n="opt_all_pairs"') >= 2
+
+
+def test_history_queries_carry_the_pair_param(js):
+    """Both panels must send the selected pair to the server (server-side
+    filtering — client-side filtering would only clip the fetched page)."""
+    sp_q = js.split("async function renderSpHistoryPanel")[1].split("URLSearchParams({")[1].split("})")[0]
+    hist_q = js.split("async function renderHistoryPanel")[1].split("URLSearchParams({")[1].split("})")[0]
+    assert "pair" in sp_q, "Live Signal History query must include the pair param"
+    assert "pair" in hist_q, "History list query must include the pair param"
+
+
+def test_history_pair_cache_keys_include_the_selection(js):
+    """The 30s panel cache must be keyed by the pair selection too —
+    otherwise switching pairs serves the previous pair's rows."""
+    assert "state._spHistoryData.__pair === pair" in js
+    assert "state._histData.__pair === pair" in js
+    assert 'data.__pair = pair' in js
+
+
+def test_pair_options_populate_from_the_snapshot(js):
+    """One dropdown option per known pair, filled from the snapshot, with
+    the current selection preserved across polls."""
+    assert "function renderPairOptions()" in js
+    assert 'renderPairOptions();' in js.split("function render()")[1].split("function")[0]
+    for id_sel in ("sh-pair", "hist-pair"):
+        assert f'"{id_sel}"' in js

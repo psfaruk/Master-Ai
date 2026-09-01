@@ -275,6 +275,8 @@ a { color: var(--accent); text-decoration: none; }
 .filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
 .filters input[type="search"] { grid-column: 1 / -1; }
 .filters--inline { grid-template-columns: 1fr 1fr; }
+/* Full-width control inside a two-column filter row (pair filters). */
+.filters .span-all { grid-column: 1 / -1; }
 .filters select, .filters input {
   width: 100%;
   border: 1px solid var(--border);

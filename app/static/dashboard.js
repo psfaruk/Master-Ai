@@ -30,6 +30,7 @@ const TRANSLATIONS = {
     panel_overall_title: "Overall Win Rate",
     opt_all_markets: "All markets", opt_real: "Real",
     opt_all_levels: "All levels", lvl_conflict: "Conflict", lvl_single: "Single",
+    opt_all_pairs: "All pairs",
     ph_search_pair: "Search pair…",
     th_pair: "Pair", filter_candle_utc: "Candle (UTC)", th_final: "Final", th_agree: "Agree",
     th_winrate60: "WR 60m", loading_ellipsis: "Loading…",
@@ -77,6 +78,7 @@ const TRANSLATIONS = {
     panel_overall_title: "সর্বমোট জয়ের হার",
     opt_all_markets: "সব মার্কেট", opt_real: "রিয়েল",
     opt_all_levels: "সব লেভেল", lvl_conflict: "দ্বন্দ্ব", lvl_single: "একক",
+    opt_all_pairs: "সব পেয়ার",
     ph_search_pair: "পেয়ার খুঁজুন…",
     th_pair: "পেয়ার", filter_candle_utc: "ক্যান্ডেল (UTC)", th_final: "চূড়ান্ত", th_agree: "একমত",
     th_winrate60: "জয়ের হার ৬০মি", loading_ellipsis: "লোড হচ্ছে…",
@@ -362,8 +364,38 @@ function render() {
   renderAppCards(state.snapshot.apps);
   renderPairStrip();
   renderPairTable();
+  renderPairOptions();
   if (state.drawerPair && state.drawerData) refreshDrawerLiveBits();
 }
+
+// ---- Pair filter dropdowns (Live Signal History + History panels).
+// One option per known pair; the selection filters the history server-side
+// via /api/consensus-history's ``pair`` param. Rebuilt only when the pair
+// set changes, and the current selection is preserved across polls. ----
+function renderPairOptions() {
+  const pairs = (state.snapshot?.pairs || []).slice()
+    .sort((a, b) => (a.displayPair || a.pair).localeCompare(b.displayPair || b.pair));
+  const sig = pairs.map((p) => p.pair).join("\n");
+  for (const id of ["sh-pair", "hist-pair"]) {
+    const sel = $(id);
+    if (!sel) continue;
+    if (sel.dataset.sig !== sig) {
+      const cur = sel.value;
+      sel.innerHTML = `<option value="" data-i18n="opt_all_pairs">${escHtml(t("opt_all_pairs"))}</option>` +
+        pairs.map((p) => `<option value="${escAttr(p.pair)}">${escHtml(p.displayPair || p.pair)}</option>`).join("");
+      sel.dataset.sig = sig;
+      sel.value = pairs.some((p) => p.pair === cur) ? cur : "";
+    }
+  }
+}
+
+["sh-pair", "hist-pair"].forEach((id) => {
+  $(id)?.addEventListener("change", () => {
+    state.expandedRows.clear();
+    if (id === "sh-pair") renderSpHistoryPanel(true);
+    else renderHistoryPanel(true);
+  });
+});
 
 // ====== Health alert ======
 function _isAppUnhealthy(a) {
@@ -734,14 +766,16 @@ async function renderSpHistoryPanel(force = false) {
   const def = HIST_FILTERS.find((f) => f.key === state.spHistoryFilter) || HIST_FILTERS[0];
   $$("#sp-history-tabs .seg-tab").forEach((b) =>
     b.classList.toggle("is-active", b.dataset.shfilter === def.key));
+  const pair = $("sh-pair")?.value || "";
   const now = Date.now();
-  if (!force && state._spHistoryData && state._spHistoryData.__key === def.key && now - state._spHistoryAt < 30000) {
+  if (!force && state._spHistoryData && state._spHistoryData.__key === def.key
+      && state._spHistoryData.__pair === pair && now - state._spHistoryAt < 30000) {
     paintHistoryTable("sp-history", state._spHistoryData, def);
     return;
   }
   state._spHistoryAt = now;
   const q = new URLSearchParams({
-    level: def.level, subset: def.subset, minutes: "60", limit: "60", graded_only: "0",
+    level: def.level, subset: def.subset, pair, minutes: "60", limit: "60", graded_only: "0",
   });
   const ticket = nextTicket("sphistory");
   try {
@@ -750,6 +784,7 @@ async function renderSpHistoryPanel(force = false) {
     const data = await res.json();
     if (!ticketCurrent("sphistory", ticket)) return;
     data.__key = def.key;
+    data.__pair = pair;
     state._spHistoryData = data;
     paintHistoryTable("sp-history", data, def);
   } catch (e) {
@@ -783,8 +818,10 @@ async function renderHistoryPanel(force = false) {
   const def = HIST_FILTERS.find((f) => f.key === state.histFilter) || HIST_FILTERS[0];
   $$("#hist-tabs .seg-tab").forEach((b) =>
     b.classList.toggle("is-active", b.dataset.hfilter === def.key));
+  const pair = $("hist-pair")?.value || "";
   const now = Date.now();
-  if (!force && state._histData && state._histData.__key === def.key && now - state._histAt < 30000) {
+  if (!force && state._histData && state._histData.__key === def.key
+      && state._histData.__pair === pair && now - state._histAt < 30000) {
     paintHistoryTable("hist", state._histData, def);
     return;
   }
@@ -792,7 +829,7 @@ async function renderHistoryPanel(force = false) {
   const minutes = parseInt($("hist-minutes")?.value || "360", 10) || 360;
   const direction = $("hist-direction")?.value || "";
   const q = new URLSearchParams({
-    level: def.level, subset: def.subset, minutes: String(minutes), limit: "200", graded_only: "0",
+    level: def.level, subset: def.subset, pair, minutes: String(minutes), limit: "200", graded_only: "0",
   });
   if (direction) q.set("direction", direction);
   const ticket = nextTicket("histlist");
@@ -802,6 +839,7 @@ async function renderHistoryPanel(force = false) {
     const data = await res.json();
     if (!ticketCurrent("histlist", ticket)) return;
     data.__key = def.key;
+    data.__pair = pair;
     state._histData = data;
     paintHistoryTable("hist", data, def);
   } catch (e) {
@@ -971,8 +1009,10 @@ function wireListRowToggles(body, items) {
 // PAIR DRAWER
 // ======================================================================
 
-// One tab per agreement type; each shows its own win rate + W/L computed
-// from the SAME graded history window, so the tabs are directly comparable.
+// One tab per agreement type, plus one per direction (CALL / PUT) so the
+// trader can see how each side performs on this pair; each tab shows its
+// own win rate + W/L computed from the SAME graded history window, so the
+// tabs are directly comparable.
 const DRAWER_TABS = [
   { key: "all", label: "All", match: () => true },
   { key: "3-agree", label: "3-agree", match: (c) => c.level === "3-agree" },
@@ -980,6 +1020,8 @@ const DRAWER_TABS = [
   { key: "app1+app2", label: "App 1+2", match: (c) => c.app_subset_key === "app1+app2" },
   { key: "app1+app3", label: "App 1+3", match: (c) => c.app_subset_key === "app1+app3" },
   { key: "app2+app3", label: "App 2+3", match: (c) => c.app_subset_key === "app2+app3" },
+  { key: "dir-call", label: "CALL", match: (c) => c.direction === "CALL" },
+  { key: "dir-put", label: "PUT", match: (c) => c.direction === "PUT" },
 ];
 
 function drawerTabStats(rows) {
